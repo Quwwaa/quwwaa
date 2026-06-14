@@ -101,16 +101,25 @@
     #brainState { display:none; }            /* drop the techy status text */
     #voiceToggle, #handsFree { display:none; } /* keep the bottom bar uncluttered */
 
-    /* the reactor wrapper becomes the scroll area: reactor, then the six cards */
-    body.home #reactorWrap { flex:1; min-height:0; justify-content:flex-start;
-        overflow-y:auto; -webkit-overflow-scrolling:touch; position:static; padding:12px 0 8px; }
-    #reactor { transform:scale(.82); margin:-6px 0 -2px; }
-    body.home #homeCards { position:static; inset:auto; display:block; width:100%;
-        pointer-events:auto; padding:10px 12px 14px;
-        /* start the feed just past the halfway mark so the reactor stays clear above it
-           (the ~73px subtracted is the reactor + status block stacked above, so the
-           first card lands at ~52vh regardless of screen height) */
-        margin-top:calc(52vh - 73px); }
+    /* Reactor sits in a NON-scrolling top stage, vertically centred so it shows
+       prominently with equal space above (header) and below (first news card).
+       The news feed scrolls inside its own panel in the lower half.
+       (Crucially the reactor must NOT be a shrinkable flex item — its rings/core
+       are absolutely positioned, so a shrinking column flex parent would collapse
+       it to 0px tall, which rendered as a thin slash instead of a circle.) */
+    body.home #reactorWrap { flex:1; min-height:0; position:static; padding:0;
+        display:flex; flex-direction:column; align-items:center; overflow:hidden; }
+    #reactor { transform:none; margin:0; }                 /* full-size circle, like desktop */
+    body.home #reactor { flex:none; margin:auto 0 0; }     /* no-collapse + push to centre of stage */
+    /* caption is height:0 so it doesn't shift the circle — the CIRCLE stays centred,
+       giving equal space above (header) and below (first news card); the text just
+       floats beneath the reactor in the lower gap */
+    body.home #status  { flex:none; height:0; line-height:1; overflow:visible;
+        margin:6px 0 auto; }
+    body.home #homeCards { flex:none; width:100%; height:40vh;
+        overflow-y:auto; -webkit-overflow-scrolling:touch;
+        position:static; inset:auto; display:block; pointer-events:auto;
+        margin:0; padding:8px 12px 14px; }
     .hcol { position:static; width:100%; gap:12px; }
     #controls { padding:10px 12px calc(10px + env(safe-area-inset-bottom)); }
     #textIn { padding:12px 14px; }
@@ -799,7 +808,7 @@
     }
     function getText(){ if(!text) text = build(); return text; }
     const style = document.createElement('style');
-    style.textContent = '#greetCap{position:fixed;left:50%;top:63%;transform:translateX(-50%);max-width:min(560px,86vw);text-align:center;font-size:15px;line-height:1.5;color:#ffd9b3;text-shadow:0 0 14px rgba(217,128,38,.5);opacity:0;transition:opacity .8s ease;pointer-events:none;z-index:50;padding:0 16px;}body.bright #greetCap{color:#7a4a12;text-shadow:0 0 10px rgba(217,128,38,.25);}@media(max-width:820px){#greetCap{top:156px;bottom:auto;}}';
+    style.textContent = '#greetCap{position:fixed;left:50%;top:63%;transform:translateX(-50%);max-width:min(560px,86vw);text-align:center;font-size:15px;line-height:1.5;color:#ffd9b3;text-shadow:0 0 14px rgba(217,128,38,.5);opacity:0;transition:opacity .8s ease;pointer-events:none;z-index:50;padding:0 16px;}body.bright #greetCap{color:#7a4a12;text-shadow:0 0 10px rgba(217,128,38,.25);}@media(max-width:820px){#greetCap{top:auto;bottom:calc(40vh + 64px + env(safe-area-inset-bottom));}}';
     document.head.appendChild(style);
     function show(){
       let el = document.getElementById('greetCap');
