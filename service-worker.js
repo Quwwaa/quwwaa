@@ -5,7 +5,7 @@
      - static assets (icons, manifest) -> cache-first (fast, offline-friendly)
      - the page / HTML -> network-first, falling back to cache only when offline
    Bump CACHE on any shell change to retire old caches. */
-const CACHE = 'quwwaa-v2';
+const CACHE = 'quwwaa-v3';
 const SHELL = ['/', '/quwwaa-console.html', '/manifest.json',
                '/icon-192.png', '/icon-512.png', '/icon-180.png'];
 
@@ -25,6 +25,14 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;                         // /ask, /transcribe stay on network
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;               // let cross-origin (images, etc.) pass through
+  // Home snapshot: paint instantly from cache, refresh in the background.
+  if (url.pathname.startsWith('/home')) {
+    e.respondWith(caches.open(CACHE).then(c => c.match(req).then(hit => {
+      const net = fetch(req).then(res => { if (res && res.ok) c.put(req, res.clone()); return res; }).catch(() => hit);
+      return hit || net;
+    })));
+    return;
+  }
   if (/^\/(news|ask|transcribe|health|service-worker\.js)/.test(url.pathname)) return;
 
   const isAsset = /\.(png|json|ico|svg|webmanifest|css)$/.test(url.pathname);

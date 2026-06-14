@@ -417,18 +417,64 @@ def cached_aggregate(q, days=7, fast=False):
         CACHE[key] = (time.time(), payload)
     return payload
 
-HOME_QUERIES = [('politics', 1), ('Trump', 1), ('middle east', 2),
-                ('Israel Iran', 2), ('sports', 2), ('stock market', 2)]
+# Home-board categories (must mirror HOME_CATS in the console).
+HOME_CATS = [
+    {'label': 'POLITICS',     'q': 'politics',     'days': 1, 'maxAgeH': 3},
+    {'label': 'TRUMP',        'q': 'Trump',        'days': 1, 'maxAgeH': 5},
+    {'label': 'MIDDLE EAST',  'q': 'middle east',  'days': 2},
+    {'label': 'ISRAEL & IRAN','q': 'Israel Iran',  'days': 2},
+    {'label': 'SPORTS',       'q': 'sports',       'days': 2},
+    {'label': 'MARKETS',      'q': 'stock market', 'days': 2},
+]
+
+# A ready-to-serve snapshot of the six home cards, rebuilt on a timer in the
+# background. Served instantly from /home so visitors never wait for a search.
+HOME_SNAPSHOT = {'t': 0, 'items': []}
+HOME_REFRESH = int(os.environ.get('HOME_REFRESH', '300'))  # rebuild every 5 min
+
+def _pick_card(cat):
+    payload = cached_aggregate(cat['q'], cat['days'], True)
+    arts = payload.get('articles', [])
+    mah = cat.get('maxAgeH')
+    if mah:
+        cut = time.time() - mah * 3600
+        fresh = [a for a in arts if (a.get('ts') or 0) >= cut]
+        if fresh:
+            arts = fresh
+    a = next((x for x in arts if x.get('image')), arts[0] if arts else None)
+    if not a:
+        return None
+    return {'label': cat['label'], 'q': cat['q'], 'days': cat['days'],
+            'a': {'title': a.get('title', ''), 'url': a.get('url', ''),
+                  'source': a.get('source', ''), 'time': a.get('time', ''),
+                  'image': a.get('image', ''), 'ts': a.get('ts', 0)}}
+
+def build_home_snapshot():
+    """Refresh the home snapshot, keeping the last-good card for any category
+    that comes back empty so the board is always full."""
+    prev = {it['label']: it for it in HOME_SNAPSHOT['items']}
+    items = []
+    for cat in HOME_CATS:
+        try:
+            card = _pick_card(cat)
+        except Exception:
+            card = None
+        if not card:
+            card = prev.get(cat['label'])     # fall back to the previous good card
+        if card:
+            items.append(card)
+    if items:
+        HOME_SNAPSHOT['items'] = items
+        HOME_SNAPSHOT['t'] = time.time()
 
 def prewarm():
-    """Keep the home-screen queries permanently warm in the background."""
+    """Keep the home snapshot permanently fresh in the background."""
     while True:
-        for q, d in HOME_QUERIES:
-            try:
-                cached_aggregate(q, d, True)
-            except Exception:
-                pass
-        time.sleep(480)  # refresh well inside the cache TTL
+        try:
+            build_home_snapshot()
+        except Exception:
+            pass
+        time.sleep(HOME_REFRESH)
 
 # --- Butler persona + Anthropic call ----------------------------------------
 PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS from Iron Man. "
@@ -611,6 +657,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path in ('/health', '/healthz'):
             self._send_json({'ok': True, 'service': 'quwwaa', 'brain': bool(ANTHROPIC_API_KEY)})
+        elif self.path.startswith('/home'):
+            self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
         elif self.path.startswith('/news'):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             q = (qs.get('q') or [''])[0].strip()

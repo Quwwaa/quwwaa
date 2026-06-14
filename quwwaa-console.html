@@ -670,6 +670,21 @@
   let homeRetries = 0, homeRendered = -1;
   async function loadHome(force){
     document.body.classList.add('home');
+    // Fast path: the server's prebuilt snapshot — one request, instant, always full.
+    try{
+      const sr = await fetch('/home', {cache:'no-store'});
+      if(sr.ok){
+        const sd = await sr.json();
+        if(sd && sd.items && sd.items.length){
+          homeCache = {t: Date.now(), items: sd.items};
+          if(sd.items.length !== homeRendered){ renderHome(sd.items); homeRendered = sd.items.length; }
+          setStatus('STANDING BY');
+          if(sd.items.length < HOME_CATS.length && homeRetries < 6){ homeRetries++; setTimeout(()=>loadHome(true), 4000); }
+          else { homeRetries = 0; }
+          return;
+        }
+      }
+    }catch(e){}
     if(!force && Date.now() - homeCache.t < 5*60*1000 && homeCache.items.length >= HOME_CATS.length){
       renderHome(homeCache.items); homeRendered = homeCache.items.length; return;
     }
