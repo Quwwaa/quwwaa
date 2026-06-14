@@ -468,13 +468,16 @@ def build_home_snapshot():
         HOME_SNAPSHOT['t'] = time.time()
 
 def prewarm():
-    """Keep the home snapshot permanently fresh in the background."""
+    """Keep the home snapshot permanently fresh in the background. Fills quickly
+    on a cold start (retry every 45s until all six cards are present), then
+    settles into the steady refresh cadence."""
     while True:
         try:
             build_home_snapshot()
         except Exception:
             pass
-        time.sleep(HOME_REFRESH)
+        full = len(HOME_SNAPSHOT['items']) >= len(HOME_CATS)
+        time.sleep(HOME_REFRESH if full else 45)
 
 # --- Butler persona + Anthropic call ----------------------------------------
 PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS from Iron Man. "
