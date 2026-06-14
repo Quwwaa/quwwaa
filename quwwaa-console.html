@@ -222,7 +222,7 @@
 <header>
   <span class="sub" id="clock">--:--:--</span>
   <span class="title">QUWWAA</span>
-  <span><span class="sub" id="brainState">BRAIN: OFFLINE</span> &nbsp; <button id="briteBtn" title="Bright mode">☀</button> <button id="gear" title="Settings">⚙</button></span>
+  <span><span class="sub" id="brainState">BRAIN: OFFLINE</span> &nbsp; <button id="briteBtn" title="Bright mode">☀</button> <button id="gear" title="Settings" style="display:none">⚙</button></span>
 </header>
 
 <div id="reactorWrap">
@@ -257,17 +257,21 @@
   <button id="closeSettings">✕</button>
   <h2>Systems Configuration</h2>
 
-  <label>Anthropic API key (the brain)</label>
-  <input type="password" id="setAnthropic" placeholder="sk-ant-...">
-  <div class="hint">Get one at console.anthropic.com → API keys. Stored only in this browser.</div>
+  <!-- Bring-your-own-key fields: shown only when no server brain is configured
+       (i.e. the local sandbox). Hidden on the live site, where the key is on the server. -->
+  <div id="keyFields" style="display:none">
+    <label>Anthropic API key (the brain)</label>
+    <input type="password" id="setAnthropic" placeholder="sk-ant-..." autocomplete="off">
+    <div class="hint">Get one at console.anthropic.com → API keys. Stored only in this browser.</div>
 
-  <label>ElevenLabs API key (the voice — optional)</label>
-  <input type="password" id="setEleven" placeholder="xi-...">
-  <div class="hint">From elevenlabs.io → Profile → API key. Without it, a built-in British system voice is used.</div>
+    <label>ElevenLabs API key (the voice — optional)</label>
+    <input type="password" id="setEleven" placeholder="xi-..." autocomplete="off">
+    <div class="hint">From elevenlabs.io → Profile → API key. Without it, a built-in British system voice is used.</div>
 
-  <label>ElevenLabs voice ID (optional)</label>
-  <input type="text" id="setVoiceId" placeholder="onwK4e9ZLuTAKqWW03F9">
-  <div class="hint">Default is "Daniel" — a calm British voice. Browse voices at elevenlabs.io/voice-library.</div>
+    <label>ElevenLabs voice ID (optional)</label>
+    <input type="text" id="setVoiceId" placeholder="onwK4e9ZLuTAKqWW03F9">
+    <div class="hint">Default is "Daniel" — a calm British voice. Browse voices at elevenlabs.io/voice-library.</div>
+  </div>
 
   <div class="chk"><input type="checkbox" id="setHandsFree"> <span>Hands-free: resume listening after each reply</span></div>
 
@@ -302,7 +306,15 @@
     $('brainState').textContent = 'BRAIN: ' + b + ' · VOICE: ' + v;
   }
   // Probe the server-side brain so the public site reads ONLINE without a local key.
-  fetch('/health').then(r=> r.ok ? r.json() : null).then(d=>{ if(d && d.brain){ serverBrain = true; brainState(); } }).catch(()=>{});
+  function showLocalSettings(){           // local sandbox only: expose the gear + key fields
+    const g=$('gear'); if(g) g.style.display='';
+    const k=$('keyFields'); if(k) k.style.display='';
+  }
+  fetch('/health').then(r=> r.ok ? r.json() : null).then(d=>{
+    if(d && d.brain){ serverBrain = true; }   // live site: no settings tab, key lives on the server
+    else { showLocalSettings(); }
+    brainState();
+  }).catch(showLocalSettings);
   async function checkEleven(){
     if(!cfg.eleven){ elevenInfo = ''; brainState(); return; }
     try{
