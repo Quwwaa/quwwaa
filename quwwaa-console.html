@@ -324,10 +324,10 @@
   let voiceOn = localStorage.getItem('q_voice') !== 'off';
 
   let elevenInfo = '';
-  let serverBrain = false;
+  let serverBrain = false, serverVoice = false;
   function brainState(){
     const b = (serverBrain || cfg.anthropic) ? 'ONLINE' : 'OFFLINE — ADD KEY ⚙';
-    const v = cfg.eleven ? 'ELEVENLABS' + elevenInfo : 'SYSTEM';
+    const v = cfg.eleven ? 'ELEVENLABS' + elevenInfo : (serverVoice ? 'QUWWAA' : 'SYSTEM');
     $('brainState').textContent = 'BRAIN: ' + b + ' · VOICE: ' + v;
   }
   // Probe the server-side brain so the public site reads ONLINE without a local key.
@@ -338,6 +338,7 @@
   fetch('/health').then(r=> r.ok ? r.json() : null).then(d=>{
     if(d && d.brain){ serverBrain = true; }   // live site: no settings tab, key lives on the server
     else { showLocalSettings(); }
+    if(d && d.tts){ serverVoice = true; }      // butler speaks via the server's OpenAI voice
     brainState();
   }).catch(showLocalSettings);
   async function checkEleven(){
@@ -466,6 +467,20 @@
 
   // ---------- voice output ----------
   let currentAudio = null, britishVoice = null;
+  // One reusable <audio> element for the streamed butler voice. iOS only allows
+  // audio to play after it has been started once inside a user gesture, so we
+  // 'prime' this element with a silent clip on the first tap/keypress; thereafter
+  // server TTS that arrives asynchronously (the iPhone reply case) can still play.
+  let ttsAudio = null, audioPrimed = false;
+  const SILENT_WAV = 'data:audio/wav;base64,UklGRnQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YVAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==';
+  function getTtsAudio(){ if(!ttsAudio){ ttsAudio = new Audio(); ttsAudio.preload = 'auto'; } return ttsAudio; }
+  function primeAudio(){
+    if(audioPrimed) return; audioPrimed = true;
+    try{ const a = getTtsAudio(); a.muted = true; a.src = SILENT_WAV; const p = a.play(); if(p && p.catch) p.catch(()=>{}); }catch(e){}
+  }
+  document.addEventListener('pointerdown', primeAudio, true);
+  document.addEventListener('touchend', primeAudio, true);
+  document.addEventListener('keydown', primeAudio, true);
   function pickVoice(){
     const vs = speechSynthesis.getVoices();
     britishVoice = vs.find(v=>/daniel/i.test(v.name)&&/en/i.test(v.lang))
@@ -476,7 +491,8 @@
 
   function stopAudio(){
     speechSynthesis.cancel();
-    if(currentAudio){ currentAudio.pause(); currentAudio=null; }
+    if(currentAudio){ try{ currentAudio.pause(); }catch(e){} currentAudio=null; }
+    if(ttsAudio){ try{ ttsAudio.pause(); }catch(e){} }
   }
   function speakDone(){ mode(''); setStatus('STANDING BY'); if(cfg.handsFree && !busy) startListening(); }
 
@@ -507,6 +523,23 @@
         elevenInfo = ' · UNREACHABLE → SYSTEM VOICE';
         brainState();
       }
+    }
+    // Server butler voice (OpenAI TTS) — needs no client key and, unlike
+    // speechSynthesis, reliably plays on iPhone after an async reply because it
+    // goes through the gesture-primed audio element.
+    if(serverVoice){
+      try{
+        const r = await fetch('/speak', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({text})});
+        if(r.ok){
+          const url = URL.createObjectURL(await r.blob());
+          const a = getTtsAudio(); a.muted = false; a.src = url;
+          const done = ()=>{ try{ URL.revokeObjectURL(url); }catch(e){} currentAudio=null; speakDone(); };
+          a.onended = done; a.onerror = done;
+          currentAudio = a;
+          await a.play();
+          return;
+        }
+      }catch(e){ /* fall through to the browser's system voice */ }
     }
     if('speechSynthesis' in window){
       const u = new SpeechSynthesisUtterance(text);

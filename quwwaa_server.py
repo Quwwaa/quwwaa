@@ -29,6 +29,18 @@ ASK_DAILY_CAP = int(os.environ.get('ASK_DAILY_CAP', '2000'))       # global mess
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 STT_MODEL = os.environ.get('STT_MODEL', 'whisper-1')
 
+# --- Text-to-speech (the butler's spoken voice) -----------------------------
+# The page POSTs the butler's reply text to /speak; the server renders it to
+# speech with OpenAI TTS (key stays server-side) and returns MP3. This is what
+# makes the butler audible on iPhone, where the browser's speechSynthesis is
+# unreliable. Shares the OpenAI key; unset -> /speak reports 'no_tts_key'.
+TTS_MODEL = os.environ.get('TTS_MODEL', 'gpt-4o-mini-tts')   # supports tone steering
+TTS_VOICE = os.environ.get('TTS_VOICE', 'ash')               # calm, measured, British-leaning
+TTS_INSTRUCTIONS = os.environ.get('TTS_INSTRUCTIONS',
+    'Speak as QUWWAA, a refined British butler: calm, articulate and unhurried, '
+    'with understated dry warmth. A measured, dignified delivery.')
+SPEAK_RATE_PER_MIN = int(os.environ.get('SPEAK_RATE_PER_MIN', '20'))  # lenient, separate bucket
+
 def fetch(url, timeout=8):
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -541,6 +553,33 @@ def whisper_transcribe(file_bytes, filename, content_type):
         return (json.loads(r.read()).get('text') or '').strip()
 
 
+def openai_tts(text):
+    """Render text to MP3 speech via OpenAI. Falls back to the always-valid
+    tts-1 model/voice if the configured primary model or voice is rejected,
+    so a mis-set TTS_MODEL/TTS_VOICE never leaves the butler mute."""
+    text = text[:4000]
+    tries = [(TTS_MODEL, TTS_VOICE, TTS_MODEL.startswith('gpt-4o'))]
+    if (TTS_MODEL, TTS_VOICE) != ('tts-1', 'onyx'):
+        tries.append(('tts-1', 'onyx', False))
+    last = None
+    for model, voice, steer in tries:
+        payload = {'model': model, 'voice': voice, 'input': text, 'response_format': 'mp3'}
+        if steer:
+            payload['instructions'] = TTS_INSTRUCTIONS
+        req = urllib.request.Request('https://api.openai.com/v1/audio/speech',
+            data=json.dumps(payload).encode(), headers={
+                'Authorization': 'Bearer ' + OPENAI_API_KEY,
+                'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=45) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            last = e
+            if not (400 <= e.code < 500):   # only a bad-request lets us try the backup model
+                raise
+    raise last
+
+
 # --- Abuse protection for the public butler ---------------------------------
 import threading as _thr
 _ask_lock = _thr.Lock()
@@ -564,6 +603,21 @@ def rate_check(ip):
         _ip_hits[ip] = hits
         _daily['count'] += 1
         return True, ''
+
+
+_speak_hits = {}                    # ip -> recent /speak timestamps (separate, lenient bucket)
+def speak_rate_check(ip):
+    """A looser per-IP burst limit for TTS, kept apart from the /ask bucket so a
+    normal conversation (one /ask + one /speak per turn) is never throttled."""
+    now = time.time()
+    with _ask_lock:
+        hits = [t for t in _speak_hits.get(ip, []) if t > now - 60]
+        if len(hits) >= SPEAK_RATE_PER_MIN:
+            _speak_hits[ip] = hits
+            return False
+        hits.append(now)
+        _speak_hits[ip] = hits
+        return True
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -599,7 +653,36 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_ask()
         if self.path.startswith('/transcribe'):
             return self._handle_transcribe()
+        if self.path.startswith('/speak'):
+            return self._handle_speak()
         self.send_error(404)
+
+    def _handle_speak(self):
+        if not OPENAI_API_KEY:
+            self._send_json({'error': 'no_tts_key'}, 503); return
+        if not speak_rate_check(self._client_ip()):
+            self._send_json({'error': 'rate'}, 429); return
+        try:
+            length = int(self.headers.get('Content-Length', '0') or '0')
+            raw = self.rfile.read(length) if length else b'{}'
+            text = (json.loads(raw or b'{}').get('text') or '').strip()
+            if not text:
+                self._send_json({'error': 'empty'}, 400); return
+            audio = openai_tts(text)
+            self.send_response(200)
+            self.send_header('Content-Type', 'audio/mpeg')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Content-Length', str(len(audio)))
+            self.end_headers()
+            self.wfile.write(audio)
+        except urllib.error.HTTPError as e:
+            detail = ''
+            try: detail = e.read().decode('utf-8', 'ignore')[:160]
+            except Exception: pass
+            self._send_json({'error': 'tts_upstream_%d' % e.code, 'detail': detail}, 502)
+        except Exception as e:
+            self._send_json({'error': type(e).__name__}, 500)
 
     def _handle_transcribe(self):
         if not OPENAI_API_KEY:
@@ -659,7 +742,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ('/health', '/healthz'):
-            self._send_json({'ok': True, 'service': 'quwwaa', 'brain': bool(ANTHROPIC_API_KEY)})
+            self._send_json({'ok': True, 'service': 'quwwaa', 'brain': bool(ANTHROPIC_API_KEY),
+                             'stt': bool(OPENAI_API_KEY), 'tts': bool(OPENAI_API_KEY)})
         elif self.path.startswith('/home'):
             self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
         elif self.path.startswith('/news'):
