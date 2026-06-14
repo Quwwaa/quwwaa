@@ -625,9 +625,17 @@ class Handler(SimpleHTTPRequestHandler):
                 payload = {'query': q, 'articles': [], 'sources': 0, 'error': str(e)}
             self._send_json(payload)
         else:
-            if self.path in ('/', ''):
-                self.path = '/quwwaa-console.html'   # land visitors on the console
+            base = urllib.parse.urlparse(self.path).path
+            if base in ('/', ''):
+                self.path = '/quwwaa-console.html'   # land visitors on the console (ignore ?query)
             super().do_GET()
+
+    def list_directory(self, path):
+        # never expose a raw directory listing — bounce to the console
+        self.send_response(302)
+        self.send_header('Location', '/')
+        self.end_headers()
+        return None
 
     def log_message(self, *a):
         pass

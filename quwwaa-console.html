@@ -653,13 +653,13 @@
       wrap.appendChild(w);
     });
   }
-  async function loadHome(){
+  let homeRetries = 0, homeRendered = -1;
+  async function loadHome(force){
     document.body.classList.add('home');
-    if(Date.now() - homeCache.t < 5*60*1000 && homeCache.items.length){
-      renderHome(homeCache.items); return;
+    if(!force && Date.now() - homeCache.t < 5*60*1000 && homeCache.items.length >= HOME_CATS.length){
+      renderHome(homeCache.items); homeRendered = homeCache.items.length; return;
     }
-    $('homeCards').innerHTML = '';
-    setStatus('SCANNING THE WIRES…');
+    if(!force){ $('homeCards').innerHTML = ''; homeRendered = -1; setStatus('SCANNING THE WIRES…'); }
     const pickFresh = (arts, maxAgeH)=>{
       if(maxAgeH){
         const cut = Date.now()/1000 - maxAgeH*3600;
@@ -668,21 +668,22 @@
       }
       return arts.find(x=>x.image) || arts[0];
     };
-    const fetchCat = async (c, fast)=>{
-      const r = await fetch('/news?q=' + encodeURIComponent(c.q) + '&days=' + (c.days||2) + (fast?'&fast=1':''), {cache:'no-store'});
-      const d = await r.json();
-      return d.articles || [];
-    };
-    const items = await Promise.all(HOME_CATS.map(async c=>{
+    const fetchCat = async (c)=>{
       try{
-        let a = pickFresh(await fetchCat(c, true), c.maxAgeH);
-        if(!a){ a = pickFresh(await fetchCat(c, false), c.maxAgeH); }  // fall back to full sources
+        const r = await fetch('/news?q=' + encodeURIComponent(c.q) + '&days=' + (c.days||2) + '&fast=1', {cache:'no-store'});
+        const d = await r.json();
+        const a = pickFresh(d.articles || [], c.maxAgeH);
         return a ? {label:c.label, q:c.q, days:c.days, a} : null;
       }catch(e){ return null; }
-    }));
-    homeCache = {t: Date.now(), items: items.filter(Boolean)};
+    };
+    const items = (await Promise.all(HOME_CATS.map(fetchCat))).filter(Boolean);
+    if(items.length >= homeCache.items.length){ homeCache = {t: Date.now(), items}; }  // keep best set
     setStatus('STANDING BY');
-    renderHome(homeCache.items);
+    if(homeCache.items.length !== homeRendered){ renderHome(homeCache.items); homeRendered = homeCache.items.length; }
+    // On a cold server the prewarm cache is still filling — retry quietly until all six arrive.
+    if(homeCache.items.length < HOME_CATS.length && homeRetries < 6){
+      homeRetries++; setTimeout(()=>loadHome(true), 4000);
+    } else { homeRetries = 0; }
   }
   function resetBoard(){
     history = [];
