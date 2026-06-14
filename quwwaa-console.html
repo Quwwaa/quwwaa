@@ -683,7 +683,7 @@
     setStatus('STANDING BY');
     if(homeCache.items.length !== homeRendered){ renderHome(homeCache.items); homeRendered = homeCache.items.length; }
     // On a cold server the prewarm cache is still filling — retry quietly until all six arrive.
-    if(homeCache.items.length < HOME_CATS.length && homeRetries < 6){
+    if(homeCache.items.length < HOME_CATS.length && homeRetries < 9){
       homeRetries++; setTimeout(()=>loadHome(true), 4000);
     } else { homeRetries = 0; }
   }

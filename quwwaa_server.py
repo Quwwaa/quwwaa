@@ -374,7 +374,7 @@ def aggregate(q, days=7, fast=False):
     results, seen, arts = [], set(), []
     diag = {}
     cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
-    sources = ((src_bing, 'BING'), (src_gdelt, 'GDELT')) if fast else \
+    sources = ((src_bing, 'BING'), (src_gdelt, 'GDELT'), (src_yahoo, 'YAHOO')) if fast else \
               ((src_rsspack, 'FEEDS'), (src_gdelt, 'GDELT'), (src_bing, 'BING'),
                (src_yahoo, 'YAHOO'), (src_bsky, 'BLUESKY'),
                (src_gnews, 'GNEWS'), (src_reddit, 'REDDIT'))
