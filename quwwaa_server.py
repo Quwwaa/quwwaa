@@ -417,7 +417,7 @@ def cached_aggregate(q, days=7, fast=False):
         CACHE[key] = (time.time(), payload)
     return payload
 
-HOME_QUERIES = [('US politics', 1), ('Trump', 1), ('middle east', 2),
+HOME_QUERIES = [('politics', 1), ('Trump', 1), ('middle east', 2),
                 ('Israel Iran', 2), ('sports', 2), ('stock market', 2)]
 
 def prewarm():
