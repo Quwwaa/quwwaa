@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>QUWWAA Console</title>
+<!-- PWA: installable home-screen app -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#141414">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="QUWWAA">
 <style>
   :root { color-scheme: dark; }
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -462,29 +471,81 @@
   }
 
   // ---------- voice input ----------
+  // Two paths. Native browser speech recognition where it's reliable
+  // (Android / desktop Chrome). Tap-to-talk recording -> server /transcribe
+  // everywhere it isn't — notably iPhone Safari, which has no SpeechRecognition
+  // but DOES allow microphone recording.
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent)
+             || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec=null, listening=false;
-  if(SR){
+  const useSR = !!SR && !isIOS;
+
+  // Path A — native speech recognition
+  let rec = null, listening = false;
+  if(useSR){
     rec = new SR();
     rec.lang='en-US'; rec.interimResults=false; rec.maxAlternatives=1;
     rec.onstart = ()=>{ listening=true; mode('listening'); setStatus('LISTENING'); };
     rec.onend   = ()=>{ listening=false; if(document.body.classList.contains('listening')){ mode(''); setStatus('STANDING BY'); } };
     rec.onerror = e=>{
       listening=false; mode('');
-      setStatus(e.error==='not-allowed' ? 'MIC DENIED — ALLOW IN CHROME ADDRESS BAR' :
+      setStatus(e.error==='not-allowed' ? 'MIC DENIED — ALLOW IN BROWSER SETTINGS' :
                 e.error==='no-speech'  ? 'NO SPEECH DETECTED' : 'MIC ERROR: '+e.error);
     };
     rec.onresult = e=>{ handleInput(e.results[0][0].transcript); };
-  } else {
-    micBtn.disabled = true;
-    setStatus('SPEECH RECOGNITION REQUIRES CHROME');
   }
-  function startListening(){
-    if(!rec || listening || busy) return;
+  function startListening(){ if(!rec || listening || busy) return; stopAudio(); try{ rec.start(); }catch(e){} }
+
+  // Path B — record, then transcribe on the server (iPhone & SR-less browsers)
+  let mediaRec = null, audioChunks = [], recording = false;
+  function pickMime(){
+    const cands = ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/aac','audio/ogg'];
+    for(const m of cands){ if(window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; }
+    return '';
+  }
+  async function startRecording(){
+    if(recording || busy) return;
     stopAudio();
-    try{ rec.start(); }catch(e){}
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({audio:true}); }
+    catch(e){ setStatus('MIC ACCESS DENIED — ALLOW IT TO SPEAK'); return; }
+    audioChunks = [];
+    const mime = pickMime();
+    try { mediaRec = mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream); }
+    catch(e){ mediaRec = new MediaRecorder(stream); }
+    mediaRec.ondataavailable = e=>{ if(e.data && e.data.size) audioChunks.push(e.data); };
+    mediaRec.onstop = async ()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      recording = false;
+      const type = (mediaRec && mediaRec.mimeType) || mime || 'audio/webm';
+      const blob = new Blob(audioChunks, {type});
+      if(!blob.size){ mode(''); setStatus('STANDING BY'); return; }
+      mode('thinking'); setStatus('TRANSCRIBING');
+      try {
+        const r = await fetch('/transcribe', {method:'POST', headers:{'X-Audio-Type': type.split(';')[0]}, body: blob});
+        if(r.ok){
+          const d = await r.json();
+          const t = (d.text||'').trim();
+          mode('');
+          if(t){ handleInput(t); } else { setStatus("DIDN'T CATCH THAT — TAP AND TRY AGAIN"); }
+        } else if(r.status===503){ mode(''); setStatus('VOICE TRANSCRIPTION OFFLINE'); }
+          else if(r.status===429){ mode(''); setStatus('ONE MOMENT, SIR — TOO MANY REQUESTS'); }
+          else { mode(''); setStatus('TRANSCRIBE ERROR ' + r.status); }
+      } catch(e){ mode(''); setStatus('TRANSCRIBE FAILED — CHECK CONNECTION'); }
+    };
+    mediaRec.start();
+    recording = true; mode('listening'); setStatus('LISTENING — TAP TO STOP');
   }
-  function toggleMic(){ listening ? rec && rec.stop() : startListening(); }
+  function stopRecording(){ if(mediaRec && recording){ try{ mediaRec.stop(); }catch(e){} } }
+
+  // Unified mic control — tap the reactor or the mic button
+  const voiceSupported = useSR || !!(navigator.mediaDevices && window.MediaRecorder);
+  function toggleMic(){
+    if(!voiceSupported){ setStatus('VOICE INPUT UNAVAILABLE — PLEASE TYPE'); if(textIn) textIn.focus(); return; }
+    if(useSR){ listening ? (rec && rec.stop()) : startListening(); }
+    else     { recording ? stopRecording() : startRecording(); }
+  }
+  if(!voiceSupported) micBtn.disabled = true;
   micBtn.onclick = toggleMic;
   $('reactor').onclick = toggleMic;
 
@@ -637,6 +698,62 @@
   syncUI();
   checkEleven();
   loadHome();
+})();
+</script>
+<script>
+/* ---- PWA: service worker registration + Add-to-Home-Screen coach ---- */
+(function(){
+  if('serviceWorker' in navigator){
+    addEventListener('load', ()=> navigator.serviceWorker.register('/service-worker.js').catch(()=>{}));
+  }
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  if(standalone) return;                                  // already installed
+  const DISMISS='quwwaa_pwa_dismissed', COUNT='quwwaa_pwa_eng';
+  const dismissedAt = parseInt(localStorage.getItem(DISMISS)||'0',10);
+  if(dismissedAt && Date.now()-dismissedAt < 7*864e5) return;   // snooze a week after dismiss
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  let deferred = null;
+  addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); deferred = e; });
+
+  let count = parseInt(localStorage.getItem(COUNT)||'0',10), shown=false, el=null;
+  function bump(){ if(shown) return; count++; localStorage.setItem(COUNT, count); if(count>=3) show(); }
+  document.addEventListener('click', e=>{
+    if(!e.target.closest) return;
+    if(e.target.closest('a[target="_blank"], #reactor, #micBtn, #sendBtn')) bump();   // reading a story / using voice
+  }, true);
+
+  function show(){
+    if(shown) return; shown=true;
+    const style=document.createElement('style');
+    style.textContent =
+      '#pwaPrompt{position:fixed;left:50%;transform:translateX(-50%);bottom:92px;z-index:9999;'+
+      'display:flex;align-items:center;gap:12px;max-width:min(520px,92vw);padding:12px 14px;'+
+      'border-radius:14px;background:rgba(26,26,26,.97);border:1px solid rgba(217,128,38,.55);'+
+      'box-shadow:0 10px 40px rgba(0,0,0,.6),0 0 24px rgba(217,128,38,.25);color:#ffd9b3;font-family:inherit;}'+
+      '#pwaPrompt img{width:42px;height:42px;border-radius:9px;flex:none;}'+
+      '#pwaPrompt .pwaTxt{display:flex;flex-direction:column;line-height:1.32;font-size:13px;}'+
+      '#pwaPrompt .pwaTxt b{color:#ffce9a;font-size:14px;}'+
+      '#pwaPrompt .pwaTxt span{opacity:.85;}'+
+      '#pwaInstall{background:#D98026;color:#1a1a1a;border:none;border-radius:8px;padding:9px 16px;'+
+      'font-weight:700;cursor:pointer;font-size:13px;white-space:nowrap;}'+
+      '#pwaInstall:hover{filter:brightness(1.08);}'+
+      '#pwaClose{background:none;border:none;color:#cba98f;font-size:16px;cursor:pointer;padding:4px;flex:none;}'+
+      '@media(max-width:520px){#pwaPrompt{left:8px;right:8px;transform:none;max-width:none;bottom:84px;}}';
+    document.head.appendChild(style);
+    const sub = isIOS ? 'Tap <b>Share</b> then <b>Add to Home Screen</b>.'
+              : (deferred ? 'One tap to install — no app store needed.'
+                          : 'Open your browser menu, then <b>Add to Home screen</b>.');
+    const btn = (!isIOS && deferred) ? '<button id="pwaInstall">Install</button>' : '';
+    el=document.createElement('div'); el.id='pwaPrompt';
+    el.innerHTML = '<img src="/icon-192.png" alt="">'+
+      '<div class="pwaTxt"><b>Add QUWWAA to your home screen</b><span>'+sub+'</span></div>'+
+      btn+'<button id="pwaClose" aria-label="Dismiss">✕</button>';
+    document.body.appendChild(el);
+    el.querySelector('#pwaClose').onclick = close;
+    const ib = el.querySelector('#pwaInstall');
+    if(ib) ib.onclick = async ()=>{ if(deferred){ deferred.prompt(); try{ await deferred.userChoice; }catch(e){} deferred=null; } close(); };
+  }
+  function close(){ localStorage.setItem(DISMISS, Date.now()); if(el){ el.remove(); el=null; } }
 })();
 </script>
 </body>

@@ -23,6 +23,12 @@ ASK_MODEL = os.environ.get('ASK_MODEL', 'claude-haiku-4-5-20251001')
 ASK_RATE_PER_MIN = int(os.environ.get('ASK_RATE_PER_MIN', '6'))    # per visitor IP
 ASK_DAILY_CAP = int(os.environ.get('ASK_DAILY_CAP', '2000'))       # global messages/day
 
+# --- Speech-to-text (tap-to-talk voice on iPhone + Android) ------------------
+# The browser records the audio; the server transcribes it via Whisper so the
+# key stays server-side. Unset locally -> /transcribe reports 'no_stt_key'.
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+STT_MODEL = os.environ.get('STT_MODEL', 'whisper-1')
+
 def fetch(url, timeout=8):
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -455,6 +461,36 @@ def anthropic_chat(messages):
     parts = [b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text']
     return ' '.join(parts).strip()
 
+# --- Speech-to-text via Whisper ---------------------------------------------
+AUDIO_EXT = {'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'mp4',
+             'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
+             'audio/aac': 'm4a', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a'}
+
+def _multipart_audio(file_bytes, filename, content_type, fields):
+    boundary = 'quwwaaAudio%d' % int(time.time() * 1000)
+    CRLF = b'\r\n'
+    parts = []
+    for k, v in fields.items():
+        parts.append(b'--' + boundary.encode() + CRLF)
+        parts.append(('Content-Disposition: form-data; name="%s"' % k).encode() + CRLF + CRLF)
+        parts.append(v.encode() + CRLF)
+    parts.append(b'--' + boundary.encode() + CRLF)
+    parts.append(('Content-Disposition: form-data; name="file"; filename="%s"' % filename).encode() + CRLF)
+    parts.append(('Content-Type: %s' % content_type).encode() + CRLF + CRLF)
+    parts.append(file_bytes + CRLF)
+    parts.append(b'--' + boundary.encode() + b'--' + CRLF)
+    return boundary, b''.join(parts)
+
+def whisper_transcribe(file_bytes, filename, content_type):
+    boundary, body = _multipart_audio(file_bytes, filename, content_type,
+                                      {'model': STT_MODEL, 'response_format': 'json'})
+    req = urllib.request.Request('https://api.openai.com/v1/audio/transcriptions', data=body, headers={
+        'Authorization': 'Bearer ' + OPENAI_API_KEY,
+        'Content-Type': 'multipart/form-data; boundary=' + boundary})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return (json.loads(r.read()).get('text') or '').strip()
+
+
 # --- Abuse protection for the public butler ---------------------------------
 import threading as _thr
 _ask_lock = _thr.Lock()
@@ -509,8 +545,36 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if not self.path.startswith('/ask'):
-            self.send_error(404); return
+        if self.path.startswith('/ask'):
+            return self._handle_ask()
+        if self.path.startswith('/transcribe'):
+            return self._handle_transcribe()
+        self.send_error(404)
+
+    def _handle_transcribe(self):
+        if not OPENAI_API_KEY:
+            self._send_json({'error': 'no_stt_key', 'text': ''}, 503); return
+        ok, why = rate_check(self._client_ip())
+        if not ok:
+            self._send_json({'error': why, 'text': ''}, 429); return
+        try:
+            length = int(self.headers.get('Content-Length', '0') or '0')
+            if length <= 0 or length > 12_000_000:
+                self._send_json({'error': 'bad_audio', 'text': ''}, 400); return
+            audio = self.rfile.read(length)
+            ctype = (self.headers.get('X-Audio-Type') or 'audio/webm').split(';')[0].strip()
+            ext = AUDIO_EXT.get(ctype, 'webm')
+            text = whisper_transcribe(audio, 'speech.' + ext, ctype)
+            self._send_json({'text': text})
+        except urllib.error.HTTPError as e:
+            detail = ''
+            try: detail = e.read().decode('utf-8', 'ignore')[:160]
+            except Exception: pass
+            self._send_json({'error': 'stt_upstream_%d' % e.code, 'text': '', 'detail': detail}, 502)
+        except Exception as e:
+            self._send_json({'error': type(e).__name__, 'text': ''}, 500)
+
+    def _handle_ask(self):
         if not ANTHROPIC_API_KEY:
             self._send_json({'error': 'no_server_key'}, 503); return
         ok, why = rate_check(self._client_ip())
