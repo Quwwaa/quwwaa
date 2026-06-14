@@ -1,0 +1,18 @@
+# Render Blueprint — one-click deploy of the QUWWAA backend.
+# In Render: New > Blueprint, connect the repo containing this file, and it will
+# read these settings automatically. Set ANTHROPIC_API_KEY when prompted.
+services:
+  - type: web
+    name: quwwaa
+    runtime: python
+    plan: free            # upgrade to "starter" ($7/mo) to stop the free tier sleeping
+    buildCommand: ""      # nothing to build — stdlib only
+    startCommand: python quwwaa_server.py
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false        # you paste this secret in the Render dashboard, never in code
+      - key: ASK_RATE_PER_MIN
+        value: "6"
+      - key: ASK_DAILY_CAP
+        value: "2000"

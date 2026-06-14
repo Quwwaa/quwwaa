@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QUWWAA Console</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    background:#141414; color:#ffb699;
+    font-family:"Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    overflow:hidden; display:flex; flex-direction:column;
+  }
+  body::before {
+    content:""; position:fixed; inset:0; pointer-events:none;
+    background:
+      radial-gradient(ellipse at 50% 30%, rgba(217,128,38,.10), transparent 60%),
+      repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,144,107,.015) 3px 4px);
+  }
+  header {
+    position:relative; display:flex; align-items:center; justify-content:space-between;
+    padding:14px 22px; border-bottom:1px solid rgba(217,128,38,.28);
+    font-size:11px; letter-spacing:2px; text-transform:uppercase; color:#d98026;
+  }
+  header .title { position:absolute; left:50%; transform:translateX(-50%); font-size:15px; letter-spacing:6px; color:#ffd9c4; text-shadow:0 0 12px rgba(217,128,38,.6); }
+  header .sub { font-variant-numeric:tabular-nums; }
+  #gear, #briteBtn { cursor:pointer; background:none; border:none; color:#d98026; font-size:16px; }
+  #gear:hover, #briteBtn:hover { color:#ffd9c4; }
+  /* reactor */
+  #reactorWrap { display:flex; flex-direction:column; align-items:center; padding:18px 0 6px; }
+  #reactor { position:relative; width:120px; height:120px; cursor:pointer; }
+  #reactor .ring { position:absolute; border-radius:50%; border:1px solid rgba(217,128,38,.45); }
+  #reactor .r1 { inset:0; border-width:2px; animation:spin 14s linear infinite; border-top-color:rgba(255,190,100,.9); }
+  #reactor .r2 { inset:12px; animation:spin 9s linear infinite reverse; border-bottom-color:rgba(255,190,100,.8); }
+  #reactor .r3 { inset:26px; border-style:dashed; animation:spin 22s linear infinite; }
+  #reactor .core {
+    position:absolute; inset:40px; border-radius:50%;
+    background:radial-gradient(circle, #fff3e2 0%, #ffbd66 35%, #d98026 70%, #4a2a08 100%);
+    box-shadow:0 0 24px 6px rgba(217,128,38,.55), 0 0 70px 18px rgba(217,128,38,.22);
+    animation:pulse 3.2s ease-in-out infinite;
+  }
+  body.listening #reactor .core { animation:pulse .7s ease-in-out infinite; box-shadow:0 0 34px 10px rgba(255,200,110,.85), 0 0 90px 26px rgba(217,128,38,.4); }
+  body.speaking  #reactor .core { animation:pulse 1.1s ease-in-out infinite; }
+  body.thinking  #reactor .r3  { animation:spin 1.2s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes pulse { 0%,100%{ transform:scale(1);} 50%{ transform:scale(1.07);} }
+  #status { margin-top:10px; font-size:11px; letter-spacing:3px; text-transform:uppercase; color:#d98026; min-height:14px; }
+  /* log */
+  #log { flex:1; overflow-y:auto; padding:14px 22px; display:flex; flex-direction:column; gap:10px;
+         scrollbar-width:thin; scrollbar-color:#4a2f15 transparent; }
+  .msg { max-width:78%; padding:9px 13px; border-radius:4px; font-size:14px; line-height:1.45; white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; color:rgba(255,255,255,.92); border:1px solid rgba(255,255,255,.25);
+              background:rgba(255,255,255,.05); border-right:3px solid rgba(255,255,255,.55); }
+  .msg.jarvis { align-self:flex-start; color:#ffc8ab; border:1px solid rgba(217,128,38,.32);
+                background:rgba(217,128,38,.06); border-left:3px solid rgba(217,128,38,.65); }
+  .msg .who { display:block; font-size:9px; letter-spacing:2px; text-transform:uppercase; opacity:.55; margin-bottom:3px; }
+  /* controls */
+  #controls { display:flex; gap:10px; align-items:center; padding:14px 22px 18px; border-top:1px solid rgba(217,128,38,.28); }
+  #micBtn { width:52px; height:52px; border-radius:50%; flex:none; cursor:pointer;
+            border:1px solid rgba(217,128,38,.55); background:rgba(217,128,38,.10); color:#ffb27a;
+            font-size:20px; transition:all .2s; }
+  #micBtn:hover { background:rgba(217,128,38,.20); box-shadow:0 0 14px rgba(217,128,38,.45); }
+  body.listening #micBtn { background:rgba(255,90,90,.18); border-color:rgba(255,120,120,.7); color:#ffb3b3; box-shadow:0 0 16px rgba(255,90,90,.5); }
+  #textIn { flex:1; padding:13px 16px; font-size:14px; color:#ffe2d1;
+            background:rgba(60,40,25,.30); border:1px solid rgba(217,128,38,.32); border-radius:4px; outline:none; }
+  #textIn:focus { border-color:rgba(255,170,90,.65); box-shadow:0 0 10px rgba(217,128,38,.32); }
+  .btn { padding:12px 16px; cursor:pointer; font-size:12px; letter-spacing:1px; text-transform:uppercase;
+         border:1px solid rgba(217,128,38,.45); background:rgba(217,128,38,.10); color:#ffb27a; border-radius:4px; }
+  .btn:hover { background:rgba(217,128,38,.20); }
+  .btn.off { opacity:.4; }
+  /* home command center */
+  #homeCards { display:none; }
+  body.home #reactorWrap { flex:1; justify-content:center; position:relative; }
+  body.home #log { display:none; }
+  body.home #homeCards { display:block; position:absolute; inset:0; pointer-events:none; }
+  .hwrap { position:absolute; width:280px; opacity:0; pointer-events:auto;
+           animation:cardPop .5s cubic-bezier(.34,1.56,.64,1) forwards; }
+  .hwrap.p0 { left:5%;  top:6%; }
+  .hwrap.p1 { right:5%; top:10%; }
+  .hwrap.p2 { left:7%;  bottom:9%; }
+  .hwrap.p3 { right:7%; bottom:5%; }
+  .hcard {
+    padding:12px 14px; border-radius:12px; display:flex; flex-direction:column; gap:7px;
+    background:linear-gradient(160deg, rgba(217,128,38,.14), rgba(40,25,12,.35));
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    border:1px solid rgba(217,128,38,.42);
+    box-shadow:0 8px 30px rgba(0,0,0,.35), 0 0 22px rgba(217,128,38,.18),
+               inset 0 1px 0 rgba(255,255,255,.16), inset 0 -1px 0 rgba(0,0,0,.4);
+    animation:bob 6s ease-in-out infinite alternate;
+  }
+  @keyframes bob { from{ transform:translateY(-7px); } to{ transform:translateY(7px); } }
+  .hcat { font-size:10px; letter-spacing:3px; color:#ffb27a; cursor:pointer;
+          text-shadow:0 0 8px rgba(217,128,38,.65); }
+  .hcat:hover { color:#fff; }
+  .hthumb { margin:0 -14px; overflow:hidden; }
+  .hthumb img { display:block; width:100%; height:118px; object-fit:cover; }
+  .hhead a { color:#fff0e6; font-size:13px; line-height:1.35; text-decoration:none; }
+  .hhead a:hover { color:#fff; text-shadow:0 0 8px rgba(255,170,90,.65); }
+  /* news lens */
+  #lens {
+    position:fixed; inset:4% 6%; z-index:20; display:none; flex-direction:column;
+    background:linear-gradient(135deg, rgba(35,22,12,.58), rgba(16,12,8,.78));
+    backdrop-filter:blur(22px) saturate(1.4); -webkit-backdrop-filter:blur(22px) saturate(1.4);
+    border:1px solid rgba(217,128,38,.48); border-radius:14px;
+    box-shadow:0 0 70px rgba(217,128,38,.26), inset 0 1px 0 rgba(255,255,255,.18), inset 0 -1px 0 rgba(0,0,0,.45);
+  }
+  #lens.open { display:flex; animation:lensIn .25s ease; }
+  @keyframes lensIn { from{ opacity:0; transform:scale(.96);} to{ opacity:1; transform:scale(1);} }
+  #lensHead { display:flex; justify-content:space-between; align-items:center; gap:14px;
+              padding:16px 22px; border-bottom:1px solid rgba(217,128,38,.30); }
+  #lensTitle { font-size:13px; letter-spacing:3px; text-transform:uppercase; color:#ffd9c4;
+               text-shadow:0 0 10px rgba(217,128,38,.65); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #lensCount { font-size:10px; letter-spacing:2px; color:#d98026; white-space:nowrap; }
+  #lensClose { background:none; border:1px solid rgba(217,128,38,.48); border-radius:6px;
+               color:#ffb27a; font-size:14px; padding:4px 10px; cursor:pointer; }
+  #lensClose:hover { background:rgba(217,128,38,.18); }
+  #lensBody { flex:1; overflow-y:auto; padding:18px 22px; display:grid;
+              grid-template-columns:repeat(auto-fill, minmax(290px, 1fr)); gap:14px; align-content:start;
+              scrollbar-width:thin; scrollbar-color:#4a2f15 transparent; }
+  .lcard {
+    padding:14px 16px; border-radius:10px; display:flex; flex-direction:column; gap:8px;
+    background:linear-gradient(160deg, rgba(217,128,38,.10), rgba(45,28,14,.25));
+    border:1px solid rgba(217,128,38,.35);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.15), inset 0 -1px 0 rgba(0,0,0,.35);
+    transition:border-color .15s, box-shadow .15s;
+    opacity:0; animation:cardPop .5s cubic-bezier(.34,1.56,.64,1) forwards;
+  }
+  @keyframes cardPop {
+    0%   { opacity:0; transform:scale(.45) translateY(14px); }
+    70%  { opacity:1; transform:scale(1.05) translateY(-2px); }
+    100% { opacity:1; transform:scale(1) translateY(0); }
+  }
+  .lthumb { margin:-14px -16px 4px; border-radius:10px 10px 0 0; overflow:hidden;
+            border-bottom:1px solid rgba(217,128,38,.3); }
+  .lthumb img { display:block; width:100%; height:130px; object-fit:cover;
+                filter:saturate(1.05) contrast(1.02); }
+  .lcard:hover { border-color:rgba(255,170,90,.65); box-shadow:0 0 18px rgba(217,128,38,.32), inset 0 1px 0 rgba(255,255,255,.2); transform:translateY(-1px); }
+  .lsrc { display:flex; align-items:center; gap:8px; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:#e89a5a; }
+  .lsrc img { width:14px; height:14px; border-radius:3px; }
+  .lhead a { color:#fff0e6; font-size:14px; line-height:1.4; text-decoration:none; }
+  .lhead a:hover { color:#fff; text-shadow:0 0 8px rgba(255,170,90,.65); }
+  .lmeta { font-size:10px; color:#a06a3a; display:flex; justify-content:space-between; margin-top:auto; }
+  /* settings drawer */
+  #settings {
+    position:fixed; top:0; right:-360px; width:340px; height:100%; z-index:10;
+    background:#1b150f; border-left:1px solid rgba(217,128,38,.42); padding:22px;
+    transition:right .25s ease; overflow-y:auto;
+  }
+  #settings.open { right:0; box-shadow:-20px 0 50px rgba(0,0,0,.6); }
+  #settings h2 { font-size:12px; letter-spacing:3px; color:#ffd9c4; margin-bottom:18px; text-transform:uppercase; }
+  #settings label { display:block; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:#d98026; margin:14px 0 5px; }
+  #settings input[type=text], #settings input[type=password] {
+    width:100%; padding:10px 12px; font-size:13px; color:#ffe2d1;
+    background:rgba(60,40,25,.35); border:1px solid rgba(217,128,38,.32); border-radius:4px; outline:none;
+  }
+  #settings .hint { font-size:11px; color:#9a6a38; margin-top:4px; line-height:1.5; }
+  #settings .row { display:flex; gap:8px; margin-top:20px; }
+  #closeSettings { position:absolute; top:14px; right:14px; background:none; border:none; color:#d98026; font-size:18px; cursor:pointer; }
+  .chk { display:flex; align-items:center; gap:8px; margin-top:16px; font-size:12px; color:#ffb699; }
+
+  /* ---------- bright mode (QUWWAA brand, light) ---------- */
+  body.bright { background:#f7f1e8; color:#3a2c1e; }
+  body.bright::before { background:radial-gradient(ellipse at 50% 30%, rgba(217,128,38,.08), transparent 60%); }
+  body.bright header { border-bottom-color:rgba(179,95,16,.3); color:#a05a14; }
+  body.bright header .sub { color:#a05a14; }
+  body.bright header .title { color:#8a4a0e; text-shadow:0 0 12px rgba(217,128,38,.35); }
+  body.bright #gear, body.bright #briteBtn { color:#a05a14; }
+  body.bright #status { color:#a05a14; }
+  body.bright #log { scrollbar-color:#d9b894 transparent; }
+  body.bright .msg.user { color:#2a2118; border-color:rgba(58,44,30,.3); background:rgba(255,255,255,.75); border-right-color:rgba(58,44,30,.5); }
+  body.bright .msg.jarvis { color:#5a3a18; border-color:rgba(217,128,38,.45); background:rgba(255,255,255,.8); border-left-color:#d98026; }
+  body.bright .msg .who { opacity:.7; }
+  body.bright #micBtn, body.bright .btn, body.bright #lensClose { background:rgba(217,128,38,.12); border-color:rgba(179,95,16,.5); color:#8a4a0e; }
+  body.bright #micBtn:hover, body.bright .btn:hover, body.bright #lensClose:hover { background:rgba(217,128,38,.25); }
+  body.bright #textIn { background:#fff; border-color:rgba(179,95,16,.4); color:#2a2118; }
+  body.bright #controls { border-top-color:rgba(179,95,16,.3); }
+  body.bright .hcard, body.bright .lcard { background:linear-gradient(160deg, rgba(255,255,255,.88), rgba(255,243,228,.92)); border-color:rgba(179,95,16,.35); box-shadow:0 8px 26px rgba(120,80,30,.18), inset 0 1px 0 rgba(255,255,255,.85); }
+  body.bright .lcard:hover { border-color:#d98026; box-shadow:0 0 18px rgba(217,128,38,.35); }
+  body.bright .hcat { color:#b35f10; text-shadow:none; }
+  body.bright .hhead a, body.bright .lhead a { color:#2a2118; text-shadow:none; }
+  body.bright .hhead a:hover, body.bright .lhead a:hover { color:#b35f10; }
+  body.bright .lsrc { color:#a05a14; }
+  body.bright .lmeta { color:#9a7a55; }
+  body.bright #lens { background:linear-gradient(135deg, rgba(255,250,242,.88), rgba(247,238,225,.94)); border-color:rgba(179,95,16,.45); box-shadow:0 0 70px rgba(150,100,40,.25); }
+  body.bright #lensHead { border-bottom-color:rgba(179,95,16,.3); }
+  body.bright #lensTitle { color:#8a4a0e; text-shadow:none; }
+  body.bright #lensCount { color:#a05a14; }
+  body.bright .lthumb { border-bottom-color:rgba(179,95,16,.3); }
+  body.bright #lensBody { scrollbar-color:#d9b894 transparent; }
+  body.bright #settings { background:#fbf5ec; border-left-color:rgba(179,95,16,.45); }
+  body.bright #settings h2 { color:#8a4a0e; }
+  body.bright #settings label { color:#a05a14; }
+  body.bright #settings input[type=text], body.bright #settings input[type=password] { background:#fff; border-color:rgba(179,95,16,.4); color:#2a2118; }
+  body.bright #settings .hint { color:#9a7a55; }
+  body.bright #closeSettings { color:#a05a14; }
+  body.bright .chk { color:#3a2c1e; }
+  body.bright #reactor .core { box-shadow:0 0 24px 6px rgba(217,128,38,.45), 0 0 70px 18px rgba(217,128,38,.18); }
+</style>
+</head>
+<body>
+<header>
+  <span class="sub" id="clock">--:--:--</span>
+  <span class="title">QUWWAA</span>
+  <span><span class="sub" id="brainState">BRAIN: OFFLINE</span> &nbsp; <button id="briteBtn" title="Bright mode">☀</button> <button id="gear" title="Settings">⚙</button></span>
+</header>
+
+<div id="reactorWrap">
+  <div id="reactor" title="Tap to speak">
+    <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+    <div class="core"></div>
+  </div>
+  <div id="status">STANDING BY</div>
+  <div id="homeCards"></div>
+</div>
+
+<div id="log"></div>
+
+<div id="controls">
+  <button id="micBtn" title="Voice input">🎙</button>
+  <input id="textIn" type="text" placeholder="Speak or type a command, sir..." autocomplete="off" autofocus>
+  <button id="sendBtn" class="btn">Send</button>
+  <button id="voiceToggle" class="btn" title="Toggle spoken replies">🔊</button>
+  <button id="handsFree" class="btn" title="Auto-listen after each reply">∞</button>
+</div>
+
+<div id="lens">
+  <div id="lensHead">
+    <span id="lensTitle">NEWS LENS</span>
+    <span id="lensCount"></span>
+    <button id="lensClose">✕ CLOSE</button>
+  </div>
+  <div id="lensBody"></div>
+</div>
+
+<div id="settings">
+  <button id="closeSettings">✕</button>
+  <h2>Systems Configuration</h2>
+
+  <label>Anthropic API key (the brain)</label>
+  <input type="password" id="setAnthropic" placeholder="sk-ant-...">
+  <div class="hint">Get one at console.anthropic.com → API keys. Stored only in this browser.</div>
+
+  <label>ElevenLabs API key (the voice — optional)</label>
+  <input type="password" id="setEleven" placeholder="xi-...">
+  <div class="hint">From elevenlabs.io → Profile → API key. Without it, a built-in British system voice is used.</div>
+
+  <label>ElevenLabs voice ID (optional)</label>
+  <input type="text" id="setVoiceId" placeholder="onwK4e9ZLuTAKqWW03F9">
+  <div class="hint">Default is "Daniel" — a calm British voice. Browse voices at elevenlabs.io/voice-library.</div>
+
+  <div class="chk"><input type="checkbox" id="setHandsFree"> <span>Hands-free: resume listening after each reply</span></div>
+
+  <div class="row">
+    <button class="btn" id="saveSettings">Save</button>
+    <button class="btn" id="clearHistory">Clear log</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const log=$('log'), statusEl=$('status'), micBtn=$('micBtn'), textIn=$('textIn');
+
+  function tick(){ const d=new Date(); $('clock').textContent = d.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short',year:'numeric'}).toUpperCase() + '  ·  ' + d.toLocaleTimeString('en-GB'); }
+  tick(); setInterval(tick, 1000);
+
+  // ---------- settings ----------
+  const cfg = {
+    anthropic: localStorage.getItem('q_anthropic') || '',
+    eleven:    localStorage.getItem('q_eleven') || '',
+    voiceId:   localStorage.getItem('q_voiceid') || 'onwK4e9ZLuTAKqWW03F9',
+    handsFree: localStorage.getItem('q_handsfree') === 'on'
+  };
+  let voiceOn = localStorage.getItem('q_voice') !== 'off';
+
+  let elevenInfo = '';
+  let serverBrain = false;
+  function brainState(){
+    const b = (serverBrain || cfg.anthropic) ? 'ONLINE' : 'OFFLINE — ADD KEY ⚙';
+    const v = cfg.eleven ? 'ELEVENLABS' + elevenInfo : 'SYSTEM';
+    $('brainState').textContent = 'BRAIN: ' + b + ' · VOICE: ' + v;
+  }
+  // Probe the server-side brain so the public site reads ONLINE without a local key.
+  fetch('/health').then(r=> r.ok ? r.json() : null).then(d=>{ if(d && d.brain){ serverBrain = true; brainState(); } }).catch(()=>{});
+  async function checkEleven(){
+    if(!cfg.eleven){ elevenInfo = ''; brainState(); return; }
+    try{
+      const r = await fetch('https://api.elevenlabs.io/v1/user/subscription',
+                            {headers:{'xi-api-key': cfg.eleven}});
+      if(r.ok){
+        const d = await r.json();
+        const used = d.character_count || 0, lim = d.character_limit || 0;
+        const left = Math.max(0, lim - used);
+        elevenInfo = (lim && used >= lim)
+          ? ' · QUOTA EXHAUSTED → SYSTEM VOICE'
+          : ' · ' + (left >= 1000 ? (left/1000).toFixed(1) + 'K' : left) + ' CREDITS LEFT';
+      } else {
+        elevenInfo = ' · KEY ERROR ' + r.status;
+      }
+    }catch(e){ elevenInfo = ' · UNREACHABLE'; }
+    brainState();
+  }
+  function syncUI(){
+    $('voiceToggle').classList.toggle('off', !voiceOn);
+    $('handsFree').classList.toggle('off', !cfg.handsFree);
+    brainState();
+  }
+  $('gear').onclick = ()=>{
+    $('setAnthropic').value = cfg.anthropic; $('setEleven').value = cfg.eleven;
+    $('setVoiceId').value = cfg.voiceId; $('setHandsFree').checked = cfg.handsFree;
+    $('settings').classList.add('open');
+  };
+  $('closeSettings').onclick = ()=> $('settings').classList.remove('open');
+  $('saveSettings').onclick = ()=>{
+    cfg.anthropic = $('setAnthropic').value.trim();
+    cfg.eleven    = $('setEleven').value.trim();
+    cfg.voiceId   = $('setVoiceId').value.trim() || 'onwK4e9ZLuTAKqWW03F9';
+    cfg.handsFree = $('setHandsFree').checked;
+    localStorage.setItem('q_anthropic', cfg.anthropic);
+    localStorage.setItem('q_eleven', cfg.eleven);
+    localStorage.setItem('q_voiceid', cfg.voiceId);
+    localStorage.setItem('q_handsfree', cfg.handsFree ? 'on':'off');
+    $('settings').classList.remove('open');
+    syncUI();
+    checkEleven();
+    addMsg('jarvis', cfg.anthropic ? 'Configuration saved, sir. All systems online.' : 'Configuration saved, sir — though I shall remain rather dim until an Anthropic key is provided.', false);
+  };
+  $('voiceToggle').onclick = ()=>{ voiceOn=!voiceOn; localStorage.setItem('q_voice', voiceOn?'on':'off'); if(!voiceOn) stopAudio(); syncUI(); };
+  $('handsFree').onclick = ()=>{ cfg.handsFree=!cfg.handsFree; localStorage.setItem('q_handsfree', cfg.handsFree?'on':'off'); syncUI(); };
+  if(localStorage.getItem('q_theme')==='bright') document.body.classList.add('bright');
+  $('briteBtn').onclick = ()=>{ document.body.classList.toggle('bright'); localStorage.setItem('q_theme', document.body.classList.contains('bright') ? 'bright' : 'dark'); };
+  $('clearHistory').onclick = ()=>{ history=[]; localStorage.removeItem('q_history'); log.innerHTML=''; greet(); $('settings').classList.remove('open'); };
+
+  // ---------- log ----------
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem('q_history')||'[]'); } catch(e){}
+  let busy = false;
+
+  function setStatus(t){ statusEl.textContent = t; }
+  function mode(m){ document.body.classList.remove('listening','speaking','thinking'); if(m) document.body.classList.add(m); }
+  function addMsg(role, text, save=true){
+    const div=document.createElement('div');
+    div.className='msg '+(role==='user'?'user':'jarvis');
+    const who=document.createElement('span'); who.className='who';
+    who.textContent = role==='user' ? 'MR. DEAN' : 'QUWWAA';
+    div.appendChild(who); div.appendChild(document.createTextNode(text));
+    log.appendChild(div); log.scrollTop=log.scrollHeight;
+    if(save){
+      history.push({role: role==='user'?'user':'assistant', content:text});
+      if(history.length>40) history=history.slice(-40);
+      try{ localStorage.setItem('q_history', JSON.stringify(history)); }catch(e){}
+    }
+  }
+  function greet(){ addMsg('jarvis','Good day, sir. QUWWAA online. The board is live — speak or type a command.', false); }
+  // always start fresh — no restored history
+  history = [];
+  try{ localStorage.removeItem('q_history'); }catch(e){}
+  greet();
+
+  // ---------- brain (Claude API) ----------
+  const PERSONA = "You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS from Iron Man. Reply in that voice: impeccably polite British butler, dry wit, understated, efficient. Refer to yourself as QUWWAA. Address the user as 'sir'. Keep replies brief (1-3 sentences) and conversational since they will be spoken aloud. Never use markdown, lists, or emoji. Context: Mike runs Daily Rumble, a Substack by Quwwaa LLC covering US politics and the Iran/Israel/Lebanon/Palestine region, sponsored by Zaytuna Mobile. You have a web search tool — use it whenever asked about current events, news, or to check public pages such as whether the latest Daily Rumble post is live on Substack. For private accounts (Instagram analytics, email, documents) you have no access; advise the user to ask Claude in the Cowork app, where those systems are connected. About your own voice: the console you run in converts your text replies to speech using either ElevenLabs (if the user added a key in the settings panel) or the Mac's system voice — this happens outside your view, so never claim the user's audio setup isn't working; the header shows VOICE: ELEVENLABS or VOICE: SYSTEM. Likewise the console's microphone transcribes the user's spoken words and delivers them to you as text — when Mike speaks, you ARE hearing him. Never say you cannot hear him or that he must type; voice and keyboard both reach you identically. You are, for all practical purposes, a voice assistant. NEWS LENS: the console has a multi-source news panel fed live by GDELT (tens of thousands of global outlets), Google News, and Reddit via a local server; results are never stored. Whenever the user asks about a specific news story, incident, situation, or report — or wants to compare coverage — give your brief spoken take, mention you are bringing coverage up on screen, and end your reply with a tag on the final line exactly in this form: [LENS: concise search keywords]. The console strips the tag and opens the panel. Use 2-5 strong keywords in the tag, e.g. [LENS: lebanon ceasefire border]. The panel shows only the last 7 days by default. If and only if the user explicitly asks for older coverage or a specific time range, add a day window after a pipe: [LENS: keywords | 30d] (e.g. 'last month' = 30d, 'past year' = 365d). Do not use the tag for non-news questions.";
+
+  async function ask(){
+    const msgs = history.slice(-20).map(m=>({role:m.role, content:m.content}));
+    // 1) Preferred path: the server-side butler. On the public site the key lives
+    //    safely on the server, so visitors need no key of their own.
+    try{
+      const sr = await fetch('/ask', {
+        method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({messages: msgs})
+      });
+      if(sr.ok){
+        const sd = await sr.json();
+        return sd.reply || "I received an empty transmission, sir.";
+      }
+      if(sr.status === 429){
+        const sd = await sr.json().catch(()=>({}));
+        return sd.reply || "A moment's patience, sir — you are speaking faster than I can attend.";
+      }
+      // 503 'no_server_key' (e.g. the local Mac sandbox) → fall through to a local key
+    }catch(e){ /* server unreachable → try the direct path below */ }
+    // 2) Fallback: direct browser call using a key from the settings panel.
+    if(!cfg.anthropic){
+      return "My cognitive core awaits an Anthropic API key, sir. Click the gear icon, top right, and provide one from console.anthropic.com.";
+    }
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{
+        'content-type':'application/json',
+        'x-api-key': cfg.anthropic,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
+      body: JSON.stringify({
+        model:'claude-haiku-4-5-20251001', max_tokens:600, system:PERSONA, messages:msgs,
+        tools:[{ type:'web_search_20250305', name:'web_search', max_uses:3 }]
+      })
+    });
+    if(!res.ok){
+      const err = await res.text();
+      if(res.status===401) return "That API key was rejected, sir. Do verify it in the settings panel.";
+      return "The uplink returned an error ("+res.status+"), sir. " + err.slice(0,160);
+    }
+    const data = await res.json();
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join(' ').trim();
+    return text || "I received an empty transmission, sir.";
+  }
+
+  // ---------- voice output ----------
+  let currentAudio = null, britishVoice = null;
+  function pickVoice(){
+    const vs = speechSynthesis.getVoices();
+    britishVoice = vs.find(v=>/daniel/i.test(v.name)&&/en/i.test(v.lang))
+                || vs.find(v=>v.lang==='en-GB') || vs.find(v=>/^en/.test(v.lang)) || null;
+  }
+  pickVoice();
+  if('onvoiceschanged' in speechSynthesis) speechSynthesis.onvoiceschanged = pickVoice;
+
+  function stopAudio(){
+    speechSynthesis.cancel();
+    if(currentAudio){ currentAudio.pause(); currentAudio=null; }
+  }
+  function speakDone(){ mode(''); setStatus('STANDING BY'); if(cfg.handsFree && !busy) startListening(); }
+
+  async function speak(text){
+    if(!voiceOn){ speakDone(); return; }
+    stopAudio();
+    mode('speaking'); setStatus('RESPONDING');
+    if(cfg.eleven){
+      try{
+        const r = await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+cfg.voiceId, {
+          method:'POST',
+          headers:{'xi-api-key':cfg.eleven,'content-type':'application/json'},
+          body: JSON.stringify({ text, model_id:'eleven_multilingual_v2', voice_settings:{stability:0.5, similarity_boost:0.75} })
+        });
+        if(r.ok){
+          const blob = await r.blob();
+          currentAudio = new Audio(URL.createObjectURL(blob));
+          currentAudio.onended = ()=>{ currentAudio=null; speakDone(); };
+          currentAudio.onerror = ()=>{ currentAudio=null; speakDone(); };
+          await currentAudio.play();
+          checkEleven();  // refresh the credit meter after each spoken reply
+          return;
+        }
+        elevenInfo = ' · ERR ' + r.status + ' → SYSTEM VOICE';
+        brainState();
+        checkEleven();
+      }catch(e){
+        elevenInfo = ' · UNREACHABLE → SYSTEM VOICE';
+        brainState();
+      }
+    }
+    if('speechSynthesis' in window){
+      const u = new SpeechSynthesisUtterance(text);
+      if(britishVoice) u.voice = britishVoice;
+      u.rate=1.02; u.pitch=0.95;
+      u.onend = speakDone; u.onerror = speakDone;
+      speechSynthesis.speak(u);
+    } else speakDone();
+  }
+
+  // ---------- voice input ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec=null, listening=false;
+  if(SR){
+    rec = new SR();
+    rec.lang='en-US'; rec.interimResults=false; rec.maxAlternatives=1;
+    rec.onstart = ()=>{ listening=true; mode('listening'); setStatus('LISTENING'); };
+    rec.onend   = ()=>{ listening=false; if(document.body.classList.contains('listening')){ mode(''); setStatus('STANDING BY'); } };
+    rec.onerror = e=>{
+      listening=false; mode('');
+      setStatus(e.error==='not-allowed' ? 'MIC DENIED — ALLOW IN CHROME ADDRESS BAR' :
+                e.error==='no-speech'  ? 'NO SPEECH DETECTED' : 'MIC ERROR: '+e.error);
+    };
+    rec.onresult = e=>{ handleInput(e.results[0][0].transcript); };
+  } else {
+    micBtn.disabled = true;
+    setStatus('SPEECH RECOGNITION REQUIRES CHROME');
+  }
+  function startListening(){
+    if(!rec || listening || busy) return;
+    stopAudio();
+    try{ rec.start(); }catch(e){}
+  }
+  function toggleMic(){ listening ? rec && rec.stop() : startListening(); }
+  micBtn.onclick = toggleMic;
+  $('reactor').onclick = toggleMic;
+
+  // ---------- news lens ----------
+  const lens = $('lens');
+  let actx = null;
+  function popSound(delayMs){
+    if(!voiceOn) return; // honor the mute toggle
+    try{
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if(actx.state === 'suspended') actx.resume();
+      const t0 = actx.currentTime + delayMs/1000;
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(850 + Math.random()*350, t0);
+      o.frequency.exponentialRampToValueAtTime(280, t0 + 0.08);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.05, t0 + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+      o.connect(g).connect(actx.destination);
+      o.start(t0); o.stop(t0 + 0.1);
+    }catch(e){}
+  }
+  function esc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function closeLens(){
+    if(!lens.classList.contains('open')) return;
+    lens.classList.remove('open');
+    resetBoard();
+  }
+  $('lensClose').onclick = closeLens;
+  document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeLens(); });
+  async function openLens(q, days){
+    days = Math.max(1, Math.min(365, parseInt(days,10) || 7));
+    $('lensTitle').textContent = 'NEWS LENS — ' + q.toUpperCase();
+    $('lensCount').textContent = 'SCANNING GLOBAL SOURCES…';
+    $('lensBody').innerHTML = '';
+    lens.classList.add('open');
+    try{
+      const r = await fetch('/news?q=' + encodeURIComponent(q) + '&days=' + days, {cache:'no-store'});
+      const d = await r.json();
+      const arts = d.articles || [];
+      const diag = d.diag ? ' · ' + Object.entries(d.diag).map(([k,v])=>k+' '+v).join(' / ') : '';
+      $('lensCount').textContent = (arts.length
+        ? arts.length + ' REPORTS · ' + d.sources + ' SOURCES · LAST ' + days + ' DAYS'
+        : 'NO REPORTS IN LAST ' + days + ' DAYS') + diag;
+      // illustrated reports first, text-only dispatches below — newest first within each
+      arts.sort((a, b)=> ((b.image?1:0) - (a.image?1:0)) || ((b.ts||0) - (a.ts||0)));
+      arts.forEach((a, i)=>{
+        const c = document.createElement('div'); c.className = 'lcard';
+        const delay = Math.min(i * 75, 4500);
+        c.style.animationDelay = delay + 'ms';
+        if(i < 24) popSound(delay);
+        const fav = 'https://www.google.com/s2/favicons?sz=32&domain=' + encodeURIComponent(a.source||'');
+        const thumb = a.image
+          ? '<div class="lthumb"><img src="'+esc(a.image)+'" loading="lazy" onerror="this.parentNode.style.display=\'none\'"></div>'
+          : '';
+        c.innerHTML = thumb +
+          '<div class="lsrc"><img src="'+fav+'" onerror="this.style.display=\'none\'">'+esc(a.source||'')+'</div>' +
+          '<div class="lhead"><a href="'+esc(a.url||'#')+'" target="_blank" rel="noopener">'+esc(a.title||'')+'</a></div>' +
+          '<div class="lmeta"><span>'+esc(a.time||'')+'</span><span>'+esc(a.via||'')+'</span></div>';
+        $('lensBody').appendChild(c);
+      });
+    }catch(e){
+      $('lensCount').textContent = 'LENS OFFLINE — RESTART VIA Start QUWWAA.command';
+    }
+  }
+
+  // ---------- home command center ----------
+  const HOME_CATS = [
+    {label:'POLITICS', q:'politics',      days:1, maxAgeH:3},  // politics sours fast
+    {label:'SPORTS',   q:'sports',        days:2},
+    {label:'STOCKS',   q:'stock market',  days:2},
+    {label:'TRENDING', q:'breaking news', days:1}
+  ];
+  let homeCache = {t:0, items:[]};
+  function exitHome(){ document.body.classList.remove('home'); }
+  function renderHome(items){
+    const wrap = $('homeCards'); wrap.innerHTML = '';
+    items.forEach((it, i)=>{
+      const w = document.createElement('div'); w.className = 'hwrap p' + i;
+      w.style.animationDelay = (i * 240) + 'ms';
+      popSound(i * 240);
+      const a = it.a;
+      w.innerHTML =
+        '<div class="hcard" style="animation-duration:' + (5.4 + i * 0.9) + 's">' +
+        '<div class="hcat" title="Open full coverage">◈ ' + it.label + '</div>' +
+        (a.image ? '<div class="hthumb"><img src="' + esc(a.image) + '" onerror="this.parentNode.style.display=\'none\'"></div>' : '') +
+        '<div class="hhead"><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.title) + '</a></div>' +
+        '<div class="lmeta"><span>' + esc(a.source) + '</span><span>' + esc(a.time) + '</span></div>' +
+        '</div>';
+      w.querySelector('.hcat').onclick = ()=> openLens(it.q, it.days || 2);
+      wrap.appendChild(w);
+    });
+  }
+  async function loadHome(){
+    document.body.classList.add('home');
+    if(Date.now() - homeCache.t < 5*60*1000 && homeCache.items.length){
+      renderHome(homeCache.items); return;
+    }
+    $('homeCards').innerHTML = '';
+    setStatus('SCANNING THE WIRES…');
+    const items = await Promise.all(HOME_CATS.map(async c=>{
+      try{
+        const r = await fetch('/news?q=' + encodeURIComponent(c.q) + '&days=' + (c.days||2) + '&fast=1', {cache:'no-store'});
+        const d = await r.json();
+        let arts = d.articles || [];
+        if(c.maxAgeH){  // hard freshness window for fast-moving beats
+          const cut = Date.now()/1000 - c.maxAgeH*3600;
+          const fresh = arts.filter(x=>(x.ts||0) >= cut);
+          if(fresh.length) arts = fresh;
+        }
+        const a = arts.find(x=>x.image) || arts[0];
+        return a ? {label:c.label, q:c.q, days:c.days, a} : null;
+      }catch(e){ return null; }
+    }));
+    homeCache = {t: Date.now(), items: items.filter(Boolean)};
+    setStatus('STANDING BY');
+    renderHome(homeCache.items);
+  }
+  function resetBoard(){
+    history = [];
+    try{ localStorage.removeItem('q_history'); }catch(e){}
+    log.innerHTML = '';
+    greet();
+    loadHome();
+  }
+
+  // ---------- pipeline ----------
+  async function handleInput(text){
+    text=(text||'').trim();
+    if(!text || busy) return;
+    const direct = text.match(/^lens[:\s]+(?:(\d+)d\s+)?(.+)/i);
+    if(direct){ openLens(direct[2].trim(), direct[1]); return; }
+    exitHome();
+    busy=true;
+    addMsg('user', text);
+    mode('thinking'); setStatus('PROCESSING');
+    let reply;
+    try{ reply = await ask(); }
+    catch(e){ reply = "I'm afraid the uplink failed, sir"+(e&&e.message?': '+e.message:'.'); }
+    const lm = reply.match(/\[LENS:\s*([^\]|]+)(?:\|\s*(\d+)d?\s*)?\]/i);
+    if(lm){ reply = reply.replace(lm[0], '').trim(); openLens(lm[1].trim(), lm[2]); }
+    addMsg('jarvis', reply);
+    busy=false;
+    speak(reply);
+  }
+  $('sendBtn').onclick = ()=>{ handleInput(textIn.value); textIn.value=''; };
+  textIn.addEventListener('keydown', e=>{ if(e.key==='Enter'){ handleInput(textIn.value); textIn.value=''; }});
+
+  syncUI();
+  checkEleven();
+  loadHome();
+})();
+</script>
+</body>
+</html>
