@@ -953,10 +953,27 @@
       let size = parseFloat(getComputedStyle(el).fontSize) || 16, guard = 0;
       while(el.scrollWidth > el.clientWidth && size > 11 && guard++ < 16){ size -= 1; el.style.fontSize = size + 'px'; }
     }
+    // On phones, drop the caption dead-centre in the gap between the reactor and
+    // the first news card — measured live so it never overlays either, on any
+    // screen. (Desktop keeps the CSS top:63%.)
+    function placeCaption(el){
+      if(window.innerWidth > 820) return;
+      const reactor = document.getElementById('reactor');
+      const cards = document.getElementById('homeCards');
+      const firstCard = cards && cards.querySelector('.hcard, .hwrap, .lcard');
+      if(!reactor || !firstCard) return;
+      const topBound = reactor.getBoundingClientRect().bottom + 26;   // clear the STANDING BY caption
+      const cardTop = firstCard.getBoundingClientRect().top;
+      if(cardTop - topBound < 24) return;                             // gap too small — leave CSS default
+      const h = 22;
+      el.style.top = Math.round((topBound + cardTop) / 2 - h / 2) + 'px';
+      el.style.bottom = 'auto';
+    }
     function show(){
       let el = document.getElementById('greetCap');
       if(!el){ el = document.createElement('div'); el.id = 'greetCap'; document.body.appendChild(el); }
       clearType();
+      placeCaption(el);
       const lines = splitLines(getText());
       let li = 0;
       const typeLine = ()=>{
