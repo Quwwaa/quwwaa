@@ -704,39 +704,59 @@
     if(e.touches[0].clientY - lensTY > 90 && lensTScroll <= 0){ lensTY = null; closeLens(); }
   }, {passive:true});
   lens.addEventListener('touchend', ()=>{ lensTY = null; }, {passive:true});
+  function renderLens(d, days, animate){
+    const arts = (d.articles || []).slice();
+    const diag = d.diag ? ' · ' + Object.entries(d.diag).map(([k,v])=>k+' '+v).join(' / ') : '';
+    $('lensCount').textContent = (arts.length
+      ? arts.length + ' REPORTS · ' + d.sources + ' SOURCES · LAST ' + days + ' DAYS'
+      : 'NO REPORTS IN LAST ' + days + ' DAYS') + diag;
+    // illustrated reports first, text-only dispatches below — newest first within each
+    arts.sort((a, b)=> ((b.image?1:0) - (a.image?1:0)) || ((b.ts||0) - (a.ts||0)));
+    const body = $('lensBody');
+    const prevScroll = body.scrollTop;
+    body.innerHTML = '';
+    arts.forEach((a, i)=>{
+      const c = document.createElement('div'); c.className = 'lcard';
+      if(animate){ const delay = Math.min(i * 55, 2600); c.style.animationDelay = delay + 'ms'; if(i < 18) popSound(delay); }
+      else { c.style.animation = 'none'; c.style.opacity = '1'; }   // quiet upgrade — no re-pop
+      const fav = 'https://www.google.com/s2/favicons?sz=32&domain=' + encodeURIComponent(a.source||'');
+      const thumb = a.image
+        ? '<div class="lthumb"><img src="'+esc(a.image)+'" loading="lazy" onerror="this.parentNode.style.display=\'none\'"></div>'
+        : '';
+      c.innerHTML = thumb +
+        '<div class="lsrc"><img src="'+fav+'" onerror="this.style.display=\'none\'">'+esc(a.source||'')+'</div>' +
+        '<div class="lhead"><a href="'+esc(a.url||'#')+'" target="_blank" rel="noopener">'+esc(a.title||'')+'</a></div>' +
+        '<div class="lmeta"><span>'+esc(a.time||'')+'</span><span>'+esc(a.via||'')+'</span></div>';
+      body.appendChild(c);
+    });
+    if(!animate) body.scrollTop = prevScroll;   // keep the reader's place on a quiet upgrade
+  }
+  let lensReq = 0;
   async function openLens(q, days){
     days = Math.max(1, Math.min(365, parseInt(days,10) || 7));
+    const reqId = ++lensReq;
     $('lensTitle').textContent = 'NEWS LENS — ' + q.toUpperCase();
     $('lensCount').textContent = 'SCANNING GLOBAL SOURCES…';
     $('lensBody').innerHTML = '';
     lens.classList.add('open');
-    try{
-      const r = await fetch('/news?q=' + encodeURIComponent(q) + '&days=' + days, {cache:'no-store'});
-      const d = await r.json();
-      const arts = d.articles || [];
-      const diag = d.diag ? ' · ' + Object.entries(d.diag).map(([k,v])=>k+' '+v).join(' / ') : '';
-      $('lensCount').textContent = (arts.length
-        ? arts.length + ' REPORTS · ' + d.sources + ' SOURCES · LAST ' + days + ' DAYS'
-        : 'NO REPORTS IN LAST ' + days + ' DAYS') + diag;
-      // illustrated reports first, text-only dispatches below — newest first within each
-      arts.sort((a, b)=> ((b.image?1:0) - (a.image?1:0)) || ((b.ts||0) - (a.ts||0)));
-      arts.forEach((a, i)=>{
-        const c = document.createElement('div'); c.className = 'lcard';
-        const delay = Math.min(i * 75, 4500);
-        c.style.animationDelay = delay + 'ms';
-        if(i < 24) popSound(delay);
-        const fav = 'https://www.google.com/s2/favicons?sz=32&domain=' + encodeURIComponent(a.source||'');
-        const thumb = a.image
-          ? '<div class="lthumb"><img src="'+esc(a.image)+'" loading="lazy" onerror="this.parentNode.style.display=\'none\'"></div>'
-          : '';
-        c.innerHTML = thumb +
-          '<div class="lsrc"><img src="'+fav+'" onerror="this.style.display=\'none\'">'+esc(a.source||'')+'</div>' +
-          '<div class="lhead"><a href="'+esc(a.url||'#')+'" target="_blank" rel="noopener">'+esc(a.title||'')+'</a></div>' +
-          '<div class="lmeta"><span>'+esc(a.time||'')+'</span><span>'+esc(a.via||'')+'</span></div>';
-        $('lensBody').appendChild(c);
-      });
-    }catch(e){
-      $('lensCount').textContent = 'LENS OFFLINE — RESTART VIA Start QUWWAA.command';
+    let shown = false, best = -1;
+    const consider = (d, animate)=>{
+      if(reqId !== lensReq || !d) return;            // a newer open superseded this one
+      const n = (d.articles || []).length;
+      if(n <= best) return;                          // never swap a richer board for a thinner one
+      best = n; renderLens(d, days, animate && !shown); shown = true;
+    };
+    const getJson = (url)=> fetch(url, {cache:'no-store'}).then(r=> r.ok ? r.json() : null).catch(()=> null);
+    const enc = encodeURIComponent(q);
+    // Two passes at once: the fast pass paints almost immediately; the full pass
+    // (more sources, resolved links, images) quietly upgrades the board when ready.
+    const fastP = getJson('/news?q=' + enc + '&days=' + days + '&fast=1');
+    const fullP = getJson('/news?q=' + enc + '&days=' + days);
+    fastP.then(d=> consider(d, true));
+    consider(await fullP, false);
+    if(!shown) consider(await fastP, true);          // full failed/empty — fall back to fast
+    if(reqId === lensReq && !shown){
+      $('lensCount').textContent = 'NO REPORTS FOUND — TRY DIFFERENT TERMS OR CHECK CONNECTION';
     }
   }
 

@@ -7,7 +7,7 @@ import json, os, re, email.utils, html, base64, time
 import urllib.request, urllib.parse, urllib.error
 import xml.etree.ElementTree as ET
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone
 
 PORT = int(os.environ.get('PORT', '8765'))      # cloud hosts inject PORT; 8765 locally
@@ -60,7 +60,7 @@ def _gdelt_call(q, days):
     url = 'https://api.gdeltproject.org/api/v2/doc/doc?' + urllib.parse.urlencode({
         'query': q + ' sourcelang:english', 'mode': 'artlist', 'maxrecords': '40',
         'format': 'json', 'timespan': '%dd' % days, 'sort': 'datedesc'})
-    body = fetch(url, timeout=12) or b'{}'
+    body = fetch(url, timeout=7) or b'{}'
     try:
         return json.loads(body).get('articles', [])
     except ValueError:
@@ -71,8 +71,7 @@ def src_gdelt(q, days=7):
     try:
         arts = _gdelt_call(q, days)
     except Exception:
-        time.sleep(1.5)  # GDELT rate-limits bursts — one polite retry
-        arts = _gdelt_call(q, days)
+        arts = []  # GDELT flaky/rate-limited — skip rather than stall the whole board
     words = q.split()
     if len(arts) < 8 and len(words) > 3:
         # query too strict — relax to the strongest three terms
@@ -309,7 +308,7 @@ def resolve_gnews(url):
         except Exception:
             pass
     try:  # newer format: fetch the interstitial page and find the outbound link
-        page = fetch(url, timeout=6)
+        page = fetch(url, timeout=4)
         m2 = (re.search(rb'data-n-au="([^"]+)"', page)
               or re.search(rb'href="(https?://(?!news\.google|accounts\.google|www\.google|policies\.google|support\.google|play\.google)[^"]+)"', page))
         if m2:
@@ -318,15 +317,15 @@ def resolve_gnews(url):
         pass
     return ''
 
-def fix_gnews_urls(arts, limit=20):
+def fix_gnews_urls(arts, limit=14):
     need = [a for a in arts if 'news.google.com' in a['url']][:limit]
     if not need:
         return
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=12) as ex:
         futs = {ex.submit(resolve_gnews, a['url']): a for a in need}
         for fu in futs:
             try:
-                u = fu.result(timeout=9)
+                u = fu.result(timeout=5)
                 if u:
                     futs[fu]['url'] = u
             except Exception:
@@ -335,7 +334,7 @@ def fix_gnews_urls(arts, limit=20):
 def _tok(t):
     return {w for w in re.sub(r'[^a-z0-9 ]', ' ', t.lower()).split() if len(w) > 3}
 
-def upgrade_gnews(arts, limit=12):
+def upgrade_gnews(arts, limit=8):
     """Google's new links hide the article URL entirely. Sidestep: re-find the
     same story on Bing by headline and inherit its direct link + thumbnail."""
     need = [a for a in arts if 'news.google.com' in a['url']][:limit]
@@ -353,11 +352,11 @@ def upgrade_gnews(arts, limit=12):
         except Exception:
             pass
         return None
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:
         futs = {ex.submit(lookup, a): a for a in need}
         for fu in futs:
             try:
-                h = fu.result(timeout=10)
+                h = fu.result(timeout=6)
             except Exception:
                 h = None
             if h:
@@ -366,7 +365,7 @@ def upgrade_gnews(arts, limit=12):
                 if h['image']:
                     a['image'] = h['image']
 
-def fill_images(arts, limit=25):
+def fill_images(arts, limit=16):
     # fill missing images, and upgrade Bing's compressed thumbs to the
     # publisher's own og:image when one exists (Bing kept as fallback)
     need = [a for a in arts if (not a['image'] or 'bing.com/th' in a['image'])
@@ -374,11 +373,11 @@ def fill_images(arts, limit=25):
             and 'news.google.com' not in a['url']][:limit]
     if not need:
         return
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=12) as ex:
         futs = {ex.submit(og_image, a['url']): a for a in need}
         for fu in futs:
             try:
-                img = fu.result(timeout=8)
+                img = fu.result(timeout=4)
                 if img:
                     futs[fu]['image'] = img
             except Exception:
@@ -392,18 +391,34 @@ def aggregate(q, days=7, fast=False):
               ((src_rsspack, 'FEEDS'), (src_gdelt, 'GDELT'), (src_bing, 'BING'),
                (src_yahoo, 'YAHOO'), (src_bsky, 'BLUESKY'),
                (src_gnews, 'GNEWS'), (src_reddit, 'REDDIT'))
-    with ThreadPoolExecutor(max_workers=7) as ex:
-        futs = {ex.submit(f, q, days): n for f, n in sources}
-        for fu, name in futs.items():
+    # Return with whatever has arrived by the deadline rather than waiting on the
+    # slowest source — a single stalled feed must never hold up the whole board.
+    deadline = 4.0 if fast else 6.5
+    ex = ThreadPoolExecutor(max_workers=len(sources))
+    futs = {ex.submit(f, q, days): n for f, n in sources}
+    enough = 8 if fast else 36   # return as soon as we clearly have plenty; don't wait on stragglers
+    try:
+        for fu in as_completed(list(futs), timeout=deadline):
+            name = futs[fu]
             try:
-                r = fu.result(timeout=20)
+                r = fu.result()
                 diag[name] = len(r)
                 results += r
             except Exception as e:
                 diag[name] = type(e).__name__  # visible failure, never silent
+            if len(results) >= enough:
+                break  # a strong source already answered — paint now, skip the slow ones
+    except FuturesTimeout:
+        pass  # deadline reached — proceed with what we have
+    for name in futs.values():
+        diag.setdefault(name, 'timeout')      # sources that didn't make the deadline
+    ex.shutdown(wait=False)                    # let stragglers finish in the background
     for a in results:
-        if a['ts'] < cutoff:
-            continue  # hard freshness window — undated or older items are dropped
+        # Drop genuinely old dated items. In the fast (first-paint) pass also keep
+        # undated search hits so a quick source like Bing isn't filtered down to
+        # nothing; the full pass below stays strict for quality.
+        if a['ts'] < cutoff and not (fast and a['ts'] == 0):
+            continue
         key = re.sub(r'[^a-z0-9]+', '', (a['title'] or '').lower())[:60]
         if not key or key in seen:
             continue
