@@ -519,8 +519,12 @@
   }
   function speakDone(){ mode(''); setStatus('STANDING BY'); if(cfg.handsFree && !busy) startListening(); }
 
-  async function speak(text){
-    if(!voiceOn){ speakDone(); return; }
+  async function speak(text, onAudioStart){
+    // onAudioStart (optional) fires the instant playback actually begins — used to
+    // sync the greeting's typewriter caption to the voice instead of the click.
+    let started = false;
+    const start = ()=>{ if(started) return; started = true; if(onAudioStart){ try{ onAudioStart(); }catch(e){} } };
+    if(!voiceOn){ start(); speakDone(); return; }
     stopAudio();
     mode('speaking'); setStatus('RESPONDING');
     if(cfg.eleven){
@@ -535,7 +539,9 @@
           currentAudio = new Audio(URL.createObjectURL(blob));
           currentAudio.onended = ()=>{ currentAudio=null; speakDone(); };
           currentAudio.onerror = ()=>{ currentAudio=null; speakDone(); };
+          currentAudio.onplaying = start;
           await currentAudio.play();
+          start();
           checkEleven();  // refresh the credit meter after each spoken reply
           return;
         }
@@ -556,9 +562,10 @@
           const url = URL.createObjectURL(await r.blob());
           const a = getTtsAudio(); a.muted = false; a.src = url;
           const done = ()=>{ try{ URL.revokeObjectURL(url); }catch(e){} currentAudio=null; speakDone(); };
-          a.onended = done; a.onerror = done;
+          a.onended = done; a.onerror = done; a.onplaying = start;
           currentAudio = a;
           await a.play();
+          start();
           return;
         }
       }catch(e){ /* fall through to the native voice below */ }
@@ -571,11 +578,12 @@
       if(britishVoice) u.voice = britishVoice;
       u.lang = (britishVoice && britishVoice.lang) || 'en-GB';   // nudge iOS to a UK voice
       u.rate = 1.0; u.pitch = 0.9;                               // measured, slightly deep
-      u.onend = speakDone; u.onerror = speakDone;
+      u.onstart = start; u.onend = speakDone; u.onerror = speakDone;
       speechSynthesis.speak(u);
       // iOS occasionally starts the queue paused — nudge it along.
       setTimeout(()=>{ try{ if(speechSynthesis.paused) speechSynthesis.resume(); }catch(e){} }, 80);
-    } else speakDone();
+      setTimeout(start, 350);   // safety: reveal the caption even if onstart never fires
+    } else { start(); speakDone(); }
   }
 
   // ---------- voice input ----------
@@ -921,11 +929,16 @@
       };
       typeLine();
     }
-    function say(){ if(spoken) return; spoken = true; try{ speak(getText()); }catch(e){} }
+    function say(){
+      if(spoken) return; spoken = true;
+      let shown = false; const showOnce = ()=>{ if(shown) return; shown = true; show(); };
+      setTimeout(showOnce, 2500);   // don't wait forever if the voice is slow/unavailable
+      try{ const p = speak(getText(), showOnce); if(p && p.catch) p.catch(showOnce); }catch(e){ showOnce(); }
+    }
     // Hold the whole greeting until the first interaction. Browsers block audio
-    // before a user gesture, so waiting lets it arrive as spoken voice — with the
-    // matching caption shown at the same moment — rather than silent text up front.
-    const onFirst = ()=>{ show(); say(); document.removeEventListener('pointerdown', onFirst, true); document.removeEventListener('keydown', onFirst, true); };
+    // before a user gesture; the caption typewriter is then started by speak() the
+    // moment playback actually begins, so the text and the voice stay in sync.
+    const onFirst = ()=>{ say(); document.removeEventListener('pointerdown', onFirst, true); document.removeEventListener('keydown', onFirst, true); };
     document.addEventListener('pointerdown', onFirst, true);
     document.addEventListener('keydown', onFirst, true);
   })();
