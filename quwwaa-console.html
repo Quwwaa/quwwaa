@@ -124,6 +124,15 @@
     .hcol { position:static; width:100%; gap:12px; }
     #controls { padding:10px 12px calc(10px + env(safe-area-inset-bottom)); }
     #textIn { padding:12px 14px; }
+
+    /* news lens on phones: clear the status bar / Dynamic Island and the home
+       indicator, drop the long count, and keep a big, always-visible CLOSE */
+    #lens { top:calc(env(safe-area-inset-top) + 10px); bottom:calc(env(safe-area-inset-bottom) + 10px);
+            left:8px; right:8px; }
+    #lensHead { padding:12px 12px 12px 16px; gap:10px; }
+    #lensTitle { font-size:12px; letter-spacing:2px; }
+    #lensCount { display:none; }
+    #lensClose { padding:9px 15px; font-size:14px; }
   }
   .hcard {
     padding:12px 14px; border-radius:12px; display:flex; flex-direction:column; gap:7px;
@@ -156,9 +165,10 @@
   #lensHead { display:flex; justify-content:space-between; align-items:center; gap:14px;
               padding:16px 22px; border-bottom:1px solid rgba(217,128,38,.30); }
   #lensTitle { font-size:13px; letter-spacing:3px; text-transform:uppercase; color:#ffd9c4;
-               text-shadow:0 0 10px rgba(217,128,38,.65); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  #lensCount { font-size:10px; letter-spacing:2px; color:#d98026; white-space:nowrap; }
-  #lensClose { background:none; border:1px solid rgba(217,128,38,.48); border-radius:6px;
+               text-shadow:0 0 10px rgba(217,128,38,.65); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+               min-width:0; }   /* allow it to shrink so CLOSE is never pushed off-screen */
+  #lensCount { font-size:10px; letter-spacing:2px; color:#d98026; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  #lensClose { flex:none; background:none; border:1px solid rgba(217,128,38,.48); border-radius:6px;
                color:#ffb27a; font-size:14px; padding:4px 10px; cursor:pointer; }
   #lensClose:hover { background:rgba(217,128,38,.18); }
   #lensBody { flex:1; overflow-y:auto; padding:18px 22px; display:grid;
@@ -675,6 +685,17 @@
   }
   $('lensClose').onclick = closeLens;
   document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeLens(); });
+  // Mobile: swipe down (while the feed is at the top) to dismiss the lens, like a sheet.
+  let lensTY = null, lensTScroll = 0;
+  lens.addEventListener('touchstart', e=>{
+    if(e.touches.length !== 1){ lensTY = null; return; }
+    lensTY = e.touches[0].clientY; lensTScroll = $('lensBody').scrollTop;
+  }, {passive:true});
+  lens.addEventListener('touchmove', e=>{
+    if(lensTY == null || e.touches.length !== 1) return;
+    if(e.touches[0].clientY - lensTY > 90 && lensTScroll <= 0){ lensTY = null; closeLens(); }
+  }, {passive:true});
+  lens.addEventListener('touchend', ()=>{ lensTY = null; }, {passive:true});
   async function openLens(q, days){
     days = Math.max(1, Math.min(365, parseInt(days,10) || 7));
     $('lensTitle').textContent = 'NEWS LENS — ' + q.toUpperCase();
