@@ -880,14 +880,46 @@
     }
     function getText(){ if(!text) text = build(); return text; }
     const style = document.createElement('style');
-    style.textContent = '#greetCap{position:fixed;left:50%;top:63%;transform:translateX(-50%);max-width:min(560px,86vw);text-align:center;font-size:15px;line-height:1.5;color:#ffd9b3;text-shadow:0 0 14px rgba(217,128,38,.5);opacity:0;transition:opacity .8s ease;pointer-events:none;z-index:50;padding:0 16px;}body.bright #greetCap{color:#7a4a12;text-shadow:0 0 10px rgba(217,128,38,.25);}@media(max-width:820px){#greetCap{top:auto;bottom:calc(40vh + 64px + env(safe-area-inset-bottom));}}';
+    style.textContent = '#greetCap{position:fixed;left:50%;top:63%;transform:translateX(-50%);max-width:min(620px,90vw);text-align:center;font-size:16px;line-height:1.5;color:#ffd9b3;text-shadow:0 0 14px rgba(217,128,38,.5);opacity:0;transition:opacity .3s ease;pointer-events:none;z-index:50;padding:0 16px;white-space:pre-wrap;min-height:1.5em;}'
+      + '#greetCap.caret::after{content:"\\2589";margin-left:1px;color:#ffb27a;text-shadow:0 0 10px rgba(217,128,38,.8);animation:greetCaret .85s steps(1,end) infinite;}'
+      + '@keyframes greetCaret{50%{opacity:0;}}'
+      + 'body.bright #greetCap{color:#7a4a12;text-shadow:0 0 10px rgba(217,128,38,.25);}body.bright #greetCap.caret::after{color:#b35f10;}'
+      + '@media(max-width:820px){#greetCap{top:auto;bottom:calc(40vh + 64px + env(safe-area-inset-bottom));}}';
     document.head.appendChild(style);
+    // Typewriter caption: one sentence at a time, typed out like a 1990s Mac while
+    // the audio speaks; each completed line fades and the next types, until done.
+    let typeTimers = [];
+    function clearType(){ typeTimers.forEach(clearTimeout); typeTimers = []; }
+    function splitLines(t){ return (t.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [t]).map(s=>s.trim()).filter(Boolean); }
     function show(){
       let el = document.getElementById('greetCap');
       if(!el){ el = document.createElement('div'); el.id = 'greetCap'; document.body.appendChild(el); }
-      el.textContent = getText();
-      requestAnimationFrame(()=>{ el.style.opacity = '1'; });
-      setTimeout(()=>{ if(el) el.style.opacity = '0'; }, 8500);
+      clearType();
+      const lines = splitLines(getText());
+      let li = 0;
+      const typeLine = ()=>{
+        if(li >= lines.length){
+          el.classList.remove('caret'); el.style.opacity = '0';
+          typeTimers.push(setTimeout(()=>{ if(el) el.textContent = ''; }, 400));
+          return;
+        }
+        const line = lines[li]; let ci = 0;
+        el.textContent = ''; el.classList.add('caret'); el.style.opacity = '1';
+        const typeChar = ()=>{
+          if(ci <= line.length){
+            el.textContent = line.slice(0, ci); ci++;
+            typeTimers.push(setTimeout(typeChar, 24 + Math.random()*38));
+          } else {
+            // line finished — hold a beat, fade out, then the next line types
+            typeTimers.push(setTimeout(()=>{
+              el.style.opacity = '0';
+              typeTimers.push(setTimeout(()=>{ li++; typeLine(); }, 320));
+            }, 700));
+          }
+        };
+        typeChar();
+      };
+      typeLine();
     }
     function say(){ if(spoken) return; spoken = true; try{ speak(getText()); }catch(e){} }
     // Hold the whole greeting until the first interaction. Browsers block audio
