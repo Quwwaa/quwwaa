@@ -328,7 +328,7 @@
   function brainState(){
     const b = (serverBrain || cfg.anthropic) ? 'ONLINE' : 'OFFLINE — ADD KEY ⚙';
     const v = cfg.eleven ? 'ELEVENLABS' + elevenInfo
-            : (britishVoice ? britishVoice.name.toUpperCase() : 'SYSTEM');
+            : (serverVoice ? 'BRITISH' : (britishVoice ? britishVoice.name.toUpperCase() : 'SYSTEM'));
     $('brainState').textContent = 'BRAIN: ' + b + ' · VOICE: ' + v;
   }
   // Probe the server-side brain so the public site reads ONLINE without a local key.
@@ -484,27 +484,27 @@
   pickVoice();
   if('speechSynthesis' in window && 'onvoiceschanged' in speechSynthesis)
     speechSynthesis.onvoiceschanged = pickVoice;
-  // iOS only lets speechSynthesis begin from inside a user gesture; once it has
-  // spoken once that way it stays unlocked for the page session, so async replies
-  // (the tap-to-talk flow) then speak fine. Unlock silently on the first input.
-  let speechUnlocked = false;
-  function unlockSpeech(){
-    if(speechUnlocked || !('speechSynthesis' in window)) return;
-    speechUnlocked = true;
-    try{
-      pickVoice();
-      const u = new SpeechSynthesisUtterance(' ');
-      u.volume = 0; if(britishVoice) u.voice = britishVoice;
-      speechSynthesis.speak(u);
-    }catch(e){}
+  // The primary voice is the server's British butler (OpenAI TTS) — it plays
+  // reliably on iPhone, where the native speechSynthesis tends to stay silent.
+  // iOS only lets audio/speech start after a user gesture, so on the first input
+  // we prime BOTH a reusable <audio> element (for the streamed server voice) and
+  // speechSynthesis (the fallback). After that, async replies can play.
+  let ttsAudio = null, primed = false;
+  const SILENT_WAV = 'data:audio/wav;base64,UklGRnQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YVAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==';
+  function getTtsAudio(){ if(!ttsAudio){ ttsAudio = new Audio(); ttsAudio.preload='auto'; } return ttsAudio; }
+  function primeOnGesture(){
+    if(primed) return; primed = true;
+    try{ const a = getTtsAudio(); a.muted = true; a.src = SILENT_WAV; const p = a.play(); if(p && p.catch) p.catch(()=>{}); }catch(e){}
+    try{ if('speechSynthesis' in window){ pickVoice(); const u = new SpeechSynthesisUtterance(' '); u.volume = 0; if(britishVoice) u.voice = britishVoice; speechSynthesis.speak(u); } }catch(e){}
   }
-  document.addEventListener('pointerdown', unlockSpeech, true);
-  document.addEventListener('touchend', unlockSpeech, true);
-  document.addEventListener('keydown', unlockSpeech, true);
+  document.addEventListener('pointerdown', primeOnGesture, true);
+  document.addEventListener('touchend', primeOnGesture, true);
+  document.addEventListener('keydown', primeOnGesture, true);
 
   function stopAudio(){
     try{ speechSynthesis.cancel(); }catch(e){}
     if(currentAudio){ try{ currentAudio.pause(); }catch(e){} currentAudio=null; }
+    if(ttsAudio){ try{ ttsAudio.pause(); }catch(e){} }
   }
   function speakDone(){ mode(''); setStatus('STANDING BY'); if(cfg.handsFree && !busy) startListening(); }
 
@@ -536,7 +536,23 @@
         brainState();
       }
     }
-    // The phone's native British voice — free, on-device, JARVIS-like.
+    // Primary: the server's British butler voice (OpenAI TTS). Plays through the
+    // gesture-primed <audio> element, so it's reliable on iPhone after an async reply.
+    if(serverVoice){
+      try{
+        const r = await fetch('/speak', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({text})});
+        if(r.ok){
+          const url = URL.createObjectURL(await r.blob());
+          const a = getTtsAudio(); a.muted = false; a.src = url;
+          const done = ()=>{ try{ URL.revokeObjectURL(url); }catch(e){} currentAudio=null; speakDone(); };
+          a.onended = done; a.onerror = done;
+          currentAudio = a;
+          await a.play();
+          return;
+        }
+      }catch(e){ /* fall through to the native voice below */ }
+    }
+    // Fallback: the phone's native voice (free, on-device) if the server voice is unavailable.
     if('speechSynthesis' in window){
       if(!britishVoice) pickVoice();
       try{ speechSynthesis.cancel(); }catch(e){}

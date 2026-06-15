@@ -34,11 +34,13 @@ STT_MODEL = os.environ.get('STT_MODEL', 'whisper-1')
 # speech with OpenAI TTS (key stays server-side) and returns MP3. This is what
 # makes the butler audible on iPhone, where the browser's speechSynthesis is
 # unreliable. Shares the OpenAI key; unset -> /speak reports 'no_tts_key'.
-TTS_MODEL = os.environ.get('TTS_MODEL', 'gpt-4o-mini-tts')   # supports tone steering
-TTS_VOICE = os.environ.get('TTS_VOICE', 'ash')               # calm, measured, British-leaning
+TTS_MODEL = os.environ.get('TTS_MODEL', 'gpt-4o-mini-tts')   # supports accent/tone steering
+TTS_VOICE = os.environ.get('TTS_VOICE', 'fable')             # the most British-leaning base voice
 TTS_INSTRUCTIONS = os.environ.get('TTS_INSTRUCTIONS',
-    'Speak as QUWWAA, a refined British butler: calm, articulate and unhurried, '
-    'with understated dry warmth. A measured, dignified delivery.')
+    'Accent/Affect: a refined, upper-class British accent (Received Pronunciation), '
+    'in the manner of a distinguished English butler - JARVIS from Iron Man. '
+    'Tone: calm, courteous and articulate, with understated dry wit. '
+    'Pacing: measured and unhurried. Pronunciation: crisp British English.')
 SPEAK_RATE_PER_MIN = int(os.environ.get('SPEAK_RATE_PER_MIN', '20'))  # lenient, separate bucket
 
 def fetch(url, timeout=8):
