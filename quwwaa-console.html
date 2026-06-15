@@ -908,17 +908,51 @@
     }
     function getText(){ if(!text) text = build(); return text; }
     const style = document.createElement('style');
-    style.textContent = '#greetCap{position:fixed;left:50%;top:63%;transform:translateX(-50%);max-width:min(620px,90vw);text-align:center;font-size:16px;line-height:1.5;color:#ffd9b3;text-shadow:0 0 14px rgba(217,128,38,.5);opacity:0;transition:opacity .3s ease;pointer-events:none;z-index:50;padding:0 16px;white-space:pre-wrap;min-height:1.5em;}'
+    style.textContent = '#greetCap{position:fixed;left:50%;top:63%;transform:translateX(-50%);max-width:94vw;text-align:center;font-size:16px;line-height:1.4;color:#ffd9b3;text-shadow:0 0 14px rgba(217,128,38,.5);opacity:0;transition:opacity .3s ease;pointer-events:none;z-index:50;padding:0 12px;white-space:nowrap;}'
       + '#greetCap.caret::after{content:"\\2589";margin-left:1px;color:#ffb27a;text-shadow:0 0 10px rgba(217,128,38,.8);animation:greetCaret .85s steps(1,end) infinite;}'
       + '@keyframes greetCaret{50%{opacity:0;}}'
       + 'body.bright #greetCap{color:#7a4a12;text-shadow:0 0 10px rgba(217,128,38,.25);}body.bright #greetCap.caret::after{color:#b35f10;}'
-      + '@media(max-width:820px){#greetCap{top:auto;bottom:calc(40vh + 64px + env(safe-area-inset-bottom));}}';
+      + '@media(max-width:820px){#greetCap{top:41vh;bottom:auto;font-size:15px;}}';
     document.head.appendChild(style);
     // Typewriter caption: one sentence at a time, typed out like a 1990s Mac while
     // the audio speaks; each completed line fades and the next types, until done.
     let typeTimers = [];
     function clearType(){ typeTimers.forEach(clearTimeout); typeTimers = []; }
-    function splitLines(t){ return (t.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [t]).map(s=>s.trim()).filter(Boolean); }
+    // Break the greeting into short, single-line chunks: by sentence, then (for a
+    // long sentence) by clause, then word-wrapped as a last resort — so a caption
+    // is always one line below the reactor, never a multi-line block.
+    function splitLines(t){
+      const MAX = 42;
+      const wrap = (str, out)=>{
+        str = str.trim(); if(!str) return;
+        if(str.length <= MAX){ out.push(str); return; }
+        let line = '';
+        str.split(/\s+/).forEach(w=>{
+          if(!line) line = w;
+          else if((line + ' ' + w).length <= MAX) line += ' ' + w;
+          else { out.push(line); line = w; }
+        });
+        if(line) out.push(line);
+      };
+      const out = [];
+      (t.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [t]).map(s=>s.trim()).filter(Boolean).forEach(s=>{
+        if(s.length <= MAX){ out.push(s); return; }
+        const clauses = (s.match(/[^,;:—-]+[,;:—-]*/g) || [s]).map(c=>c.trim()).filter(Boolean);
+        let line = '';
+        clauses.forEach(c=>{
+          if(((line ? line + ' ' : '') + c).length <= MAX){ line = (line ? line + ' ' : '') + c; }
+          else { if(line) wrap(line, out); line = c; }
+        });
+        if(line) wrap(line, out);
+      });
+      return out;
+    }
+    function fitLine(el, full){            // shrink the font until the whole line fits without wrapping
+      el.style.fontSize = '';
+      el.textContent = full;
+      let size = parseFloat(getComputedStyle(el).fontSize) || 16, guard = 0;
+      while(el.scrollWidth > el.clientWidth && size > 11 && guard++ < 16){ size -= 1; el.style.fontSize = size + 'px'; }
+    }
     function show(){
       let el = document.getElementById('greetCap');
       if(!el){ el = document.createElement('div'); el.id = 'greetCap'; document.body.appendChild(el); }
@@ -932,7 +966,9 @@
           return;
         }
         const line = lines[li]; let ci = 0;
-        el.textContent = ''; el.classList.add('caret'); el.style.opacity = '1';
+        el.classList.add('caret'); el.style.opacity = '1';
+        fitLine(el, line);            // size this line to one row, then type it out
+        el.textContent = '';
         const typeChar = ()=>{
           if(ci <= line.length){
             el.textContent = line.slice(0, ci); ci++;
