@@ -293,6 +293,23 @@ def og_image(url):
         pass
     return ''
 
+OGD1 = re.compile(rb'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)', re.I)
+OGD2 = re.compile(rb'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)', re.I)
+
+def og_desc(url):
+    """Lift the publisher's own description/snippet from the article head —
+    used to ground the brief summary in real reporting, not invention."""
+    try:
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=5) as r:
+            chunk = r.read(120000)
+        m = OGD1.search(chunk) or OGD2.search(chunk)
+        if m:
+            return html.unescape(m.group(1).decode('utf-8', 'ignore')).strip()[:400]
+    except Exception:
+        pass
+    return ''
+
 GN_ID = re.compile(r'/rss/articles/([^?/]+)')
 
 def resolve_gnews(url):
@@ -496,13 +513,75 @@ def build_home_snapshot():
         HOME_SNAPSHOT['items'] = items
         HOME_SNAPSHOT['t'] = time.time()
 
+# --- Morning Brief: one curated, summarized story per section --------------
+BRIEF_CATS = [
+    {'label': 'US POLITICS',   'q': 'US politics',            'days': 1, 'maxAgeH': 14},
+    {'label': 'WORLD',         'q': 'world news',             'days': 1, 'maxAgeH': 20},
+    {'label': 'WORTH KNOWING', 'q': 'breaking news',          'days': 1, 'maxAgeH': 20},
+    {'label': 'MARKETS',       'q': 'stock market',           'days': 2},
+    {'label': 'TECH',          'q': 'technology',             'days': 2},
+    {'label': 'AI',            'q': 'artificial intelligence', 'days': 3},
+]
+BRIEF = {'t': 0, 'sections': []}
+BRIEF_TTL = int(os.environ.get('BRIEF_TTL', '10800'))   # rebuild at most every 3 hours
+
+def summarize_story(title, desc):
+    """Two-sentence, neutral, strictly-grounded summary. No key -> publisher snippet."""
+    snippet = (desc or '').strip()
+    if not ANTHROPIC_API_KEY:
+        return snippet or (title or '')
+    sysmsg = ("You write a morning news brief as QUWWAA. Produce a concise, neutral 2-sentence summary of the "
+              "item below. Use ONLY facts present in the given headline and snippet — never add, infer, or "
+              "speculate beyond them, and never sensationalize. No opinion, no markdown, no preamble. If the "
+              "snippet is empty, plainly paraphrase the headline.")
+    user = 'Headline: ' + (title or '') + '\nSnippet: ' + (snippet or '(none)')
+    try:
+        body = json.dumps({'model': ASK_MODEL, 'max_tokens': 180, 'system': sysmsg,
+                           'messages': [{'role': 'user', 'content': user}]}).encode()
+        req = urllib.request.Request('https://api.anthropic.com/v1/messages', data=body, headers={
+            'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01'})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+        txt = ' '.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text').strip()
+        return txt or snippet or (title or '')
+    except Exception:
+        return snippet or (title or '')
+
+def build_brief():
+    """Assemble one summarized story per section. Keeps the last-good section if
+    a category comes back empty, so the brief is always complete."""
+    prev = {s['label']: s for s in BRIEF['sections']}
+    out = []
+    for cat in BRIEF_CATS:
+        try:
+            card = _pick_card(cat)
+        except Exception:
+            card = None
+        if not card:
+            if prev.get(cat['label']):
+                out.append(prev[cat['label']])
+            continue
+        a = card['a']
+        url = a.get('url', '')
+        desc = og_desc(url) if url.startswith('http') else ''
+        out.append({'label': cat['label'], 'title': a.get('title', ''), 'url': url,
+                    'source': a.get('source', ''), 'image': a.get('image', ''),
+                    'time': a.get('time', ''), 'summary': summarize_story(a.get('title', ''), desc)})
+    if out:
+        BRIEF['sections'] = out
+        BRIEF['t'] = time.time()
+
 def prewarm():
-    """Keep the home snapshot permanently fresh in the background. Fills quickly
-    on a cold start (retry every 45s until all six cards are present), then
-    settles into the steady refresh cadence."""
+    """Keep the home snapshot fresh, and rebuild the morning brief every few hours."""
     while True:
         try:
             build_home_snapshot()
+        except Exception:
+            pass
+        try:
+            if time.time() - BRIEF['t'] > BRIEF_TTL:
+                build_brief()
         except Exception:
             pass
         full = len(HOME_SNAPSHOT['items']) >= len(HOME_CATS)
@@ -763,6 +842,8 @@ class Handler(SimpleHTTPRequestHandler):
                              'stt': bool(OPENAI_API_KEY), 'tts': bool(OPENAI_API_KEY)})
         elif self.path.startswith('/home'):
             self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
+        elif self.path.startswith('/brief'):
+            self._send_json({'sections': BRIEF['sections'], 't': BRIEF['t']})
         elif self.path.startswith('/news'):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             q = (qs.get('q') or [''])[0].strip()
