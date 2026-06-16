@@ -548,20 +548,22 @@ def summarize_story(title, desc):
     except Exception:
         return snippet or (title or '')
 
-def build_brief():
-    """Assemble one summarized story per section. Keeps the last-good section if
-    a category comes back empty, so the brief is always complete."""
-    prev = {s['label']: s for s in BRIEF['sections']}
+def build_brief(full=False):
+    """Assemble one summarized story per section. On a 'full' rebuild every
+    section is re-summarized fresh; otherwise sections already present are kept
+    and only the MISSING ones are fetched/summarized — so filling out a partial
+    brief costs an AI call only for the sections that are still empty."""
+    prev = {} if full else {s['label']: s for s in BRIEF['sections']}
     out = []
     for cat in BRIEF_CATS:
+        if cat['label'] in prev:
+            out.append(prev[cat['label']]); continue
         try:
             card = _pick_card(cat)
         except Exception:
             card = None
         if not card:
-            if prev.get(cat['label']):
-                out.append(prev[cat['label']])
-            continue
+            continue                       # still empty — a later pass will fill it
         a = card['a']
         url = a.get('url', '')
         desc = og_desc(url) if url.startswith('http') else ''
@@ -570,7 +572,7 @@ def build_brief():
                     'time': a.get('time', ''), 'summary': summarize_story(a.get('title', ''), desc)})
     if out:
         BRIEF['sections'] = out
-        BRIEF['t'] = time.time()
+    BRIEF['t'] = time.time()               # always stamp so we don't loop full rebuilds
 
 def prewarm():
     """Keep the home snapshot fresh, and rebuild the morning brief every few hours."""
@@ -580,8 +582,10 @@ def prewarm():
         except Exception:
             pass
         try:
-            if time.time() - BRIEF['t'] > BRIEF_TTL:
-                build_brief()
+            if BRIEF['t'] == 0 or time.time() - BRIEF['t'] > BRIEF_TTL:
+                build_brief(full=True)                              # periodic fresh rebuild
+            elif len(BRIEF['sections']) < len(BRIEF_CATS):
+                build_brief(full=False)                             # fill only the missing sections
         except Exception:
             pass
         full = len(HOME_SNAPSHOT['items']) >= len(HOME_CATS)
