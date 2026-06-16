@@ -1073,5 +1073,82 @@
   function close(){ localStorage.setItem(DISMISS, Date.now()); if(el){ el.remove(); el=null; } }
 })();
 </script>
+<script>
+/* ---- QUWWAA email capture → Kit (form 9570921) ---- */
+(function(){
+  var ENDPOINT='https://app.kit.com/forms/9570921/subscriptions';
+  var DONE='quwwaa_sub_done', SNOOZE='quwwaa_sub_snooze', ENG='quwwaa_sub_eng';
+  var subscribed = localStorage.getItem(DONE)==='1';
+
+  var css=document.createElement('style');
+  css.textContent=
+    '#qsubBtn{cursor:pointer;background:rgba(217,128,38,.14);border:1px solid rgba(217,128,38,.5);color:#ffce9a;font:inherit;font-size:11px;letter-spacing:1px;text-transform:uppercase;padding:5px 10px;border-radius:7px;margin-right:10px;white-space:nowrap;}'
+    +'#qsubBtn:hover{background:rgba(217,128,38,.26);color:#fff;}body.bright #qsubBtn{color:#9a5a12;}'
+    +'#qsubOverlay{position:fixed;inset:0;z-index:9998;display:none;align-items:center;justify-content:center;background:rgba(8,6,4,.7);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:18px;}'
+    +'#qsubOverlay.open{display:flex;}'
+    +'#qsubCard{width:100%;max-width:430px;background:linear-gradient(165deg,#211913,#14100b);border:1px solid rgba(217,128,38,.5);border-radius:16px;padding:26px 24px 22px;color:#ffe9d6;box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 30px rgba(217,128,38,.22);text-align:center;font-family:inherit;animation:qsubUp .3s ease;}'
+    +'@keyframes qsubUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}'
+    +'#qsubCard .qd{width:42px;height:42px;border-radius:50%;margin:0 auto 12px;background:radial-gradient(circle,#ffe9c9 0%,#f0a23c 45%,#a85f17 100%);box-shadow:0 0 22px 4px rgba(217,128,38,.5);}'
+    +'#qsubCard h2{font-size:19px;letter-spacing:.5px;color:#ffd9b3;margin-bottom:7px;}'
+    +'#qsubCard p{font-size:13.5px;line-height:1.5;color:#e7c4a6;margin-bottom:16px;}'
+    +'#qsubForm{display:flex;gap:8px;}'
+    +'#qsubEmail{flex:1;min-width:0;padding:12px 13px;font-size:14px;border-radius:9px;color:#fff;background:rgba(20,60,80,.18);border:1px solid rgba(217,128,38,.4);outline:none;}'
+    +'#qsubEmail:focus{border-color:rgba(255,190,100,.8);box-shadow:0 0 10px rgba(217,128,38,.3);}'
+    +'#qsubGo{padding:12px 18px;border:none;border-radius:9px;background:#D98026;color:#1a1206;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap;}'
+    +'#qsubGo:hover{filter:brightness(1.08);}#qsubGo:disabled{opacity:.6;cursor:default;}'
+    +'#qsubMsg{min-height:16px;font-size:12px;color:#ffb27a;margin-top:11px;}'
+    +'#qsubFine{font-size:11px;color:#a8855f;margin-top:9px;}'
+    +'#qsubLater{margin-top:12px;background:none;border:none;color:#caa078;font-size:12px;cursor:pointer;text-decoration:underline;}'
+    +'@media(max-width:520px){#qsubForm{flex-direction:column;}#qsubGo{width:100%;}}';
+  document.head.appendChild(css);
+
+  var ov=document.createElement('div'); ov.id='qsubOverlay';
+  ov.innerHTML='<div id="qsubCard" role="dialog" aria-label="Subscribe to the QUWWAA briefing">'
+    +'<div class="qd"></div><h2>The QUWWAA Daily Briefing</h2>'
+    +'<p>The world’s most important stories, curated and delivered to your inbox each morning. Free.</p>'
+    +'<form id="qsubForm"><input id="qsubEmail" type="email" placeholder="you@email.com" autocomplete="email" required>'
+    +'<button id="qsubGo" type="submit">Subscribe</button></form>'
+    +'<div id="qsubMsg"></div><div id="qsubFine">No spam. Unsubscribe anytime.</div>'
+    +'<button id="qsubLater" type="button">Maybe later</button></div>';
+  document.body.appendChild(ov);
+
+  var emailEl=ov.querySelector('#qsubEmail'), goEl=ov.querySelector('#qsubGo'),
+      msgEl=ov.querySelector('#qsubMsg'), formEl=ov.querySelector('#qsubForm'); var opened=false;
+  function open(){ ov.classList.add('open'); opened=true; setTimeout(function(){ try{emailEl.focus();}catch(e){} },80); }
+  function shut(){ ov.classList.remove('open'); }
+  function snooze(){ localStorage.setItem(SNOOZE, Date.now()); }
+  ov.addEventListener('click', function(e){ if(e.target===ov){ snooze(); shut(); } });
+  ov.querySelector('#qsubLater').onclick=function(){ snooze(); shut(); };
+
+  formEl.addEventListener('submit', function(e){
+    e.preventDefault();
+    var email=(emailEl.value||'').trim();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ msgEl.textContent='Please enter a valid email, sir.'; return; }
+    goEl.disabled=true; msgEl.textContent='Subscribing…';
+    var send=function(mode){ var fd=new FormData(); fd.append('email_address', email); return fetch(ENDPOINT,{method:'POST',body:fd,mode:mode}); };
+    var ok=function(){ localStorage.setItem(DONE,'1'); msgEl.textContent="You’re in, sir — check your inbox to confirm."; goEl.textContent='Subscribed ✓'; setTimeout(shut,2800); };
+    send('cors').then(function(r){ if(r && r.ok) ok(); else throw 0; })
+      .catch(function(){ try{ send('no-cors'); }catch(e){} ok(); });   // fallback still records the subscriber
+  });
+
+  (function(){   // permanent header button
+    if(document.getElementById('qsubBtn')) return;
+    var hdr=document.querySelector('header'); if(!hdr) return;
+    var spans=hdr.querySelectorAll(':scope > span'); var right=spans[spans.length-1]||hdr;
+    var b=document.createElement('button'); b.id='qsubBtn'; b.type='button'; b.textContent='✉ Briefing';
+    b.title='Get the free daily briefing'; b.onclick=open;
+    right.insertBefore(b, right.firstChild);
+  })();
+
+  if(subscribed) return;                                   // keep the button, skip the auto-popup
+  var sn=parseInt(localStorage.getItem(SNOOZE)||'0',10);
+  if(sn && Date.now()-sn < 14*864e5) return;               // snoozed two weeks after dismiss
+  var count=parseInt(localStorage.getItem(ENG)||'0',10);
+  document.addEventListener('click', function(e){
+    if(opened || !e.target.closest) return;
+    if(e.target.closest('a[target="_blank"], #reactor, #micBtn')){ count++; localStorage.setItem(ENG,count); if(count>=2) open(); }
+  }, true);
+})();
+</script>
 </body>
 </html>
