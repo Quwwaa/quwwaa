@@ -1161,7 +1161,7 @@
     +'#qbrief{position:fixed;inset:0;z-index:9997;display:none;background:rgba(8,6,4,.82);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}'
     +'#qbrief.open{display:flex;justify-content:center;}'
     +'#qbriefPanel{width:100%;max-width:680px;height:100%;display:flex;flex-direction:column;background:linear-gradient(180deg,#1b140e,#120e09);box-shadow:0 0 60px rgba(0,0,0,.5);}'
-    +'#qbriefHead{display:flex;align-items:center;gap:12px;padding:16px 22px;border-bottom:1px solid rgba(217,128,38,.3);background:rgba(20,15,10,.97);}'
+    +'#qbriefHead{display:flex;align-items:center;gap:12px;padding:calc(16px + env(safe-area-inset-top)) 22px 16px;border-bottom:1px solid rgba(217,128,38,.3);background:rgba(20,15,10,.97);position:sticky;top:0;z-index:2;}'
     +'#qbriefTitle{font-size:13px;letter-spacing:3px;text-transform:uppercase;color:#ffd9b3;text-shadow:0 0 10px rgba(217,128,38,.5);flex:1;}'
     +'#qbriefDate{font-size:11px;color:#b88a5a;letter-spacing:1px;}'
     +'#qbriefClose{background:none;border:1px solid rgba(217,128,38,.5);border-radius:6px;color:#ffb27a;font-size:14px;padding:4px 10px;cursor:pointer;}'
