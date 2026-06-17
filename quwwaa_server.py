@@ -478,8 +478,8 @@ HOME_CATS = [
 HOME_SNAPSHOT = {'t': 0, 'items': []}
 HOME_REFRESH = int(os.environ.get('HOME_REFRESH', '300'))  # rebuild every 5 min
 
-def _pick_card(cat):
-    payload = cached_aggregate(cat['q'], cat['days'], True)
+def _pick_card(cat, fast=True):
+    payload = cached_aggregate(cat['q'], cat['days'], fast)
     arts = payload.get('articles', [])
     mah = cat.get('maxAgeH')
     if mah:
@@ -526,6 +526,7 @@ BRIEF_CATS = [
     {'label': 'POP CULTURE',       'q': 'entertainment celebrity', 'days': 2},
     {'label': 'SCIENCE',           'q': 'science discovery',       'days': 3},
     {'label': 'NATURE & DISASTERS','q': 'natural disaster',        'days': 3},
+    {'label': 'CRIME & JUSTICE',   'q': 'crime police court',      'days': 2},
     {'label': 'WORTH KNOWING',     'q': 'breaking news',           'days': 1, 'maxAgeH': 20},
 ]
 BRIEF = {'t': 0, 'sections': []}
@@ -559,25 +560,30 @@ def build_brief(full=False):
     section is re-summarized fresh; otherwise sections already present are kept
     and only the MISSING ones are fetched/summarized — so filling out a partial
     brief costs an AI call only for the sections that are still empty."""
-    prev = {} if full else {s['label']: s for s in BRIEF['sections']}
+    prev = {s['label']: s for s in BRIEF['sections']}   # last-good cards, kept as a fallback
     out = []
     for cat in BRIEF_CATS:
-        if cat['label'] in prev:
-            out.append(prev[cat['label']]); continue
-        try:
-            card = _pick_card(cat)
-        except Exception:
-            card = None
-        if not card:
-            continue                       # still empty — a later pass will fill it
-        a = card['a']
-        url = a.get('url', '')
-        desc = og_desc(url) if url.startswith('http') else ''
-        out.append({'label': cat['label'], 'title': a.get('title', ''), 'url': url,
-                    'source': a.get('source', ''), 'image': a.get('image', ''),
-                    'time': a.get('time', ''), 'summary': summarize_story(a.get('title', ''), desc)})
-    if out:
-        BRIEF['sections'] = out
+        label = cat['label']
+        if not full and label in prev:
+            out.append(prev[label])                     # partial pass: keep what we already have
+        else:
+            try:
+                # Use the FULL aggregate (more sources + image backfill) so each section
+                # reliably yields a thumbnailed story — the fast path comes back empty too often.
+                card = _pick_card(cat, fast=False)
+            except Exception:
+                card = None
+            if card:
+                a = card['a']
+                url = a.get('url', '')
+                desc = og_desc(url) if url.startswith('http') else ''
+                out.append({'label': label, 'title': a.get('title', ''), 'url': url,
+                            'source': a.get('source', ''), 'image': a.get('image', ''),
+                            'time': a.get('time', ''), 'summary': summarize_story(a.get('title', ''), desc)})
+            elif label in prev:
+                out.append(prev[label])                 # keep the previous good story rather than drop the section
+        if out:
+            BRIEF['sections'] = list(out)               # publish progress so /brief fills in live
     BRIEF['t'] = time.time()               # always stamp so we don't loop full rebuilds
 
 def prewarm():
