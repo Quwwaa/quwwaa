@@ -56,6 +56,8 @@ STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')           # 
 STRIPE_PRICE_ID = os.environ.get('STRIPE_PRICE_ID', '')
 STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
 SITE_URL = os.environ.get('SITE_URL', 'https://quwwaa.com').rstrip('/')   # for Checkout success/cancel
+KIT_API_KEY = os.environ.get('KIT_API_KEY', '')                          # secret — newsletter auto-subscribe for paying members
+KIT_FORM_ID = os.environ.get('KIT_FORM_ID', '9570921')                   # the free daily-brief form
 # Premium activates only when the WHOLE paid flow is ready — auth (Supabase) +
 # checkout (price + secret key) + status updates (webhook secret + service role).
 # This prevents a half-configured state from showing a premium UI that can't
@@ -766,6 +768,49 @@ def stripe_post(path, fields):
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read())
 
+def stripe_get(path):
+    """GET application/json from the Stripe API (e.g. to retrieve a customer)."""
+    req = urllib.request.Request('https://api.stripe.com/v1/' + path,
+        headers={'Authorization': 'Bearer ' + STRIPE_SECRET_KEY})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read())
+
+def stripe_customer_email(customer_id):
+    """Best-effort lookup of a customer's email for the Kit newsletter."""
+    if not (STRIPE_SECRET_KEY and customer_id):
+        return None
+    try:
+        c = stripe_get('customers/' + str(customer_id))
+        return None if c.get('deleted') else (c.get('email') or None)
+    except Exception:
+        return None
+
+def kit_subscribe(email):
+    """Add a paying member's (already Stripe-verified) email to the Kit newsletter
+    as an ACTIVE subscriber — no double opt-in, since the email is confirmed.
+    Best-effort and idempotent: never raises, so a Kit hiccup can't fail the
+    Stripe webhook (which would trigger endless retries)."""
+    email = (email or '').strip()
+    if not (KIT_API_KEY and email and '@' in email):
+        return
+    hdrs = {'X-Kit-Api-Key': KIT_API_KEY, 'Content-Type': 'application/json', 'Accept': 'application/json'}
+    def _post(url, body):
+        try:
+            req = urllib.request.Request(url, data=json.dumps(body).encode(), method='POST', headers=hdrs)
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return 200 <= r.status < 300
+        except Exception as e:
+            try: detail = e.read().decode()[:300] if hasattr(e, 'read') else str(e)
+            except Exception: detail = str(e)
+            print('[kit] subscribe step failed for %s: %s' % (email, detail))
+            return False
+    # 1) create/activate the subscriber (state=active skips the confirmation email)
+    _post('https://api.kit.com/v4/subscribers', {'email_address': email, 'state': 'active'})
+    # 2) add them to the daily-brief form so they actually receive it (no re-confirm
+    #    for an already-active subscriber)
+    if KIT_FORM_ID:
+        _post('https://api.kit.com/v4/forms/%s/subscribers' % KIT_FORM_ID, {'email_address': email})
+
 def stripe_verify(payload_bytes, sig_header):
     """Verify a Stripe webhook signature (Stripe-Signature: t=...,v1=...)."""
     if not (STRIPE_WEBHOOK_SECRET and sig_header):
@@ -1019,6 +1064,8 @@ class Handler(SimpleHTTPRequestHandler):
             if obj.get('customer'): fields['stripe_customer_id'] = obj['customer']
             if obj.get('subscription'): fields['stripe_subscription_id'] = obj['subscription']
             if uid: supabase_patch_profile(('id', uid), fields)
+            # auto-subscribe the verified paying email to the daily brief (no opt-in)
+            kit_subscribe((obj.get('customer_details') or {}).get('email') or obj.get('customer_email'))
         elif typ in ('customer.subscription.created', 'customer.subscription.updated',
                      'customer.subscription.deleted'):
             raw = 'canceled' if typ.endswith('deleted') else obj.get('status', '')
@@ -1032,6 +1079,10 @@ class Handler(SimpleHTTPRequestHandler):
                 supabase_patch_profile(('id', uid), fields)
             elif obj.get('customer'):
                 supabase_patch_profile(('stripe_customer_id', obj['customer']), fields)
+            # newsletter follows membership: add on trial/active (covers reactivations
+            # and trial->active too; Kit dedupes so repeats are harmless)
+            if st in ('trialing', 'active') and obj.get('customer'):
+                kit_subscribe(stripe_customer_email(obj['customer']))
         elif typ == 'invoice.payment_failed':
             if obj.get('customer'):
                 supabase_patch_profile(('stripe_customer_id', obj['customer']),
