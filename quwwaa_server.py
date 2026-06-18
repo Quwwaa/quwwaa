@@ -637,9 +637,9 @@ PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS
     "panel shows the last 7 days by default; only if the user explicitly asks for older coverage add a day "
     "window after a pipe: [LENS: keywords | 30d]. Do not use the tag for non-news questions.")
 
-def anthropic_chat(messages):
+def anthropic_chat(messages, extra_system=''):
     body = json.dumps({
-        'model': ASK_MODEL, 'max_tokens': 600, 'system': PERSONA, 'messages': messages,
+        'model': ASK_MODEL, 'max_tokens': 600, 'system': PERSONA + (extra_system or ''), 'messages': messages,
         'tools': [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 3}],
     }).encode()
     req = urllib.request.Request('https://api.anthropic.com/v1/messages', data=body, headers={
@@ -797,6 +797,34 @@ def supabase_get_status(user_id):
     with urllib.request.urlopen(req, timeout=15) as r:
         rows = json.loads(r.read())
     return rows[0] if rows else None
+
+def supabase_user_from_token(token):
+    """Validate a Supabase access token (JWT) by asking the auth API who it is.
+    Returns the user dict (with 'id') or None — used to confirm a member before
+    lifting the butler rate cap so the gate can't be forged client-side."""
+    if not (SUPABASE_URL and SUPABASE_ANON_KEY and token):
+        return None
+    req = urllib.request.Request(SUPABASE_URL + '/auth/v1/user', headers={
+        'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + token})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read())
+
+def member_from_request(handler):
+    """Return the verified member profile dict for this request, or None.
+    Reads the Bearer token, confirms it with Supabase, then checks status."""
+    auth = handler.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None
+    try:
+        user = supabase_user_from_token(auth[7:].strip())
+        if not (user and user.get('id')):
+            return None
+        prof = supabase_get_status(user['id'])
+        if prof and prof.get('subscription_status') in ('trialing', 'active'):
+            return prof
+    except Exception:
+        return None
+    return None
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -979,12 +1007,14 @@ class Handler(SimpleHTTPRequestHandler):
     def _handle_ask(self):
         if not ANTHROPIC_API_KEY:
             self._send_json({'error': 'no_server_key'}, 503); return
-        ok, why = rate_check(self._client_ip())
-        if not ok:
-            msg = ("My apologies, sir - the day's allowance of inquiries has been reached. Do return tomorrow."
-                   if why == 'daily_cap' else
-                   "A moment's patience, sir - you are speaking faster than I can attend. Try again shortly.")
-            self._send_json({'error': why, 'reply': msg}, 429); return
+        member = member_from_request(self)         # verified via Supabase; None for free users
+        if not member:                             # members bypass the per-IP / daily rate cap
+            ok, why = rate_check(self._client_ip())
+            if not ok:
+                msg = ("My apologies, sir - the day's allowance of inquiries has been reached. Do return tomorrow."
+                       if why == 'daily_cap' else
+                       "A moment's patience, sir - you are speaking faster than I can attend. Try again shortly.")
+                self._send_json({'error': why, 'reply': msg}, 429); return
         try:
             length = int(self.headers.get('Content-Length', '0') or '0')
             raw = self.rfile.read(length) if length else b'{}'
@@ -997,7 +1027,16 @@ class Handler(SimpleHTTPRequestHandler):
                     msgs.append({'role': role, 'content': content[:4000]})
             if not msgs:
                 self._send_json({'error': 'empty', 'reply': 'I received an empty transmission, sir.'}, 400); return
-            reply = anthropic_chat(msgs) or 'I received an empty transmission, sir.'
+            extra = ''
+            if member:
+                name = member.get('display_name') or ''
+                style = member.get('address_style') or 'name'
+                ints = ', '.join(member.get('interests') or [])
+                addr = name if (style == 'name' and name) else ('madam' if style == 'madam' else 'sir')
+                extra = (" MEMBER CONTEXT: You are speaking with a QUWWAA member. Address them as '%s'." % addr)
+                if ints:
+                    extra += " They follow these interests: %s. Weight your awareness and suggestions toward them when relevant." % ints
+            reply = anthropic_chat(msgs, extra) or 'I received an empty transmission, sir.'
             self._send_json({'reply': reply})
         except urllib.error.HTTPError as e:
             detail = ''
