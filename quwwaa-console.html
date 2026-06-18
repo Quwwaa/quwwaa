@@ -1387,5 +1387,166 @@
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
 </script>
+<script>
+/* ============================================================================
+   QUWWAA Premium — Phase B: the 5-screen "Lens" onboarding.
+   Collects interests + location + address style, creates the Supabase account
+   and saves the profile BEFORE checkout (so a payment-bailer is still captured),
+   then hands off to QP.startCheckout() (Phase C).
+   ============================================================================ */
+(function(){
+  const QP = window.QP = window.QP || {};
+  const $=id=>document.getElementById(id);
+  const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function css(){
+    if($('qpOnbCSS')) return;
+    const st=document.createElement('style'); st.id='qpOnbCSS';
+    st.textContent=
+      '#qpOnb{position:fixed;inset:0;z-index:10001;display:none;flex-direction:column;background:linear-gradient(180deg,#1a130d,#100b07);color:#ffd9b3;}'
+      +'#qpOnb.open{display:flex;}'
+      +'#qpOnb .top{display:flex;align-items:center;gap:10px;padding:calc(16px + env(safe-area-inset-top)) 20px 10px;}'
+      +'#qpOnb .dots{display:flex;gap:6px;flex:1;}'
+      +'#qpOnb .dot{height:4px;flex:1;border-radius:2px;background:rgba(217,128,38,.25);}'
+      +'#qpOnb .dot.on{background:#D98026;}'
+      +'#qpOnb .xo{background:none;border:none;color:#b88a5a;font-size:22px;cursor:pointer;}'
+      +'#qpOnb .body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 22px 8px;}'
+      +'#qpOnb h1{font-size:22px;line-height:1.25;color:#ffe6cf;margin:8px 0 10px;letter-spacing:.5px;}'
+      +'#qpOnb .sub{font-size:14px;line-height:1.5;color:#cba98f;margin-bottom:18px;}'
+      +'#qpOnb label{display:block;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#d98026;margin:14px 0 6px;}'
+      +'#qpOnb input[type=text],#qpOnb input[type=email],#qpOnb input[type=password]{width:100%;padding:13px;font:inherit;font-size:16px;color:#ffe2d1;background:rgba(60,40,25,.35);border:1px solid rgba(217,128,38,.35);border-radius:9px;outline:none;}'
+      +'#qpOnb input:focus{border-color:rgba(255,170,90,.7);}'
+      +'#qpChips{display:flex;flex-wrap:wrap;gap:9px;}'
+      +'.qpChip{padding:9px 14px;border-radius:20px;border:1px solid rgba(217,128,38,.4);background:rgba(217,128,38,.06);color:#ffce9a;font:inherit;font-size:13px;cursor:pointer;}'
+      +'.qpChip.sel{background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border-color:transparent;font-weight:700;}'
+      +'.qpOpt{display:block;width:100%;text-align:left;padding:14px 16px;margin-top:10px;border-radius:11px;border:1px solid rgba(217,128,38,.4);background:rgba(217,128,38,.06);color:#ffd9b3;font:inherit;font-size:15px;cursor:pointer;}'
+      +'.qpOpt.sel{border-color:#D98026;background:rgba(217,128,38,.18);}'
+      +'#qpOnb .foot{padding:12px 22px calc(16px + env(safe-area-inset-bottom));border-top:1px solid rgba(217,128,38,.2);display:flex;gap:10px;align-items:center;}'
+      +'#qpOnb .disc{font-size:11px;color:#a98a6a;line-height:1.45;margin-top:14px;}'
+      +'#qpOnb .legal{font-size:11px;color:#a98a6a;margin-top:10px;}#qpOnb .legal a{color:#e89a5a;}'
+      +'#qpBack{background:none;border:1px solid rgba(217,128,38,.4);color:#ffb27a;border-radius:9px;padding:12px 16px;font:inherit;cursor:pointer;}'
+      +'#qpNext{flex:1;background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border:none;border-radius:10px;padding:14px;font:inherit;font-weight:700;font-size:15px;cursor:pointer;}'
+      +'#qpNext:disabled{opacity:.55;cursor:default;}'
+      +'#qpOnbMsg{font-size:12px;color:#ff9b7a;min-height:14px;padding:0 22px 6px;}'
+      +'body.bright #qpOnb{background:linear-gradient(180deg,#fbf5ec,#f3ece2);color:#3a2c1e;}'
+      +'body.bright #qpOnb h1{color:#5a3a18;}body.bright #qpOnb .sub,body.bright #qpOnb .disc,body.bright #qpOnb .legal{color:#7a5a3a;}'
+      +'body.bright #qpOnb input{background:#fff;color:#2a2118;}';
+    document.head.appendChild(st);
+  }
+
+  const S = { interests:[], city:'', state:'', country:'', address_style:'name', display_name:'',
+              first_name:'', last_name:'', email:'', password:'' };
+  let step = 1; const STEPS = 5;
+
+  function shell(){
+    let ov=$('qpOnb'); if(ov) return ov;
+    ov=document.createElement('div'); ov.id='qpOnb';
+    ov.innerHTML='<div class="top"><div class="dots" id="qpDots"></div><button class="xo" id="qpOnbX" type="button">✕</button></div>'
+      +'<div class="body" id="qpOnbBody"></div><div id="qpOnbMsg"></div>'
+      +'<div class="foot"><button id="qpBack" type="button">Back</button><button id="qpNext" type="button">Next</button></div>';
+    document.body.appendChild(ov);
+    $('qpOnbX').onclick=close;
+    $('qpBack').onclick=()=>{ if(step>1){ step--; render(); } else close(); };
+    $('qpNext').onclick=next;
+    return ov;
+  }
+  function close(){ const ov=$('qpOnb'); if(ov) ov.classList.remove('open'); }
+
+  function dots(){
+    $('qpDots').innerHTML = Array.from({length:STEPS},(_,i)=>'<div class="dot'+(i<step?' on':'')+'"></div>').join('');
+  }
+  function msg(t){ $('qpOnbMsg').textContent=t||''; }
+
+  function render(){
+    css(); shell(); dots(); msg('');
+    const body=$('qpOnbBody'); body.scrollTop=0;
+    const back=$('qpBack'), next=$('qpNext');
+    back.textContent = step>1?'Back':'Cancel'; next.disabled=false; next.textContent = step===STEPS?'Create account →':'Next';
+    if(step===1){
+      body.innerHTML='<h1>QUWWAA becomes your personal news anchor.</h1>'
+        +'<div class="sub">7 days free. I’ll greet you by name and tune the board, the morning brief, and the butler to exactly the world you care about — your topics, your city.</div>';
+    } else if(step===2){
+      body.innerHTML='<h1>Select your news</h1><div class="sub">Pick the avenues you want me to follow. Choose as many as you like.</div><div id="qpChips"></div>';
+      const wrap=$('qpChips');
+      QP.INTERESTS.forEach(name=>{
+        const c=document.createElement('button'); c.type='button'; c.className='qpChip'+(S.interests.indexOf(name)>=0?' sel':''); c.textContent=name;
+        c.onclick=()=>{ const i=S.interests.indexOf(name); if(i>=0)S.interests.splice(i,1); else S.interests.push(name); c.classList.toggle('sel'); };
+        wrap.appendChild(c);
+      });
+    } else if(step===3){
+      body.innerHTML='<h1>Your location</h1><div class="sub">So I can bring you what’s happening close to home.</div>'
+        +'<label>City</label><input id="qpCity" type="text" autocomplete="address-level2" value="'+esc(S.city)+'">'
+        +'<label>State / Province</label><input id="qpState" type="text" autocomplete="address-level1" value="'+esc(S.state)+'">'
+        +'<label>Country</label><input id="qpCountry" type="text" autocomplete="country-name" value="'+esc(S.country)+'">';
+    } else if(step===4){
+      body.innerHTML='<h1>How should I address you?</h1><div class="sub">Your call, of course.</div>'
+        +'<button class="qpOpt" data-as="sir">“Good morning, <b>sir</b>.”</button>'
+        +'<button class="qpOpt" data-as="madam">“Good morning, <b>madam</b>.”</button>'
+        +'<button class="qpOpt" data-as="name">By my name</button>'
+        +'<div id="qpNameWrap" style="display:none"><label>What should I call you?</label><input id="qpDName" type="text" value="'+esc(S.display_name)+'"></div>';
+      const opts=body.querySelectorAll('.qpOpt');
+      const sync=()=>{ opts.forEach(o=>o.classList.toggle('sel', o.getAttribute('data-as')===S.address_style)); $('qpNameWrap').style.display = S.address_style==='name'?'block':'none'; };
+      opts.forEach(o=>{ o.onclick=()=>{ S.address_style=o.getAttribute('data-as'); sync(); if(S.address_style==='name') setTimeout(()=>$('qpDName').focus(),50); }; });
+      sync();
+    } else if(step===5){
+      body.innerHTML='<h1>Create your account</h1><div class="sub">Last step — then your 7-day trial begins.</div>'
+        +'<label>First name</label><input id="qpFN" type="text" autocomplete="given-name" value="'+esc(S.first_name)+'">'
+        +'<label>Last name</label><input id="qpLN" type="text" autocomplete="family-name" value="'+esc(S.last_name)+'">'
+        +'<label>Email</label><input id="qpEM" type="email" autocomplete="email" value="'+esc(S.email)+'">'
+        +'<label>Password</label><input id="qpPW" type="password" autocomplete="new-password">'
+        +'<div class="disc">7 days free, then $19.99/month. Auto-renews. Cancel anytime.</div>'
+        +'<div class="legal">By continuing you agree to our <a href="/terms" target="_blank">Terms</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.</div>';
+    }
+  }
+
+  function grab(){
+    if(step===3){ S.city=$('qpCity').value.trim(); S.state=$('qpState').value.trim(); S.country=$('qpCountry').value.trim(); }
+    if(step===4 && S.address_style==='name'){ S.display_name=($('qpDName')&&$('qpDName').value.trim())||''; }
+    if(step===5){ S.first_name=$('qpFN').value.trim(); S.last_name=$('qpLN').value.trim(); S.email=$('qpEM').value.trim(); S.password=$('qpPW').value; }
+  }
+
+  async function next(){
+    grab();
+    if(step<STEPS){ step++; render(); return; }
+    // Step 5 — validate, create account, save profile, then checkout.
+    if(!S.first_name){ msg('Please enter your first name.'); return; }
+    if(!/.+@.+\..+/.test(S.email)){ msg('Please enter a valid email.'); return; }
+    if((S.password||'').length<6){ msg('Password must be at least 6 characters.'); return; }
+    if(!QP.sb){ msg('Membership is not available right now.'); return; }
+    const btn=$('qpNext'); btn.disabled=true; btn.textContent='Creating…'; msg('');
+    const display = S.address_style==='name' ? (S.display_name||S.first_name) : S.first_name;
+    const profileFields = { first_name:S.first_name, last_name:S.last_name, address_style:S.address_style,
+      display_name:display, interests:S.interests, city:S.city, state:S.state, country:S.country };
+    try{
+      const { data, error } = await QP.sb.auth.signUp({ email:S.email, password:S.password,
+        options:{ data:{ first_name:S.first_name, last_name:S.last_name } } });
+      if(error){ msg(error.message); btn.disabled=false; btn.textContent='Create account →'; return; }
+      const user = data.user;
+      // Save the profile now if we have a session; otherwise stash it to sync on first sign-in.
+      if(data.session){
+        QP.user=user;
+        try{ await QP.sb.from('profiles').update(profileFields).eq('id', user.id); }catch(e){}
+        try{ await QP.loadProfile(); QP.render(); }catch(e){}
+      } else {
+        try{ localStorage.setItem('qp_pending_profile', JSON.stringify(profileFields)); }catch(e){}
+      }
+      // Hand off to Stripe Checkout (Phase C).
+      if(QP.startCheckout){ await QP.startCheckout({ email:S.email, userId:user?user.id:null }); }
+      else { msg('Account created. Checkout is being set up — you can subscribe shortly.'); btn.disabled=false; btn.textContent='Done'; }
+    }catch(err){ msg('Something went wrong. Please try again.'); btn.disabled=false; btn.textContent='Create account →'; }
+  }
+
+  QP.openOnboarding=function(){ step=1; render(); $('qpOnb').classList.add('open'); };
+
+  // Sync any stashed onboarding selections once a real session exists (covers the
+  // email-confirmation case where there was no session at signup time).
+  document.addEventListener('qp:auth', async function(){
+    if(!QP.sb || !QP.user) return;
+    let pend; try{ pend=JSON.parse(localStorage.getItem('qp_pending_profile')||'null'); }catch(e){ pend=null; }
+    if(!pend) return;
+    try{ await QP.sb.from('profiles').update(pend).eq('id', QP.user.id); localStorage.removeItem('qp_pending_profile'); await QP.loadProfile(); QP.render(); }catch(e){}
+  });
+})();
+</script>
 </body>
 </html>
