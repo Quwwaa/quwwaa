@@ -48,7 +48,9 @@
     padding:calc(14px + env(safe-area-inset-top)) 22px 14px; border-bottom:1px solid rgba(217,128,38,.28);
     font-size:11px; letter-spacing:0;  color:#d98026;
   }
-  header .title { position:absolute; left:50%; transform:translateX(-50%); font-size:34px; font-weight:500; letter-spacing:0; text-transform:none; color:#e08a32; text-shadow:0 0 12px rgba(217,128,38,.6); }
+  header .title { position:absolute; left:50%; transform:translateX(-50%); font-size:34px; font-weight:500; letter-spacing:0; text-transform:none; display:inline-flex; align-items:center; gap:.02em; filter:drop-shadow(0 1px 1px rgba(60,30,18,.55)) drop-shadow(0 2px 4px rgba(0,0,0,.45)); }
+  header .title .qmark { height:1.42em; width:auto; display:block; transform:translateY(.02em); user-select:none; -webkit-user-drag:none; }
+  header .title .qrest { font-family:inherit; font-weight:inherit; letter-spacing:inherit; background:linear-gradient(180deg,#fde3d2 0%,#f7c8ae 19%,#e6ac8d 40%,#d59a7a 50%,#b27b61 72%,#854433 100%); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; color:transparent; }
   header .sub { font-variant-numeric:tabular-nums; }
   #gear, #briteBtn { cursor:pointer; background:none; border:none; color:#d98026; font-size:16px; }
   #gear:hover, #briteBtn:hover { color:#ffd9c4; }
@@ -274,7 +276,7 @@
 <body>
 <header>
   <span class="sub" id="clock">--:--:--</span>
-  <span class="title">quwwaa</span>
+  <span class="title"><img class="qmark" src="logo-q.png" alt="q" draggable="false"><span class="qrest">uwwaa</span></span>
   <span><span class="sub" id="brainState">Brain: offline</span> &nbsp; <button id="briteBtn" title="Bright mode">☀</button> <button id="gear" title="Settings" style="display:none">⚙</button></span>
 </header>
 
