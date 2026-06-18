@@ -6,7 +6,7 @@
 <title>QUWWAA Console</title>
 <!-- PWA: installable home-screen app -->
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#141414">
+<meta name="theme-color" content="#000000">
 <link rel="icon" type="image/png" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -28,7 +28,7 @@
   * { margin:0; padding:0; box-sizing:border-box; font-family:var(--font-sans); letter-spacing:var(--tracking-body); }
   html,body { height:100%; }
   body {
-    background:#141414; color:#ffb699;
+    background:#000; color:#ffb699;
     font-family:var(--font-sans);
     overflow:hidden; display:flex; flex-direction:column;
   }
@@ -48,7 +48,7 @@
     padding:calc(14px + env(safe-area-inset-top)) 22px 14px; border-bottom:1px solid rgba(217,128,38,.28);
     font-size:11px; letter-spacing:0;  color:#d98026;
   }
-  header .title { position:absolute; left:50%; transform:translateX(-50%); font-size:22px; font-weight:500; letter-spacing:0; text-transform:none; color:#ffd9c4; text-shadow:0 0 12px rgba(217,128,38,.6); }
+  header .title { position:absolute; left:50%; transform:translateX(-50%); font-size:26px; font-weight:500; letter-spacing:0; text-transform:none; color:#ffd9c4; text-shadow:0 0 12px rgba(217,128,38,.6); }
   header .sub { font-variant-numeric:tabular-nums; }
   #gear, #briteBtn { cursor:pointer; background:none; border:none; color:#d98026; font-size:16px; }
   #gear:hover, #briteBtn:hover { color:#ffd9c4; }
@@ -120,7 +120,7 @@
     header { padding:calc(10px + env(safe-area-inset-top)) 12px 10px; gap:6px; }
     /* left-align the title (in normal flow) so the Brief/Subscribe buttons can sit
        on the right without colliding with an absolutely-centred title */
-    header .title { font-size:14px; letter-spacing:0; position:static; transform:none; left:auto; white-space:nowrap; }
+    header .title { font-size:17px; letter-spacing:0; position:static; transform:none; left:auto; white-space:nowrap; }
     #clock { display:none; }                 /* redundant — the time is in the iOS status bar above */
     .cdate { display:none; }
     #brainState { display:none; }            /* drop the techy status text */
@@ -1721,13 +1721,13 @@
     /* glass tab bar */
     /* dock = the 3-tab pill + the talk orb, centred together so the whole group is symmetric */
     +'#navdock{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:10px;z-index:51;}'
-    +'#tabbar{display:flex;gap:4px;padding:6px;border-radius:999px;background:rgba(20,20,20,.55);backdrop-filter:blur(24px) saturate(160%);-webkit-backdrop-filter:blur(24px) saturate(160%);border:1px solid rgba(255,255,255,.12);box-shadow:0 8px 30px rgba(0,0,0,.35);}'
+    +'#tabbar{display:flex;gap:4px;padding:6px;border-radius:999px;background:rgba(255,255,255,.08);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border:1px solid rgba(255,255,255,.22);box-shadow:inset 0 1px 0 rgba(255,255,255,.4),inset 0 -1px 1px rgba(0,0,0,.25),0 10px 34px rgba(0,0,0,.4);}'
     +'#tabbar .tab{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 18px;border-radius:999px;background:none;border:none;color:rgba(255,233,210,.62);font:inherit;font-size:10px;letter-spacing:0;cursor:pointer;white-space:nowrap;}'
     +'#tabbar .tab svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.6;}'
-    +'#tabbar .tab.active{background:rgba(0,0,0,.5);color:#ffce9a;}'
-    +'body.bright #tabbar{background:rgba(245,242,235,.62);border-color:rgba(0,0,0,.08);}body.bright #tabbar .tab{color:rgba(90,60,30,.7);}body.bright #tabbar .tab.active{background:rgba(255,255,255,.72);color:#b35f10;}'
+    +'#tabbar .tab.active{background:rgba(255,255,255,.20);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.4);}'
+    +'body.bright #tabbar{background:rgba(255,255,255,.35);border-color:rgba(0,0,0,.08);}body.bright #tabbar .tab{color:rgba(90,60,30,.72);}body.bright #tabbar .tab.active{background:rgba(255,255,255,.6);color:#b35f10;}'
     /* talk orb */
-    +'#talkOrb{flex:none;width:56px;height:56px;border-radius:50%;cursor:pointer;background:rgba(20,20,20,.55);backdrop-filter:blur(24px) saturate(160%);-webkit-backdrop-filter:blur(24px) saturate(160%);border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 30px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;}'
+    +'#talkOrb{flex:none;width:56px;height:56px;border-radius:50%;cursor:pointer;background:rgba(255,255,255,.08);backdrop-filter:blur(30px) saturate(190%);-webkit-backdrop-filter:blur(30px) saturate(190%);border:1px solid rgba(255,255,255,.22);box-shadow:inset 0 1px 0 rgba(255,255,255,.4),inset 0 -1px 1px rgba(0,0,0,.25),0 10px 34px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;}'
     +'#talkOrb .dot{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle,#fff3e2 0%,#ffbd66 38%,#d98026 75%,#4a2a08 100%);box-shadow:0 0 16px 4px rgba(217,128,38,.55);transition:transform .2s;}'
     +'body.listening #talkOrb .dot{animation:pulse .7s ease-in-out infinite;}body.thinking #talkOrb .dot,body.speaking #talkOrb .dot{animation:pulse 1.4s ease-in-out infinite;}'
     +'body.bright #talkOrb{background:rgba(245,242,235,.62);border-color:rgba(0,0,0,.1);}'
