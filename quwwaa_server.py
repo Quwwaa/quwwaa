@@ -42,6 +42,7 @@ TTS_INSTRUCTIONS = os.environ.get('TTS_INSTRUCTIONS',
     'Tone: calm, courteous and articulate, with understated dry wit. '
     'Pacing: measured and unhurried. Pronunciation: crisp British English.')
 SPEAK_RATE_PER_MIN = int(os.environ.get('SPEAK_RATE_PER_MIN', '20'))  # lenient, separate bucket
+ARTICLE_RATE_PER_MIN = int(os.environ.get('ARTICLE_RATE_PER_MIN', '12'))  # /article backstop, own bucket
 
 # --- Premium membership (Supabase auth/profiles + Stripe billing) -----------
 # Everything read from the environment; never hardcoded. Only the PUBLIC values
@@ -576,6 +577,101 @@ def summarize_story(title, desc):
         return txt or snippet or (title or '')
     except Exception:
         return snippet or (title or '')
+
+# --- Article detail view: grounded multi-paragraph summary + related links ---
+ARTICLE_CACHE = {}                                            # url -> (t, payload)
+ARTICLE_TTL = int(os.environ.get('ARTICLE_TTL', '21600'))    # cache summaries 6h (no re-spend)
+_STOP = set(('the a an and or but of to in on for with from by at as is are was were be been being this that '
+             'these those it its their his her our your my we you they he she over under after before into out '
+             'up down new news report reports says said amid will would can could has have had').split())
+
+def key_terms(title, n=6):
+    """A few significant words from the headline to seed the related-coverage search."""
+    out = []
+    for w in re.findall(r"[A-Za-z0-9']+", title or ''):
+        if w.lower() in _STOP or len(w) < 3:
+            continue
+        out.append(w)
+        if len(out) >= n:
+            break
+    return ' '.join(out) or (title or '')
+
+def summarize_article(title, desc, source):
+    """A genuine, transformative 2-3 paragraph summary grounded strictly in the
+    headline + publisher snippet. Returns (text, grounded). Never invents; never
+    reproduces the article verbatim."""
+    snippet = (desc or '').strip()
+    grounded = bool(snippet)
+    if not ANTHROPIC_API_KEY:
+        return (snippet or (title or '')), grounded
+    sysmsg = ("You are QUWWAA, a courteous news butler. Write a clear, neutral summary (2-3 short paragraphs) "
+              "of the news item below, using ONLY facts present in the provided headline and snippet. Never "
+              "invent, infer, or speculate beyond them; never reproduce the article verbatim or pad with filler. "
+              "No markdown, no preamble, no opinion. If the snippet is sparse, summarize what is known and note "
+              "that fuller detail is in the original report.")
+    user = ('Source: ' + (source or 'the publisher') + '\nHeadline: ' + (title or '')
+            + '\nSnippet: ' + (snippet or '(none)'))
+    try:
+        body = json.dumps({'model': ASK_MODEL, 'max_tokens': 440, 'system': sysmsg,
+                           'messages': [{'role': 'user', 'content': user}]}).encode()
+        req = urllib.request.Request('https://api.anthropic.com/v1/messages', data=body, headers={
+            'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01'})
+        with urllib.request.urlopen(req, timeout=40) as r:
+            data = json.loads(r.read())
+        txt = ' '.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text').strip()
+        return (txt or snippet or (title or '')), grounded
+    except Exception:
+        return (snippet or (title or '')), grounded
+
+def related_articles(title, source, exclude_url, n=4):
+    """3-4 related stories on the same topic from OTHER outlets (reuses /news)."""
+    try:
+        payload = cached_aggregate(key_terms(title), 7, True)
+    except Exception:
+        return []
+    out, seen, src0 = [], set(), (source or '').lower()
+    for a in payload.get('articles', []):
+        u = a.get('url', '')
+        if not u or u == exclude_url or u in seen:
+            continue
+        if src0 and a.get('source', '').lower() == src0:     # prefer different outlets
+            continue
+        seen.add(u)
+        out.append({'title': a.get('title', ''), 'url': u, 'source': a.get('source', ''),
+                    'time': a.get('time', ''), 'image': a.get('image', '')})
+        if len(out) >= n:
+            break
+    return out
+
+def build_article(url, title, source):
+    """Grounded summary + related coverage for one article, cached by URL so
+    re-opening the same story never re-spends AI credits."""
+    hit = ARTICLE_CACHE.get(url)
+    if hit and time.time() - hit[0] < ARTICLE_TTL:
+        return hit[1]
+    desc = og_desc(url) if url.startswith('http') else ''
+    summary, grounded = summarize_article(title, desc, source)
+    payload = {'url': url, 'title': title, 'source': source, 'summary': summary,
+               'grounded': grounded, 'related': related_articles(title, source, url)}
+    if summary and url:
+        if len(ARTICLE_CACHE) > 500:                          # cap memory
+            for k in list(ARTICLE_CACHE)[:120]:
+                ARTICLE_CACHE.pop(k, None)
+        ARTICLE_CACHE[url] = (time.time(), payload)
+    return payload
+
+_article_hits = {}                  # ip -> recent /article timestamps (own bucket)
+def article_rate_check(ip):
+    now = time.time()
+    with _ask_lock:
+        hits = [t for t in _article_hits.get(ip, []) if t > now - 60]
+        if len(hits) >= ARTICLE_RATE_PER_MIN:
+            _article_hits[ip] = hits
+            return False
+        hits.append(now)
+        _article_hits[ip] = hits
+        return True
 
 def build_brief(full=False):
     """Assemble one summarized story per section. On a 'full' rebuild every
@@ -1209,6 +1305,19 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 payload = {'query': q, 'articles': [], 'sources': 0, 'error': str(e)}
             self._send_json(payload)
+        elif self.path.startswith('/article'):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            url = (qs.get('url') or [''])[0].strip()
+            title = (qs.get('title') or [''])[0].strip()
+            source = (qs.get('source') or [''])[0].strip()
+            if not (url or title):
+                self._send_json({'error': 'missing'}, 400); return
+            if not article_rate_check(self._client_ip()):
+                self._send_json({'error': 'rate'}, 429); return
+            try:
+                self._send_json(build_article(url, title, source))
+            except Exception as e:
+                self._send_json({'error': str(e)}, 500)
         else:
             base = urllib.parse.urlparse(self.path).path
             if base in ('/', ''):
