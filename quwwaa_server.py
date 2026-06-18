@@ -798,6 +798,17 @@ def supabase_get_status(user_id):
         rows = json.loads(r.read())
     return rows[0] if rows else None
 
+def supabase_get_profile(user_id, select='*'):
+    """Fetch a profile row by id (service role)."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and user_id):
+        return None
+    url = SUPABASE_URL + '/rest/v1/profiles?' + urllib.parse.urlencode({'id': 'eq.' + str(user_id), 'select': select})
+    req = urllib.request.Request(url, headers={
+        'apikey': SUPABASE_SERVICE_ROLE_KEY, 'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        rows = json.loads(r.read())
+    return rows[0] if rows else None
+
 def supabase_user_from_token(token):
     """Validate a Supabase access token (JWT) by asking the auth API who it is.
     Returns the user dict (with 'id') or None — used to confirm a member before
@@ -866,7 +877,31 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_checkout()
         if self.path.startswith('/stripe-webhook'):
             return self._handle_webhook()
+        if self.path.startswith('/create-portal-session'):
+            return self._handle_portal()
         self.send_error(404)
+
+    def _handle_portal(self):
+        if not STRIPE_SECRET_KEY:
+            self._send_json({'error': 'stripe_not_configured'}, 503); return
+        auth = self.headers.get('Authorization', '')
+        try:
+            user = supabase_user_from_token(auth[7:].strip()) if auth.startswith('Bearer ') else None
+            if not (user and user.get('id')):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            prof = supabase_get_profile(user['id'], 'stripe_customer_id')
+            cust = prof and prof.get('stripe_customer_id')
+            if not cust:
+                self._send_json({'error': 'no_customer'}, 400); return
+            sess = stripe_post('billing_portal/sessions', [('customer', cust), ('return_url', SITE_URL + '/')])
+            self._send_json({'url': sess.get('url')})
+        except urllib.error.HTTPError as e:
+            detail = ''
+            try: detail = e.read().decode('utf-8', 'ignore')[:200]
+            except Exception: pass
+            self._send_json({'error': 'stripe_%d' % e.code, 'detail': detail}, 502)
+        except Exception as e:
+            self._send_json({'error': type(e).__name__}, 500)
 
     def _read_json(self):
         length = int(self.headers.get('Content-Length', '0') or '0')
@@ -1079,6 +1114,10 @@ class Handler(SimpleHTTPRequestHandler):
             base = urllib.parse.urlparse(self.path).path
             if base in ('/', ''):
                 self.path = '/quwwaa-console.html'   # land visitors on the console (ignore ?query)
+            elif base in ('/terms', '/terms/'):
+                self.path = '/terms.html'
+            elif base in ('/privacy', '/privacy/'):
+                self.path = '/privacy.html'
             super().do_GET()
 
     def list_directory(self, path):

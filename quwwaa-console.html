@@ -1311,6 +1311,7 @@
   const $=id=>document.getElementById(id);
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+  QP.baseCSS = injectCSS;   // exposed so the settings/auth modals always have the base card styles
   function injectCSS(){
     if($('qpCSS')) return;
     const st=document.createElement('style'); st.id='qpCSS';
@@ -1640,6 +1641,103 @@
       fail(d && d.error==='stripe_not_configured' ? 'Membership isn’t available just yet.' : 'Could not start checkout — please try again.');
     }catch(e){ fail('Could not start checkout — please check your connection.'); }
   };
+})();
+</script>
+<script>
+/* ============================================================================
+   QUWWAA Premium — Phase F: account/settings + Stripe Billing Portal.
+   ============================================================================ */
+(function(){
+  const QP = window.QP = window.QP || {};
+  const $=id=>document.getElementById(id);
+  const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function css(){
+    if(QP.baseCSS) QP.baseCSS();           // ensure .qpOv/.qpCard base styles exist
+    if($('qpSetCSS')) return;
+    const st=document.createElement('style'); st.id='qpSetCSS';
+    st.textContent=
+      '.qpSetChips{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;}'
+      +'.qpSetChip{padding:7px 12px;border-radius:18px;border:1px solid rgba(217,128,38,.4);background:rgba(217,128,38,.06);color:#ffce9a;font:inherit;font-size:12px;cursor:pointer;}'
+      +'.qpSetChip.sel{background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border-color:transparent;font-weight:700;}'
+      +'.qpSeg{display:flex;gap:8px;margin-top:6px;}'
+      +'.qpSeg button{flex:1;padding:9px;border-radius:9px;border:1px solid rgba(217,128,38,.4);background:rgba(217,128,38,.06);color:#ffd9b3;font:inherit;font-size:13px;cursor:pointer;}'
+      +'.qpSeg button.sel{border-color:#D98026;background:rgba(217,128,38,.18);}'
+      +'.qpStatus{font-size:12px;color:#7bd88f;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;}'
+      +'.qpRow2{display:flex;gap:10px;margin-top:18px;}'
+      +'.qpLegal{margin-top:18px;font-size:11px;color:#a98a6a;text-align:center;}.qpLegal a{color:#e89a5a;}'
+      +'.qpSO{display:block;width:100%;margin-top:10px;background:none;border:none;color:#cba98f;font:inherit;font-size:12px;text-decoration:underline;cursor:pointer;}';
+    document.head.appendChild(st);
+  }
+
+  QP.openPortal = async function(){
+    if(!QP.token){ return; }
+    try{
+      const r = await fetch('/create-portal-session', {method:'POST', headers:{'Authorization':'Bearer '+QP.token}});
+      const d = await r.json().catch(()=>({}));
+      if(r.ok && d.url){ window.location.assign(d.url); return; }
+    }catch(e){}
+    const m=$('qpSetMsg'); if(m) m.textContent='Could not open the billing portal right now.';
+  };
+
+  function modal(){
+    let ov=$('qpSet'); if(ov) return ov;
+    ov=document.createElement('div'); ov.id='qpSet'; ov.className='qpOv';
+    ov.innerHTML='<div class="qpCard" style="position:relative"><button class="qpX" data-x type="button">✕</button>'
+      +'<h2>Your membership</h2><div class="qpStatus" id="qpSetStatus"></div>'
+      +'<label>What should I call you?</label><input id="qpSetName" type="text">'
+      +'<label>Address style</label><div class="qpSeg" id="qpSetStyle">'
+      +'<button data-as="sir">Sir</button><button data-as="madam">Madam</button><button data-as="name">By name</button></div>'
+      +'<label>Your interests</label><div class="qpSetChips" id="qpSetChips"></div>'
+      +'<label>City</label><input id="qpSetCity" type="text">'
+      +'<label>State / Province</label><input id="qpSetState" type="text">'
+      +'<label>Country</label><input id="qpSetCountry" type="text">'
+      +'<div class="qpRow2"><button class="qpPrimary" id="qpSetSave" type="button">Save</button>'
+      +'<button class="qpGhost" id="qpSetPortal" type="button">Manage subscription</button></div>'
+      +'<div class="qpMsg" id="qpSetMsg"></div>'
+      +'<button class="qpSO" id="qpSetOut" type="button">Sign out</button>'
+      +'<div class="qpLegal"><a href="/terms" target="_blank">Terms</a> · <a href="/privacy" target="_blank">Privacy</a></div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click',e=>{ if(e.target===ov||e.target.hasAttribute('data-x')) ov.classList.remove('open'); });
+    $('qpSetPortal').onclick=QP.openPortal;
+    $('qpSetOut').onclick=()=>{ ov.classList.remove('open'); QP.signOut(); };
+    $('qpSetSave').onclick=save;
+    return ov;
+  }
+
+  const sel = { interests:[], address_style:'name' };
+  function fill(){
+    const p=QP.profile||{};
+    sel.interests = (p.interests||[]).slice();
+    sel.address_style = p.address_style||'name';
+    $('qpSetStatus').textContent = (p.subscription_status||'').toUpperCase()
+      + (p.trial_ends_at ? ' · trial ends '+new Date(p.trial_ends_at).toLocaleDateString() : '');
+    $('qpSetName').value = p.display_name||p.first_name||'';
+    $('qpSetCity').value = p.city||''; $('qpSetState').value = p.state||''; $('qpSetCountry').value = p.country||'';
+    const seg=$('qpSetStyle'); seg.querySelectorAll('button').forEach(b=>{ b.classList.toggle('sel', b.getAttribute('data-as')===sel.address_style);
+      b.onclick=()=>{ sel.address_style=b.getAttribute('data-as'); seg.querySelectorAll('button').forEach(x=>x.classList.toggle('sel',x===b)); }; });
+    const chips=$('qpSetChips'); chips.innerHTML='';
+    (QP.INTERESTS||[]).forEach(name=>{ const c=document.createElement('button'); c.type='button';
+      c.className='qpSetChip'+(sel.interests.indexOf(name)>=0?' sel':''); c.textContent=name;
+      c.onclick=()=>{ const i=sel.interests.indexOf(name); if(i>=0)sel.interests.splice(i,1); else sel.interests.push(name); c.classList.toggle('sel'); };
+      chips.appendChild(c); });
+  }
+  async function save(){
+    const btn=$('qpSetSave'), msg=$('qpSetMsg'); msg.className='qpMsg'; msg.textContent='';
+    if(!QP.sb||!QP.user){ return; }
+    btn.disabled=true; btn.textContent='Saving…';
+    const fields={ address_style:sel.address_style, display_name:$('qpSetName').value.trim(),
+      interests:sel.interests, city:$('qpSetCity').value.trim(), state:$('qpSetState').value.trim(), country:$('qpSetCountry').value.trim() };
+    try{
+      await QP.sb.from('profiles').update(fields).eq('id', QP.user.id);
+      await QP.loadProfile(); QP.render();
+      document.dispatchEvent(new CustomEvent('qp:auth',{detail:{member:QP.isMember(),profile:QP.profile}}));  // refresh board/greeting
+      msg.className='qpMsg ok'; msg.textContent='Saved.';
+    }catch(e){ msg.textContent='Could not save. Try again.'; }
+    btn.disabled=false; btn.textContent='Save';
+  }
+
+  QP.openSettings=function(){ css(); modal(); fill(); $('qpSet').classList.add('open'); };
 })();
 </script>
 </body>
