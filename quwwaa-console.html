@@ -113,6 +113,7 @@
     #voiceToggle, #handsFree { display:none; } /* keep the bottom bar uncluttered */
     /* compact the header CTAs so they fit beside the title */
     #qsubBtn, #qpBtn { font-size:10px; padding:5px 7px; margin-right:6px; letter-spacing:.4px; }
+    #qpSignIn { font-size:10px; padding:5px 3px; margin-right:6px; }
 
     /* reactor on top (must NOT shrink — its rings/core are absolutely positioned,
        so a shrinking flex column would collapse it to 0px), the brief scrolls
@@ -1231,6 +1232,8 @@
       +'border-radius:7px;margin-right:10px;white-space:nowrap;box-shadow:0 0 14px rgba(217,128,38,.4);}'
       +'#qpBtn.acct{background:none;border:1px solid rgba(217,128,38,.55);color:#ffce9a;box-shadow:none;font-weight:600;}'
       +'#qpBtn:hover{filter:brightness(1.08);}'
+      +'#qpSignIn{cursor:pointer;background:none;border:none;color:#ffce9a;font:inherit;font-size:12px;letter-spacing:.5px;text-transform:uppercase;margin-right:10px;padding:6px 4px;white-space:nowrap;}'
+      +'#qpSignIn:hover{color:#fff;}body.bright #qpSignIn{color:#9a5a12;}'
       +'.qpOv{position:fixed;inset:0;z-index:10000;display:none;background:rgba(8,6,4,.82);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);align-items:center;justify-content:center;}'
       +'.qpOv.open{display:flex;}'
       +'.qpCard{width:100%;max-width:420px;margin:16px;max-height:90vh;overflow-y:auto;background:linear-gradient(180deg,#1f1710,#15100b);'
@@ -1265,10 +1268,18 @@
       +'<label>Password</label><input id="qpPass" type="password" autocomplete="current-password" required>'
       +'<div class="qpBtnRow"><button class="qpPrimary" id="qpAuthGo" type="submit">Sign in</button></div>'
       +'<div class="qpMsg" id="qpAuthMsg"></div></form>'
-      +'<button class="qpLink" id="qpToTrial" type="button">New here? Start your 7-day free trial →</button></div>';
+      +'<button class="qpLink" id="qpForgot" type="button">Forgot password?</button>'
+      +'<button class="qpLink" id="qpToTrial" type="button" style="display:block;margin-top:8px">New here? Start your 7-day free trial →</button></div>';
     document.body.appendChild(ov);
     ov.addEventListener('click',e=>{ if(e.target===ov||e.target.hasAttribute('data-x')) ov.classList.remove('open'); });
     $('qpToTrial').onclick=()=>{ ov.classList.remove('open'); QP.openOnboarding ? QP.openOnboarding() : null; };
+    $('qpForgot').onclick=async ()=>{
+      const email=$('qpEmail').value.trim(), msg=$('qpAuthMsg'); msg.className='qpMsg';
+      if(!/.+@.+\..+/.test(email)){ msg.textContent='Enter your email above, then tap Forgot password.'; return; }
+      try{ await QP.sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin });
+        msg.className='qpMsg ok'; msg.textContent='Password reset link sent — check your email.'; }
+      catch(e){ msg.textContent='Could not send the reset email. Try again.'; }
+    };
     $('qpAuthForm').onsubmit=async e=>{
       e.preventDefault();
       const go=$('qpAuthGo'), msg=$('qpAuthMsg'); msg.className='qpMsg'; msg.textContent='';
@@ -1299,6 +1310,17 @@
     }
     return b;
   }
+  function signInLink(){
+    let s=$('qpSignIn');
+    if(!s){
+      const hdr=document.querySelector('header'); if(!hdr) return null;
+      const spans=hdr.querySelectorAll(':scope > span'); const right=spans[spans.length-1]||hdr;
+      s=document.createElement('button'); s.id='qpSignIn'; s.type='button'; s.textContent='Sign in';
+      s.onclick=()=>QP.openAuth();
+      right.insertBefore(s, right.firstChild);   // sits left of the Free-trial CTA
+    }
+    return s;
+  }
   function banner(){
     let el=$('qpBanner'); if(el) return el;
     el=document.createElement('div'); el.id='qpBanner';
@@ -1310,12 +1332,15 @@
   }
   function render(){
     const b=headerButton(); if(!b) return;
+    const si=signInLink();
     if(QP.user){
-      const name=(QP.profile&&(QP.profile.first_name||QP.profile.display_name))||'Account';
-      if(QP.isMember()){ b.className='acct'; b.textContent='✦ '+name; b.onclick=QP.openAccount; }
-      else { b.className=''; b.textContent='✦ Finish signup'; b.onclick=()=>{ QP.openOnboarding ? QP.openOnboarding() : QP.openAuth(); }; }
+      if(si) si.style.display='none';                       // signed in → no Sign in link
+      const name=(QP.profile&&(QP.profile.display_name||QP.profile.first_name))||'Account';
+      if(QP.isMember()){ b.className='acct'; b.textContent='✦ '+name; b.title='Your account'; b.onclick=QP.openAccount; }
+      else { b.className=''; b.textContent='✦ Start trial'; b.title='Start your free trial'; b.onclick=()=>{ QP.openOnboarding ? QP.openOnboarding() : QP.openAuth(); }; }
     } else {
-      b.className=''; b.textContent='✦ Free trial'; b.onclick=()=>{ QP.openOnboarding ? QP.openOnboarding() : QP.openAuth(); };
+      if(si) si.style.display='';                           // returning users sign in here
+      b.className=''; b.textContent='✦ Free trial'; b.title='Start your 7-day free trial'; b.onclick=()=>{ QP.openOnboarding ? QP.openOnboarding() : QP.openAuth(); };
     }
     banner().style.display = QP.pastDue() ? 'block' : 'none';
     document.body.classList.toggle('qp-member', QP.isMember());
