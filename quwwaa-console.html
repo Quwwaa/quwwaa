@@ -1695,5 +1695,148 @@
   QP.openSettings=function(){ css(); modal(); fill(); $('qpSet').classList.add('open'); };
 })();
 </script>
+<script>
+/* ============================================================================
+   QUWWAA — Overlay nav (interval.news shell): top wordmark + bottom glass
+   3-tab bar (News Brief / Daily Rumble / Profile) + persistent talk orb.
+   Reuses the existing reactor (tap-to-talk), QP.* (auth/account), the Kit
+   subscribe button, and the theme toggle. The old header cluster + text bar
+   are hidden in CSS.
+   ============================================================================ */
+(function(){
+  const DAILY_RUMBLE_URL = 'https://www.facebook.com/mike.dean.801079';   // single config constant
+  const $=id=>document.getElementById(id);
+  const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const click=id=>{ const e=$(id); if(e) e.click(); };
+
+  // ---- CSS ----
+  const st=document.createElement('style');
+  st.textContent =
+    /* top: wordmark alone, centered; hide the old header cluster + text bar */
+    'header{justify-content:center !important;}'
+    +'header #clock,header #brainState,header #briteBtn,header #gear,header #qpBtn,header #qpSignIn,header #qsubBtn{display:none !important;}'
+    +'header .title{position:static !important;transform:none !important;left:auto !important;}'
+    +'#controls{display:none !important;}'
+    +'body.home #homeCards{padding-bottom:120px;}#log{padding-bottom:120px;}'
+    /* glass tab bar */
+    +'#tabbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom));display:flex;gap:4px;padding:6px;border-radius:999px;background:rgba(20,20,20,.55);backdrop-filter:blur(24px) saturate(160%);-webkit-backdrop-filter:blur(24px) saturate(160%);border:1px solid rgba(255,255,255,.12);box-shadow:0 8px 30px rgba(0,0,0,.35);z-index:50;}'
+    +'#tabbar .tab{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 18px;border-radius:999px;background:none;border:none;color:rgba(255,233,210,.62);font:inherit;font-size:10px;letter-spacing:0;cursor:pointer;white-space:nowrap;}'
+    +'#tabbar .tab svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.6;}'
+    +'#tabbar .tab.active{background:rgba(0,0,0,.5);color:#ffce9a;}'
+    +'body.bright #tabbar{background:rgba(245,242,235,.62);border-color:rgba(0,0,0,.08);}body.bright #tabbar .tab{color:rgba(90,60,30,.7);}body.bright #tabbar .tab.active{background:rgba(255,255,255,.72);color:#b35f10;}'
+    /* talk orb */
+    +'#talkOrb{position:fixed;right:calc(14px + env(safe-area-inset-right));bottom:calc(15px + env(safe-area-inset-bottom));width:56px;height:56px;border-radius:50%;z-index:51;cursor:pointer;background:rgba(20,20,20,.55);backdrop-filter:blur(24px) saturate(160%);-webkit-backdrop-filter:blur(24px) saturate(160%);border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 30px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;}'
+    +'#talkOrb .dot{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle,#fff3e2 0%,#ffbd66 38%,#d98026 75%,#4a2a08 100%);box-shadow:0 0 16px 4px rgba(217,128,38,.55);transition:transform .2s;}'
+    +'body.listening #talkOrb .dot{animation:pulse .7s ease-in-out infinite;}body.thinking #talkOrb .dot,body.speaking #talkOrb .dot{animation:pulse 1.4s ease-in-out infinite;}'
+    +'body.bright #talkOrb{background:rgba(245,242,235,.62);border-color:rgba(0,0,0,.1);}'
+    /* profile tab */
+    +'#qprofile{display:none;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px 22px 140px;}'
+    +'body.view-profile #qprofile{display:block;}'
+    +'body.view-profile #reactorWrap,body.view-profile #log{display:none !important;}'
+    +'.pwrap{max-width:520px;margin:0 auto;}'
+    +'.pavatar{width:64px;height:64px;border-radius:50%;margin:18px auto 14px;border:1px solid rgba(217,128,38,.5);display:flex;align-items:center;justify-content:center;color:#e08a32;}'
+    +'.pavatar svg{width:32px;height:32px;stroke:currentColor;fill:none;stroke-width:1.5;}'
+    +'#qprofile h2{font-family:var(--font-serif);text-align:center;color:#ffe6cf;font-size:24px;font-weight:500;margin-bottom:6px;}'
+    +'#qprofile .psub{text-align:center;color:#cba98f;font-size:14px;margin-bottom:22px;}'
+    +'.prow{display:block;width:100%;text-align:left;background:rgba(217,128,38,.06);border:1px solid rgba(217,128,38,.32);border-radius:12px;padding:15px 16px;margin-top:10px;color:#ffd9b3;font:inherit;font-size:15px;cursor:pointer;}'
+    +'.prow:hover{background:rgba(217,128,38,.12);}'
+    +'.prow.primary{background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border-color:transparent;font-weight:600;text-align:center;}'
+    +'.psec{margin-top:26px;font-size:11px;color:#a06a3a;letter-spacing:0;}'
+    +'.pemail{display:flex;gap:8px;margin-top:10px;}.pemail input{flex:1;padding:13px;font:inherit;font-size:15px;color:#ffe2d1;background:rgba(60,40,25,.35);border:1px solid rgba(217,128,38,.32);border-radius:10px;outline:none;}'
+    +'.pemail button{background:rgba(217,128,38,.16);border:1px solid rgba(217,128,38,.5);color:#ffce9a;border-radius:10px;padding:0 16px;font:inherit;cursor:pointer;}'
+    +'.ptoggle{display:flex;justify-content:space-between;align-items:center;}'
+    +'body.bright .prow{color:#3a2c1e;}body.bright #qprofile h2{color:#5a3a18;}body.bright #qprofile .psub{color:#7a5a3a;}';
+  document.head.appendChild(st);
+
+  // ---- inline icons ----
+  const I = {
+    brief:'<svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>',
+    rumble:'<svg viewBox="0 0 24 24"><path d="M12 3c2 3 4 4 4 8a4 4 0 0 1-8 0c0-2 1-3 2-4 .5 2 2 2 2 4"/></svg>',
+    profile:'<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>',
+    person:'<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>'
+  };
+
+  // ---- talk orb ----
+  const orb=document.createElement('div'); orb.id='talkOrb'; orb.title='Talk to QUWWAA';
+  orb.innerHTML='<div class="dot"></div>';
+  orb.onclick=()=>{ if($('reactor')) $('reactor').click(); };   // same voice capture as the big reactor
+  document.body.appendChild(orb);
+
+  // ---- tab bar ----
+  let tab='brief';
+  const bar=document.createElement('div'); bar.id='tabbar';
+  bar.innerHTML=
+    '<button class="tab" data-tab="brief">'+I.brief+'<span>News Brief</span></button>'
+    +'<button class="tab" data-tab="rumble">'+I.rumble+'<span>Daily Rumble</span></button>'
+    +'<button class="tab" data-tab="profile">'+I.profile+'<span>Profile</span></button>';
+  document.body.appendChild(bar);
+  function setActive(name){ bar.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active', b.getAttribute('data-tab')===name)); }
+  function toast(msg){
+    let t=$('qToast'); if(!t){ t=document.createElement('div'); t.id='qToast';
+      t.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom));background:rgba(20,15,10,.95);color:#ffd9b3;border:1px solid rgba(217,128,38,.5);border-radius:10px;padding:10px 16px;font-size:13px;z-index:60;transition:opacity .3s;';
+      document.body.appendChild(t); }
+    t.textContent=msg; t.style.opacity='1'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.opacity='0',2200);
+  }
+  function setTab(name){
+    if(name==='rumble'){ toast('Opening Daily Rumble…'); window.open(DAILY_RUMBLE_URL,'_blank','noopener'); setActive(tab); return; }
+    tab=name; setActive(name);
+    document.body.classList.toggle('view-profile', name==='profile');
+    if(name==='profile') renderProfile();
+  }
+  bar.querySelectorAll('.tab').forEach(b=> b.onclick=()=>setTab(b.getAttribute('data-tab')) );
+  setActive('brief');
+
+  // ---- profile tab ----
+  const prof=document.createElement('div'); prof.id='qprofile'; document.body.appendChild(prof);
+  function hello(){ const h=new Date().getHours(); return h<5?'Good evening':h<12?'Good morning':h<17?'Good afternoon':'Good evening'; }
+  function renderProfile(){
+    const QP=window.QP||{};
+    const premium = !!QP.enabled;
+    const user = QP.user;
+    const member = QP.isMember && QP.isMember();
+    const p = QP.profile||{};
+    const name = (p.display_name||p.first_name)||'';
+    let h='<div class="pwrap"><div class="pavatar">'+I.person+'</div>';
+    if(user){
+      h+='<h2>'+esc(hello()+(name?', '+name:''))+'</h2>';
+      h+='<div class="psub">'+(member?'You’re a QUWWAA member.':'You’re signed in.')+'</div>';
+      if(member){ h+='<button class="prow primary" data-act="portal">Manage subscription</button>'; }
+      else { h+='<button class="prow primary" data-act="trial">Start your 7-day free trial</button>'; }
+      h+='<button class="prow" data-act="settings">Edit profile &amp; preferences</button>';
+    } else {
+      h+='<h2>Welcome to quwwaa</h2><div class="psub">Sign in to continue, or start your free trial.</div>';
+      if(premium){
+        h+='<button class="prow primary" data-act="trial">Start your 7-day free trial</button>';
+        h+='<button class="prow" data-act="signin">Sign in</button>';
+      } else {
+        h+='<div class="psub">Membership is coming soon.</div>';
+      }
+    }
+    // free Morning Brief email (Kit) — available to everyone
+    h+='<div class="psec">Free daily Morning Brief</div>'
+      +'<button class="prow" data-act="email">Get the free Morning Brief email</button>';
+    // settings: theme + (logged-in) log out
+    h+='<div class="psec">Settings</div>'
+      +'<button class="prow ptoggle" data-act="theme"><span>Light / Dark mode</span><span>'+(document.body.classList.contains('bright')?'Light':'Dark')+'</span></button>';
+    if(user){ h+='<button class="prow" data-act="logout">Log out</button>'; }
+    h+='<div class="psec" style="text-align:center;margin-top:24px"><a href="/terms" target="_blank" style="color:#e89a5a">Terms</a> · <a href="/privacy" target="_blank" style="color:#e89a5a">Privacy</a></div>';
+    h+='</div>';
+    prof.innerHTML=h;
+    prof.querySelectorAll('[data-act]').forEach(b=> b.onclick=()=>act(b.getAttribute('data-act')) );
+  }
+  function act(a){
+    const QP=window.QP||{};
+    if(a==='portal'  && QP.openPortal)     return QP.openPortal();
+    if(a==='trial'   && QP.openOnboarding) return QP.openOnboarding();
+    if(a==='signin'  && QP.openAuth)       return QP.openAuth();
+    if(a==='settings'&& QP.openSettings)   return QP.openSettings();
+    if(a==='logout'  && QP.signOut)        return QP.signOut();
+    if(a==='email')  return click('qsubBtn');     // reuse the Kit subscribe modal
+    if(a==='theme'){ click('briteBtn'); renderProfile(); return; }  // reuse the existing theme toggle
+  }
+  // keep Profile fresh as auth state changes
+  document.addEventListener('qp:auth', function(){ if(tab==='profile') renderProfile(); });
+})();
+</script>
 </body>
 </html>
