@@ -1019,6 +1019,102 @@ def member_from_request(handler):
     return None
 
 
+# --- Priority tracker (Gold-only): one tracked subject, polled twice a day ---
+MAX_PRIORITIES = int(os.environ.get('MAX_PRIORITIES', '1'))   # raise later for a higher tier
+PRIORITY_POLL_SEC = int(os.environ.get('PRIORITY_POLL_SEC', '1800'))  # scan cadence (each polls <=2x/day)
+_UUID_RE = re.compile(r'^[0-9a-fA-F-]{36}$')
+
+def sb_rest(method, path_q, body=None):
+    """Supabase REST with the service-role key. path_q = 'table?filters'. The server
+    always scopes by user_id, so bypassing RLS here is safe. Returns list/dict/None."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
+        return None
+    headers = {'apikey': SUPABASE_SERVICE_ROLE_KEY, 'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY,
+               'Content-Type': 'application/json'}
+    if method in ('POST', 'PATCH'):
+        headers['Prefer'] = 'return=representation'
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(SUPABASE_URL + '/rest/v1/' + path_q, data=data, method=method, headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read()
+        return json.loads(raw) if raw else []
+
+def member_id_from_request(handler):
+    """Verified member's user_id, or None (confirms the JWT + trialing/active)."""
+    auth = handler.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None
+    try:
+        user = supabase_user_from_token(auth[7:].strip())
+        if not (user and user.get('id')):
+            return None
+        prof = supabase_get_status(user['id'])
+        if prof and prof.get('subscription_status') in ('trialing', 'active'):
+            return user['id']
+    except Exception:
+        return None
+    return None
+
+def get_priorities(user_id):
+    rows = sb_rest('GET', 'priorities?user_id=eq.%s&active=eq.true&select=*&order=created_at.desc' % user_id) or []
+    for p in rows:
+        items = sb_rest('GET', 'priority_items?priority_id=eq.%s&select=*&order=found_at.desc' % p['id']) or []
+        p['items'] = items
+        p['unseen'] = sum(1 for it in items if not it.get('seen'))
+    return rows
+
+def poll_priority(p):
+    """Free news search for one priority; store new items (dedupe on url). No AI."""
+    q = (p.get('query') or '').strip()
+    pid = p.get('id')
+    if not (q and pid):
+        return
+    try:
+        payload = cached_aggregate(q, 3, True)
+    except Exception:
+        payload = {'articles': []}
+    existing = sb_rest('GET', 'priority_items?priority_id=eq.%s&select=url' % pid) or []
+    have = set(x.get('url') for x in existing)
+    fresh = []
+    for a in payload.get('articles', [])[:25]:
+        u = a.get('url', '')
+        if not u or u in have:
+            continue
+        have.add(u)
+        fresh.append({'priority_id': pid, 'url': u, 'title': a.get('title', ''),
+                      'source': a.get('source', ''), 'seen': False})
+    if fresh:
+        try: sb_rest('POST', 'priority_items', fresh)
+        except Exception: pass
+    try:
+        sb_rest('PATCH', 'priorities?id=eq.%s' % pid,
+                {'last_checked_at': datetime.now(timezone.utc).isoformat()})
+    except Exception: pass
+
+def priorities_loop():
+    """Twice-a-day per priority: scan on a timer, poll any due >=12h since last check."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
+        return
+    while True:
+        try:
+            rows = sb_rest('GET', 'priorities?active=eq.true&select=*') or []
+            now = datetime.now(timezone.utc)
+            for p in rows:
+                lc = p.get('last_checked_at')
+                due = True
+                if lc:
+                    try:
+                        t = datetime.fromisoformat(str(lc).replace('Z', '+00:00'))
+                        due = (now - t).total_seconds() >= 12 * 3600
+                    except Exception:
+                        due = True
+                if due:
+                    poll_priority(p)
+        except Exception:
+            pass
+        time.sleep(PRIORITY_POLL_SEC)
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=os.path.dirname(os.path.abspath(__file__)), **kw)
@@ -1060,7 +1156,60 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_webhook()
         if self.path.startswith('/create-portal-session'):
             return self._handle_portal()
+        if self.path.startswith('/priorities'):
+            return self._handle_priorities()
         self.send_error(404)
+
+    def _handle_priorities(self):
+        """Create / change / delete / mark-seen the member's one tracked priority.
+        Gold-only — gated on a verified trialing/active member."""
+        uid = member_id_from_request(self)
+        if not uid:
+            self._send_json({'error': 'forbidden', 'member': False}, 403); return
+        d = self._read_json()
+        op = (d.get('op') or 'create').strip()
+        try:
+            if op == 'create':
+                label = (d.get('label') or '').strip()[:120]
+                query = (d.get('query') or label).strip()[:200]
+                if not query:
+                    self._send_json({'error': 'missing_query'}, 400); return
+                existing = sb_rest('GET', 'priorities?user_id=eq.%s&active=eq.true&select=id' % uid) or []
+                if len(existing) >= MAX_PRIORITIES:
+                    self._send_json({'error': 'cap', 'max': MAX_PRIORITIES}, 409); return
+                rows = sb_rest('POST', 'priorities',
+                               {'user_id': uid, 'label': label or query, 'query': query, 'active': True})
+                p = rows[0] if rows else None
+                if p: poll_priority(p)                       # immediate first fetch
+                self._send_json({'ok': True, 'priority': p})
+            elif op in ('change', 'delete', 'seen'):
+                pid = (d.get('id') or '').strip()
+                if not _UUID_RE.match(pid):
+                    self._send_json({'error': 'bad_id'}, 400); return
+                own = sb_rest('GET', 'priorities?id=eq.%s&user_id=eq.%s&select=id' % (pid, uid)) or []
+                if not own:
+                    self._send_json({'error': 'not_found'}, 404); return
+                if op == 'change':
+                    label = (d.get('label') or '').strip()[:120]
+                    query = (d.get('query') or label).strip()[:200]
+                    if not query:
+                        self._send_json({'error': 'missing_query'}, 400); return
+                    sb_rest('DELETE', 'priority_items?priority_id=eq.%s' % pid)   # new subject — clear old items
+                    rows = sb_rest('PATCH', 'priorities?id=eq.%s' % pid,
+                                   {'label': label or query, 'query': query, 'last_checked_at': None})
+                    p = rows[0] if rows else None
+                    if p: poll_priority(p)
+                    self._send_json({'ok': True, 'priority': p})
+                elif op == 'delete':
+                    sb_rest('DELETE', 'priorities?id=eq.%s' % pid)
+                    self._send_json({'ok': True})
+                else:   # seen
+                    sb_rest('PATCH', 'priority_items?priority_id=eq.%s&seen=eq.false' % pid, {'seen': True})
+                    self._send_json({'ok': True})
+            else:
+                self._send_json({'error': 'bad_op'}, 400)
+        except Exception as e:
+            self._send_json({'error': type(e).__name__}, 500)
 
     def _handle_portal(self):
         if not STRIPE_SECRET_KEY:
@@ -1318,6 +1467,14 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json(build_article(url, title, source))
             except Exception as e:
                 self._send_json({'error': str(e)}, 500)
+        elif self.path.startswith('/priorities'):
+            uid = member_id_from_request(self)
+            if not uid:
+                self._send_json({'error': 'forbidden', 'member': False}, 403); return
+            try:
+                self._send_json({'member': True, 'max': MAX_PRIORITIES, 'priorities': get_priorities(uid)})
+            except Exception as e:
+                self._send_json({'error': str(e)}, 500)
         else:
             base = urllib.parse.urlparse(self.path).path
             if base in ('/', ''):
@@ -1341,5 +1498,6 @@ class Handler(SimpleHTTPRequestHandler):
 if __name__ == '__main__':
     import threading
     threading.Thread(target=prewarm, daemon=True).start()
+    threading.Thread(target=priorities_loop, daemon=True).start()
     print('QUWWAA server on http://%s:%d (news lens active, prewarming home)' % (HOST, PORT))
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

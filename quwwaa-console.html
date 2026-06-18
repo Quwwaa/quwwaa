@@ -293,7 +293,7 @@
   #qart { position:fixed; inset:0; z-index:45; display:none; flex-direction:column;
           background:linear-gradient(180deg,#181410,#0e0b08); }
   #qart.open { display:flex; animation:lensIn .25s ease; }
-  .qartbar { flex:none; padding:calc(10px + env(safe-area-inset-top)) 16px 8px; }
+  .qartbar { flex:none; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:calc(10px + env(safe-area-inset-top)) 16px 8px; }
   .qartback { background:none; border:1px solid rgba(217,128,38,.4); color:#ffce9a; border-radius:8px;
               padding:7px 14px; font:inherit; font-size:13px; cursor:pointer; }
   .qartback:hover { background:rgba(217,128,38,.14); }
@@ -955,7 +955,8 @@
     if(artEl) return artEl;
     artEl=document.createElement('div'); artEl.id='qart';
     artEl.innerHTML =
-      '<div class="qartbar"><button class="qartback" aria-label="Back">‹ Back</button></div>'
+      '<div class="qartbar"><button class="qartback" aria-label="Back">‹ Back</button>'
+      +'<button class="qarttrack" style="display:none">★ Track as Priority</button></div>'
       +'<div class="qartscroll"><div class="qartinner">'
       +'<div class="qarthero"></div><div class="qartlabel"></div><h1 class="qarttitle"></h1>'
       +'<div class="qartmeta"></div>'
@@ -1021,6 +1022,9 @@
     artEl.querySelector('.qarttitle').textContent = x.title||'';
     artEl.querySelector('.qartmeta').textContent = (x.source||'')+(x.time?' · '+x.time:'');
     artEl.querySelector('.qarttabs').style.display='';
+    const tb=artEl.querySelector('.qarttrack');
+    tb.style.display = isMemberNow() ? '' : 'none';     // Track is a Gold feature
+    tb.onclick = ()=>{ if(window.QUWWAA_trackPriority) window.QUWWAA_trackPriority(curArt); };
     const sc=artEl.querySelector('.qartscroll'); if(sc) sc.scrollTop=0;
     artEl.classList.add('open');
 
@@ -2040,7 +2044,6 @@
    are hidden in CSS.
    ============================================================================ */
 (function(){
-  const DAILY_RUMBLE_URL = 'https://www.facebook.com/mike.dean.801079';   // single config constant
   const $=id=>document.getElementById(id);
   const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const click=id=>{ const e=$(id); if(e) e.click(); };
@@ -2101,13 +2104,45 @@
     +'.pemail{display:flex;gap:8px;margin-top:10px;}.pemail input{flex:1;padding:13px;font:inherit;font-size:15px;color:#ffe2d1;background:rgba(60,40,25,.35);border:1px solid rgba(217,128,38,.32);border-radius:10px;outline:none;}'
     +'.pemail button{background:rgba(217,128,38,.16);border:1px solid rgba(217,128,38,.5);color:#ffce9a;border-radius:10px;padding:0 16px;font:inherit;cursor:pointer;}'
     +'.ptoggle{display:flex;justify-content:space-between;align-items:center;}'
-    +'body.bright .prow{color:#3a2c1e;}body.bright #qprofile h2{color:#5a3a18;}body.bright #qprofile .psub{color:#7a5a3a;}';
+    +'body.bright .prow{color:#3a2c1e;}body.bright #qprofile h2{color:#5a3a18;}body.bright #qprofile .psub{color:#7a5a3a;}'
+    /* priority tab + new-info cue */
+    +'#tabbar .tab{position:relative;}'
+    +'#tabbar .tab .tabdot{position:absolute;top:5px;right:14px;width:8px;height:8px;border-radius:50%;background:#ff6a3d;box-shadow:0 0 8px rgba(255,106,61,.85);display:none;}'
+    +'#tabbar .tab.hasnew .tabdot{display:block;}'
+    +'#tabbar .tab.hasnew{animation:tabbounce 2.6s ease-in-out infinite;}'
+    +'@keyframes tabbounce{0%,80%,100%{transform:translateY(0);}87%{transform:translateY(-5px);}93%{transform:translateY(-2px);}}'
+    +'#qpriority{display:none;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px 22px 140px;}'
+    +'body.view-priority #qpriority{display:block;}'
+    +'body.view-priority #reactorWrap,body.view-priority #log{display:none !important;}'
+    +'.prwrap{max-width:600px;margin:0 auto;}'
+    +'#qpriority h2{font-family:var(--font-serif);text-align:center;color:#ffe6cf;font-size:24px;font-weight:500;margin:18px 0 6px;}'
+    +'#qpriority .psub{text-align:center;color:#cba98f;font-size:14px;margin-bottom:18px;}'
+    +'.prtrackhead{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid rgba(217,128,38,.32);border-radius:12px;padding:14px 16px;background:rgba(217,128,38,.06);}'
+    +'.prtracklabel{font-family:var(--font-serif);font-size:18px;color:#ffe6cf;line-height:1.2;}'
+    +'.prtrackq{font-size:12px;color:#a06a3a;margin-top:3px;}'
+    +'.prminibtn{flex:none;background:none;border:1px solid rgba(217,128,38,.45);color:#ffce9a;border-radius:8px;padding:7px 11px;font:inherit;font-size:12px;cursor:pointer;}'
+    +'.prminibtn:hover{background:rgba(217,128,38,.14);}'
+    +'.prrow{display:flex;gap:8px;margin:10px 0 6px;}'
+    +'.pritem{display:block;text-align:left;width:100%;background:none;border:none;border-bottom:1px solid rgba(217,128,38,.16);padding:14px 2px;cursor:pointer;}'
+    +'.prititle{color:#ffe9d6;font:inherit;font-size:15px;line-height:1.35;}'
+    +'.pritem .prmeta{color:#a06a3a;font-size:11px;margin-top:5px;}'
+    +'.prnew{display:inline-block;font-size:9px;font-weight:700;color:#1c1206;background:#ff8a4d;border-radius:4px;padding:1px 5px;margin-right:7px;vertical-align:middle;}'
+    +'.prempty{color:#cba98f;font-size:14px;line-height:1.6;text-align:center;padding:16px 0 0;}'
+    +'.prfield{width:100%;padding:13px;font:inherit;font-size:15px;color:#ffe2d1;background:rgba(60,40,25,.35);border:1px solid rgba(217,128,38,.32);border-radius:10px;outline:none;margin-top:10px;}'
+    +'.prcreate{display:block;width:100%;margin-top:12px;background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border:none;border-radius:12px;padding:13px;font:inherit;font-weight:700;font-size:15px;cursor:pointer;}'
+    +'.prcreate:hover{filter:brightness(1.07);}'
+    +'.prpaycard{text-align:center;border:1px solid rgba(217,128,38,.4);border-radius:16px;padding:26px 22px;background:linear-gradient(180deg,rgba(40,28,18,.5),rgba(18,13,9,.92));margin-top:14px;}'
+    +'.prpaycard h3{font-family:var(--font-serif);color:#ffd9c4;font-size:21px;margin:0 0 10px;}'
+    +'.prpaycard p{color:#e7c4a6;font-size:14px;line-height:1.55;margin:0 auto 16px;max-width:440px;}'
+    +'.qarttrack{background:rgba(217,128,38,.16);border:1px solid rgba(217,128,38,.5);color:#ffce9a;border-radius:8px;padding:7px 13px;font:inherit;font-size:13px;cursor:pointer;}'
+    +'.qarttrack:hover{background:rgba(217,128,38,.28);}'
+    +'body.bright #qpriority h2,body.bright .prtracklabel,body.bright .prititle{color:#2a1c0e;}body.bright .prpaycard h3{color:#5a3a18;}';
   document.head.appendChild(st);
 
   // ---- inline icons ----
   const I = {
     brief:'<svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>',
-    rumble:'<svg viewBox="0 0 24 24"><path d="M12 3c2 3 4 4 4 8a4 4 0 0 1-8 0c0-2 1-3 2-4 .5 2 2 2 2 4"/></svg>',
+    priority:'<svg viewBox="0 0 24 24"><path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>',
     profile:'<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>',
     person:'<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>'
   };
@@ -2122,7 +2157,7 @@
   const bar=document.createElement('div'); bar.id='tabbar';
   bar.innerHTML=
     '<button class="tab" data-tab="brief">'+I.brief+'<span>News Brief</span></button>'
-    +'<button class="tab" data-tab="rumble">'+I.rumble+'<span>Daily Rumble</span></button>'
+    +'<button class="tab" data-tab="priority">'+I.priority+'<span>Priority</span><i class="tabdot"></i></button>'
     +'<button class="tab" data-tab="profile">'+I.profile+'<span>Profile</span></button>';
   // dock the pill + orb together so the whole assembly is centred (pill sits just
   // left of true centre, orb to its right) — symmetric rather than shifted right.
@@ -2138,10 +2173,11 @@
   }
   function setTab(name){
     if(window.QUWWAA_closeArticle) window.QUWWAA_closeArticle();   // leave any open article view
-    if(name==='rumble'){ toast('Opening Daily Rumble…'); window.open(DAILY_RUMBLE_URL,'_blank','noopener'); setActive(tab); return; }
     tab=name; setActive(name);
     document.body.classList.toggle('view-profile', name==='profile');
+    document.body.classList.toggle('view-priority', name==='priority');
     if(name==='profile') renderProfile();
+    if(name==='priority') openPriority();
   }
   bar.querySelectorAll('.tab').forEach(b=> b.onclick=()=>setTab(b.getAttribute('data-tab')) );
   setActive('brief');
@@ -2198,8 +2234,101 @@
     if(a==='a2hs'){ if(window.QUWWAA_addToHome) window.QUWWAA_addToHome(); return; }
     if(a==='theme'){ click('briteBtn'); renderProfile(); return; }  // reuse the existing theme toggle
   }
-  // keep Profile fresh as auth state changes
-  document.addEventListener('qp:auth', function(){ if(tab==='profile') renderProfile(); });
+  // ---- Priority tab (Gold-only story tracker) ----
+  const prio=document.createElement('div'); prio.id='qpriority'; document.body.appendChild(prio);
+  let prState={member:false, list:[], max:1};
+  function prTabBtn(){ return bar.querySelector('.tab[data-tab="priority"]'); }
+  function prToken(){ try{ return (window.QP && QP.token) || null; }catch(e){ return null; } }
+  function prMember(){ try{ return !!(window.QP && QP.isMember && QP.isMember()); }catch(e){ return false; } }
+  function unseenTotal(){ return (prState.list||[]).reduce((n,p)=>n+(p.unseen||0),0); }
+  function updateCue(){ const b=prTabBtn(); if(b) b.classList.toggle('hasnew', prMember() && tab!=='priority' && unseenTotal()>0); }
+  async function fetchPriorities(){
+    if(!(prMember() && prToken())){ prState={member:false,list:[],max:1}; updateCue(); return prState; }
+    try{ const r=await fetch('/priorities',{headers:{Authorization:'Bearer '+prToken()},cache:'no-store'});
+      if(r.ok){ const d=await r.json(); prState={member:true, list:d.priorities||[], max:d.max||1}; }
+    }catch(e){}
+    updateCue(); return prState;
+  }
+  async function prPost(body){
+    if(!prToken()) return null;
+    try{ const r=await fetch('/priorities',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+prToken()},body:JSON.stringify(body)});
+      return await r.json().catch(()=>({})); }catch(e){ return null; }
+  }
+  function prKeyTerms(t){ return (t||'').replace(/[^A-Za-z0-9' ]/g,' ').split(/\s+/).filter(w=>w.length>2).slice(0,6).join(' ') || (t||''); }
+
+  function renderPriorityUpgrade(){
+    prio.innerHTML='<div class="prwrap"><h2>Priority</h2><div class="prpaycard"><div class="qpaydot"></div>'
+      +'<h3>A QUWWAA Gold feature</h3>'
+      +'<p>Tag a single story or subject and I’ll track it as it evolves, surfacing every new development for you.</p>'
+      +'<button class="prcreate" data-pr="trial">Start your 7-day free trial</button></div></div>';
+    prio.querySelector('[data-pr="trial"]').onclick=()=>{ try{ (QP.openOnboarding||QP.openAuth||function(){})(); }catch(e){} };
+  }
+  function renderPriority(){
+    const p=(prState.list||[])[0];
+    let h='<div class="prwrap"><h2>Priority</h2>';
+    if(!p){
+      h+='<div class="psub">Track one story or subject. I’ll follow it and surface new coverage twice a day.</div>'
+        +'<input class="prfield" id="prNew" placeholder="e.g. Tokyo earthquake" maxlength="120">'
+        +'<button class="prcreate" data-pr="create">Track this subject</button>'
+        +'<div class="prempty">Tip: open any story and tap <b>★ Track as Priority</b>.</div></div>';
+      prio.innerHTML=h;
+      prio.querySelector('[data-pr="create"]').onclick=()=>{ const v=(prio.querySelector('#prNew').value||'').trim(); if(v) createPriority(v); };
+      return;
+    }
+    h+='<div class="prtrackhead"><div style="min-width:0"><div class="prtracklabel">'+esc(p.label||p.query||'')+'</div>'
+      +'<div class="prtrackq">Tracking · checked twice a day</div></div>'
+      +'<button class="prminibtn" data-pr="change">Change</button></div>'
+      +'<div class="prrow"><button class="prminibtn" data-pr="stop">Stop tracking</button></div>';
+    const items=p.items||[];
+    if(!items.length){ h+='<div class="prempty">I’m watching this for you, sir. New coverage will appear here as it breaks.</div>'; }
+    else { items.forEach((it,i)=>{ h+='<button class="pritem" data-i="'+i+'"><div class="prititle">'
+        +(it.seen?'':'<span class="prnew">NEW</span>')+esc(it.title||'')+'</div>'
+        +'<div class="prmeta">'+esc(it.source||'')+'</div></button>'; }); }
+    h+='</div>'; prio.innerHTML=h;
+    prio.querySelector('[data-pr="change"]').onclick=()=>{ const v=window.prompt('Change your tracked subject to:', p.label||p.query||''); if(v&&v.trim()) changePriority(p.id, v.trim()); };
+    prio.querySelector('[data-pr="stop"]').onclick=()=>{ if(window.confirm('Stop tracking this subject?')) stopPriority(p.id); };
+    prio.querySelectorAll('.pritem').forEach(b=> b.onclick=()=>{ const it=items[+b.getAttribute('data-i')];
+      if(it && window.QUWWAA_openArticle) window.QUWWAA_openArticle({title:it.title, url:it.url, source:it.source, label:'Priority'}); });
+  }
+  async function openPriority(){
+    if(!prMember()){ renderPriorityUpgrade(); return; }
+    prio.innerHTML='<div class="prwrap"><div class="prempty">Loading your priority…</div></div>';
+    await fetchPriorities(); renderPriority();
+    const p=(prState.list||[])[0];
+    if(p && p.unseen>0){ prPost({op:'seen', id:p.id}); }   // viewing clears the cue
+    const b=prTabBtn(); if(b) b.classList.remove('hasnew');
+  }
+  async function createPriority(label){
+    const d=await prPost({op:'create', label:label.slice(0,120), query:prKeyTerms(label)});
+    if(d && d.error==='cap'){ toast('You can track one subject — use Change to swap it.'); return; }
+    toast('Now tracking: '+label); await fetchPriorities(); if(tab==='priority') renderPriority();
+  }
+  async function changePriority(id, label){
+    await prPost({op:'change', id:id, label:label.slice(0,120), query:prKeyTerms(label)});
+    toast('Now tracking: '+label); await fetchPriorities(); if(tab==='priority') renderPriority();
+  }
+  async function stopPriority(id){ await prPost({op:'delete', id:id}); await fetchPriorities(); renderPriority(); updateCue(); }
+
+  // Track-as-Priority from the article view (members only; cap=1 → swap if exists)
+  window.QUWWAA_trackPriority = async function(article){
+    if(!prMember()){ try{ (QP.openOnboarding||QP.openAuth||function(){})(); }catch(e){} return; }
+    if(!article || !(article.title||article.url)) return;
+    const label=(article.title||'').slice(0,120);
+    await fetchPriorities();
+    const cur=(prState.list||[])[0];
+    if(cur){ if(!window.confirm('Replace your current priority “'+(cur.label||cur.query||'')+'” with “'+label+'”?')) return; await changePriority(cur.id, label); }
+    else { await createPriority(label); }
+    if(window.QUWWAA_closeArticle) window.QUWWAA_closeArticle();
+    setTab('priority');
+  };
+  window.QUWWAA_refreshPriority = fetchPriorities;
+  setInterval(()=>{ if(prMember()) fetchPriorities(); }, 300000);   // refresh the cue every 5 min
+
+  // keep Profile/Priority fresh as auth state changes
+  document.addEventListener('qp:auth', function(){
+    if(tab==='profile') renderProfile();
+    fetchPriorities().then(()=>{ if(tab==='priority') openPriority(); });
+  });
 })();
 </script>
 </body>
