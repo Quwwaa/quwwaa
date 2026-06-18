@@ -43,6 +43,20 @@ TTS_INSTRUCTIONS = os.environ.get('TTS_INSTRUCTIONS',
     'Pacing: measured and unhurried. Pronunciation: crisp British English.')
 SPEAK_RATE_PER_MIN = int(os.environ.get('SPEAK_RATE_PER_MIN', '20'))  # lenient, separate bucket
 
+# --- Premium membership (Supabase auth/profiles + Stripe billing) -----------
+# Everything read from the environment; never hardcoded. Only the PUBLIC values
+# are exposed to the page via GET /config — secret keys stay server-side. When
+# these are unset (e.g. the local sandbox) premium is simply disabled and the
+# free experience is untouched.
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
+SUPABASE_ANON_KEY = os.environ.get('SUPABASE_ANON_KEY', '')
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')   # secret — bypasses RLS
+STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '')                   # secret
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')           # secret
+STRIPE_PRICE_ID = os.environ.get('STRIPE_PRICE_ID', '')
+STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
+PREMIUM_ENABLED = bool(SUPABASE_URL and SUPABASE_ANON_KEY and STRIPE_PUBLISHABLE_KEY)
+
 def fetch(url, timeout=8):
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -855,7 +869,13 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path in ('/health', '/healthz'):
             self._send_json({'ok': True, 'service': 'quwwaa', 'brain': bool(ANTHROPIC_API_KEY),
-                             'stt': bool(OPENAI_API_KEY), 'tts': bool(OPENAI_API_KEY)})
+                             'stt': bool(OPENAI_API_KEY), 'tts': bool(OPENAI_API_KEY),
+                             'premium': PREMIUM_ENABLED})
+        elif self.path.startswith('/config'):
+            # public config only — the page boots Supabase + Stripe.js from these
+            self._send_json({'supabaseUrl': SUPABASE_URL, 'supabaseAnonKey': SUPABASE_ANON_KEY,
+                             'stripePublishableKey': STRIPE_PUBLISHABLE_KEY, 'priceId': STRIPE_PRICE_ID,
+                             'premium': PREMIUM_ENABLED})
         elif self.path.startswith('/home'):
             self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
         elif self.path.startswith('/brief'):
