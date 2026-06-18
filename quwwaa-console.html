@@ -1548,5 +1548,28 @@
   });
 })();
 </script>
+<script>
+/* ============================================================================
+   QUWWAA Premium — Phase C: Stripe Checkout hand-off.
+   Card data never touches our page — we redirect to Stripe's hosted Checkout.
+   ============================================================================ */
+(function(){
+  const QP = window.QP = window.QP || {};
+  QP.startCheckout = async function(opts){
+    opts = opts || {};
+    const email = opts.email || (QP.user && QP.user.email) || '';
+    const userId = opts.userId || (QP.user && QP.user.id) || '';
+    const fail = (t)=>{ const m=document.getElementById('qpOnbMsg'); if(m) m.textContent=t;
+      const b=document.getElementById('qpNext'); if(b){ b.disabled=false; b.textContent='Create account →'; } };
+    try{
+      const r = await fetch('/create-checkout-session', {method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ email, userId })});
+      const d = await r.json().catch(()=>({}));
+      if(r.ok && d && d.url){ window.location.assign(d.url); return; }   // -> Stripe hosted page
+      fail(d && d.error==='stripe_not_configured' ? 'Membership isn’t available just yet.' : 'Could not start checkout — please try again.');
+    }catch(e){ fail('Could not start checkout — please check your connection.'); }
+  };
+})();
+</script>
 </body>
 </html>

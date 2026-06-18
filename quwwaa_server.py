@@ -55,6 +55,7 @@ STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '')                   # 
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')           # secret
 STRIPE_PRICE_ID = os.environ.get('STRIPE_PRICE_ID', '')
 STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
+SITE_URL = os.environ.get('SITE_URL', 'https://quwwaa.com').rstrip('/')   # for Checkout success/cancel
 PREMIUM_ENABLED = bool(SUPABASE_URL and SUPABASE_ANON_KEY and STRIPE_PUBLISHABLE_KEY)
 
 def fetch(url, timeout=8):
@@ -746,6 +747,58 @@ def speak_rate_check(ip):
         return True
 
 
+# --- Stripe + Supabase REST (premium billing) -------------------------------
+# stdlib only: Stripe via form-encoded urllib POST, webhook verified with hmac.
+import hmac, hashlib
+
+def stripe_post(path, fields):
+    """POST application/x-www-form-urlencoded to the Stripe API. `fields` is a
+    list of (key, value) tuples using Stripe's bracket notation for nesting."""
+    data = urllib.parse.urlencode(fields).encode()
+    req = urllib.request.Request('https://api.stripe.com/v1/' + path, data=data, headers={
+        'Authorization': 'Bearer ' + STRIPE_SECRET_KEY,
+        'Content-Type': 'application/x-www-form-urlencoded'})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+
+def stripe_verify(payload_bytes, sig_header):
+    """Verify a Stripe webhook signature (Stripe-Signature: t=...,v1=...)."""
+    if not (STRIPE_WEBHOOK_SECRET and sig_header):
+        return False
+    parts = dict(p.split('=', 1) for p in sig_header.split(',') if '=' in p)
+    t, v1 = parts.get('t'), parts.get('v1')
+    if not (t and v1):
+        return False
+    expected = hmac.new(STRIPE_WEBHOOK_SECRET.encode(), (t + '.').encode() + payload_bytes,
+                        hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, v1)
+
+def supabase_patch_profile(match, fields):
+    """PATCH public.profiles via Supabase REST with the service-role key (bypasses
+    RLS). `match` is a (column, value) filter, e.g. ('id', uid)."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
+        return False
+    col, val = match
+    url = SUPABASE_URL + '/rest/v1/profiles?' + urllib.parse.urlencode({col: 'eq.' + str(val)})
+    req = urllib.request.Request(url, data=json.dumps(fields).encode(), method='PATCH', headers={
+        'apikey': SUPABASE_SERVICE_ROLE_KEY, 'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY,
+        'Content-Type': 'application/json', 'Prefer': 'return=minimal'})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return 200 <= r.status < 300
+
+def supabase_get_status(user_id):
+    """Look up a member's subscription_status by id (service role)."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and user_id):
+        return None
+    url = SUPABASE_URL + '/rest/v1/profiles?' + urllib.parse.urlencode(
+        {'id': 'eq.' + str(user_id), 'select': 'subscription_status,display_name,interests,address_style'})
+    req = urllib.request.Request(url, headers={
+        'apikey': SUPABASE_SERVICE_ROLE_KEY, 'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        rows = json.loads(r.read())
+    return rows[0] if rows else None
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=os.path.dirname(os.path.abspath(__file__)), **kw)
@@ -781,7 +834,46 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_transcribe()
         if self.path.startswith('/speak'):
             return self._handle_speak()
+        if self.path.startswith('/create-checkout-session'):
+            return self._handle_checkout()
         self.send_error(404)
+
+    def _read_json(self):
+        length = int(self.headers.get('Content-Length', '0') or '0')
+        raw = self.rfile.read(length) if length else b'{}'
+        try: return json.loads(raw or b'{}')
+        except Exception: return {}
+
+    def _handle_checkout(self):
+        if not (STRIPE_SECRET_KEY and STRIPE_PRICE_ID):
+            self._send_json({'error': 'stripe_not_configured'}, 503); return
+        try:
+            d = self._read_json()
+            email = (d.get('email') or '').strip()
+            user_id = (d.get('userId') or '').strip()
+            fields = [
+                ('mode', 'subscription'),
+                ('line_items[0][price]', STRIPE_PRICE_ID),
+                ('line_items[0][quantity]', '1'),
+                ('subscription_data[trial_period_days]', '7'),
+                ('success_url', SITE_URL + '/?welcome=1'),
+                ('cancel_url', SITE_URL + '/?canceled=1'),
+                ('allow_promotion_codes', 'true'),
+            ]
+            if email:
+                fields.append(('customer_email', email))
+            if user_id:
+                fields.append(('client_reference_id', user_id))
+                fields.append(('subscription_data[metadata][supabase_user_id]', user_id))
+            sess = stripe_post('checkout/sessions', fields)
+            self._send_json({'url': sess.get('url')})
+        except urllib.error.HTTPError as e:
+            detail = ''
+            try: detail = e.read().decode('utf-8', 'ignore')[:200]
+            except Exception: pass
+            self._send_json({'error': 'stripe_%d' % e.code, 'detail': detail}, 502)
+        except Exception as e:
+            self._send_json({'error': type(e).__name__}, 500)
 
     def _handle_speak(self):
         if not OPENAI_API_KEY:
