@@ -901,6 +901,22 @@
     busy=true;
     addMsg('user', text);
     mode('thinking'); setStatus('PROCESSING');
+    // Bug 3: a member asking to be addressed differently updates their profile so it
+    // sticks (the server reads display_name from the profile on the next /ask).
+    try{
+      if(window.QP && QP.isMember && QP.isMember() && QP.user && QP.sb){
+        const rn = text.match(/\b(?:call me|refer to me as|address me as|you can call me|please call me|my name is)\s+([A-Za-z][\w.'’-]*(?:\s+[A-Za-z][\w.'’-]*){0,3})/i);
+        if(rn){
+          const nm = rn[1].replace(/[.,!?;:]+$/,'').trim();
+          const first = (nm.split(/\s+/)[0]||'');
+          const FILLER = /^(when|back|later|if|you|me|us|now|today|tomorrow|tonight|please|soon|again|about|after|before|once|the|a|an)$/i;
+          if(nm && /^[A-Z]/.test(nm) && !FILLER.test(first)){   // looks like an actual name/title
+            try{ await QP.sb.from('profiles').update({display_name:nm, address_style:'name'}).eq('id', QP.user.id); }catch(e){}
+            try{ await QP.loadProfile(); QP.render(); }catch(e){}
+          }
+        }
+      }
+    }catch(e){}
     let reply;
     try{ reply = await ask(); }
     catch(e){ reply = "I'm afraid the uplink failed, sir"+(e&&e.message?': '+e.message:'.'); }
@@ -944,6 +960,9 @@
       "{hi}, sir. Much afoot in {topic} this hour. Say the word and I shall lay it out."
     ];
     let text = null, spoken = false;
+    // If membership is confirmed before the greeting is spoken (e.g. returning from
+    // checkout), drop the cached text so it rebuilds with the member's name.
+    document.addEventListener('qp:auth', function(){ if(!spoken) text = null; });
     function build(){
       // Members get greeted by name, tuned to their interests. Free users unchanged.
       try{
@@ -1593,17 +1612,23 @@
       const { data, error } = await QP.sb.auth.signUp({ email:S.email, password:S.password,
         options:{ data:{ first_name:S.first_name, last_name:S.last_name } } });
       if(error){ msg(error.message); btn.disabled=false; btn.textContent='Create account →'; return; }
-      const user = data.user;
-      // Save the profile now if we have a session; otherwise stash it to sync on first sign-in.
-      if(data.session){
-        QP.user=user;
-        try{ await QP.sb.from('profiles').update(profileFields).eq('id', user.id); }catch(e){}
+      let user = data.user, session = data.session;
+      // No session (email-confirmation flows): try to sign in so member state works
+      // immediately on return; if that fails, we still persist server-side at checkout.
+      if(!session){
+        try{ const r = await QP.sb.auth.signInWithPassword({ email:S.email, password:S.password });
+          if(r && r.data && r.data.session){ session = r.data.session; user = r.data.user; } }catch(e){}
+      }
+      if(session){
+        QP.user=user; QP.token=session.access_token;
+        try{ await QP.sb.from('profiles').upsert(Object.assign({id:user.id}, profileFields)); }catch(e){}  // upsert dodges the trigger race
         try{ await QP.loadProfile(); QP.render(); }catch(e){}
       } else {
         try{ localStorage.setItem('qp_pending_profile', JSON.stringify(profileFields)); }catch(e){}
       }
-      // Hand off to Stripe Checkout (Phase C).
-      if(QP.startCheckout){ await QP.startCheckout({ email:S.email, userId:user?user.id:null }); }
+      // Hand off to Stripe Checkout (Phase C). Pass the profile so the server persists
+      // it via the service role even if the client never got a session.
+      if(QP.startCheckout){ await QP.startCheckout({ email:S.email, userId:user?user.id:null, profile:profileFields }); }
       else { msg('Account created. Checkout is being set up — you can subscribe shortly.'); btn.disabled=false; btn.textContent='Done'; }
     }catch(err){ msg('Something went wrong. Please try again.'); btn.disabled=false; btn.textContent='Create account →'; }
   }
@@ -1616,7 +1641,7 @@
     if(!QP.sb || !QP.user) return;
     let pend; try{ pend=JSON.parse(localStorage.getItem('qp_pending_profile')||'null'); }catch(e){ pend=null; }
     if(!pend) return;
-    try{ await QP.sb.from('profiles').update(pend).eq('id', QP.user.id); localStorage.removeItem('qp_pending_profile'); await QP.loadProfile(); QP.render(); }catch(e){}
+    try{ await QP.sb.from('profiles').upsert(Object.assign({id:QP.user.id}, pend)); localStorage.removeItem('qp_pending_profile'); await QP.loadProfile(); QP.render(); }catch(e){}
   });
 })();
 </script>
@@ -1635,7 +1660,7 @@
       const b=document.getElementById('qpNext'); if(b){ b.disabled=false; b.textContent='Create account →'; } };
     try{
       const r = await fetch('/create-checkout-session', {method:'POST', headers:{'content-type':'application/json'},
-        body: JSON.stringify({ email, userId })});
+        body: JSON.stringify({ email, userId, profile: opts.profile || null })});
       const d = await r.json().catch(()=>({}));
       if(r.ok && d && d.url){ window.location.assign(d.url); return; }   // -> Stripe hosted page
       fail(d && d.error==='stripe_not_configured' ? 'Membership isn’t available just yet.' : 'Could not start checkout — please try again.');

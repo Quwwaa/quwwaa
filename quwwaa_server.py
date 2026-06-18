@@ -791,6 +791,41 @@ def supabase_patch_profile(match, fields):
     with urllib.request.urlopen(req, timeout=20) as r:
         return 200 <= r.status < 300
 
+def supabase_upsert_profile(user_id, fields):
+    """Insert-or-merge a profiles row by id with the service-role key. Robust
+    against the new-user trigger race and works without a client session/RLS —
+    used to persist onboarding answers at checkout time."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and user_id):
+        return False
+    body = dict(fields); body['id'] = user_id
+    req = urllib.request.Request(SUPABASE_URL + '/rest/v1/profiles', data=json.dumps(body).encode(),
+        method='POST', headers={
+            'apikey': SUPABASE_SERVICE_ROLE_KEY, 'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY,
+            'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal'})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return 200 <= r.status < 300
+
+# onboarding fields the client may persist (allow-list — never trust arbitrary keys)
+PROFILE_FIELDS = ('first_name', 'last_name', 'display_name', 'address_style', 'interests', 'city', 'state', 'country')
+
+def clean_profile(p):
+    if not isinstance(p, dict):
+        return {}
+    out = {}
+    for k in PROFILE_FIELDS:
+        if k not in p:
+            continue
+        v = p[k]
+        if k == 'interests':
+            if isinstance(v, list):
+                out[k] = [str(x)[:60] for x in v][:40]
+        elif k == 'address_style':
+            if v in ('sir', 'madam', 'name'):
+                out[k] = v
+        elif isinstance(v, str):
+            out[k] = v[:200]
+    return out
+
 def supabase_get_status(user_id):
     """Look up a member's subscription_status by id (service role)."""
     if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and user_id):
@@ -921,6 +956,14 @@ class Handler(SimpleHTTPRequestHandler):
             d = self._read_json()
             email = (d.get('email') or '').strip()
             user_id = (d.get('userId') or '').strip()
+            # Persist the onboarding answers server-side (service role) so they land
+            # even when the client has no session yet (email-confirmation flows).
+            if user_id:
+                prof = clean_profile(d.get('profile'))
+                if prof:
+                    prof['updated_at'] = datetime.now(timezone.utc).isoformat()
+                    try: supabase_upsert_profile(user_id, prof)
+                    except Exception: pass
             fields = [
                 ('mode', 'subscription'),
                 ('line_items[0][price]', STRIPE_PRICE_ID),

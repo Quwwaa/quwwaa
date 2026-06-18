@@ -5,7 +5,7 @@
      - static assets (icons, manifest) -> cache-first (fast, offline-friendly)
      - the page / HTML -> network-first, falling back to cache only when offline
    Bump CACHE on any shell change to retire old caches. */
-const CACHE = 'quwwaa-v21';
+const CACHE = 'quwwaa-v22';
 const SHELL = ['/', '/quwwaa-console.html', '/manifest.json',
                '/icon-192.png', '/icon-512.png', '/icon-180.png'];
 
