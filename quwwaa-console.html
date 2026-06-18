@@ -920,7 +920,9 @@
     if(!text || busy) return;
     const direct = text.match(/^lens[:\s]+(?:(\d+)d\s+)?(.+)/i);
     if(direct){ openLens(direct[2].trim(), direct[1]); return; }
-    exitHome();
+    // Stay on the home board — the butler's reply lives in the caption bar, not a
+    // separate chat page. (We keep the message in history for context, but never
+    // leave home, so the old two-column transcript view is gone.)
     busy=true;
     addMsg('user', text);
     mode('thinking'); setStatus('Processing');
