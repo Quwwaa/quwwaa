@@ -56,7 +56,12 @@ STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')           # 
 STRIPE_PRICE_ID = os.environ.get('STRIPE_PRICE_ID', '')
 STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
 SITE_URL = os.environ.get('SITE_URL', 'https://quwwaa.com').rstrip('/')   # for Checkout success/cancel
-PREMIUM_ENABLED = bool(SUPABASE_URL and SUPABASE_ANON_KEY and STRIPE_PUBLISHABLE_KEY)
+# Premium activates only when the WHOLE paid flow is ready — auth (Supabase) +
+# checkout (price + secret key) + status updates (webhook secret + service role).
+# This prevents a half-configured state from showing a premium UI that can't
+# complete. The publishable key isn't required (we use hosted Checkout redirect).
+PREMIUM_ENABLED = bool(SUPABASE_URL and SUPABASE_ANON_KEY and STRIPE_PRICE_ID
+                       and STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET and SUPABASE_SERVICE_ROLE_KEY)
 
 def fetch(url, timeout=8):
     req = urllib.request.Request(url, headers=HEADERS)
