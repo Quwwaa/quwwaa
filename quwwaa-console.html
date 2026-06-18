@@ -13,14 +13,28 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="QUWWAA">
+<!-- Editorial type: serif headlines (Fraunces) + Inter UI, à la interval.news -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { color-scheme: dark; }
-  * { margin:0; padding:0; box-sizing:border-box; }
+  :root {
+    color-scheme: dark;
+    --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+    --tracking-head: -0.025em;
+    --tracking-body: -0.01em;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; font-family:var(--font-sans); letter-spacing:var(--tracking-body); }
   html,body { height:100%; }
   body {
     background:#141414; color:#ffb699;
-    font-family:"Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family:var(--font-sans);
     overflow:hidden; display:flex; flex-direction:column;
+  }
+  /* editorial serif for headlines + the wordmark */
+  h1,h2,h3,.headline,.bhead,.lhead,.hhead,header .title,#greetCap {
+    font-family:var(--font-serif); letter-spacing:var(--tracking-head); text-transform:none;
   }
   body::before {
     content:""; position:fixed; inset:0; pointer-events:none;
@@ -32,9 +46,9 @@
     position:relative; display:flex; align-items:center; justify-content:space-between;
     /* drop below the iPhone status bar in the installed (black-translucent) PWA */
     padding:calc(14px + env(safe-area-inset-top)) 22px 14px; border-bottom:1px solid rgba(217,128,38,.28);
-    font-size:11px; letter-spacing:2px; text-transform:uppercase; color:#d98026;
+    font-size:11px; letter-spacing:0;  color:#d98026;
   }
-  header .title { position:absolute; left:50%; transform:translateX(-50%); font-size:15px; letter-spacing:6px; color:#ffd9c4; text-shadow:0 0 12px rgba(217,128,38,.6); }
+  header .title { position:absolute; left:50%; transform:translateX(-50%); font-size:22px; font-weight:500; letter-spacing:0; text-transform:none; color:#ffd9c4; text-shadow:0 0 12px rgba(217,128,38,.6); }
   header .sub { font-variant-numeric:tabular-nums; }
   #gear, #briteBtn { cursor:pointer; background:none; border:none; color:#d98026; font-size:16px; }
   #gear:hover, #briteBtn:hover { color:#ffd9c4; }
@@ -56,7 +70,7 @@
   body.thinking  #reactor .r3  { animation:spin 1.2s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
   @keyframes pulse { 0%,100%{ transform:scale(1);} 50%{ transform:scale(1.07);} }
-  #status { margin-top:10px; font-size:11px; letter-spacing:3px; text-transform:uppercase; color:#d98026; min-height:14px; }
+  #status { margin-top:10px; font-size:11px; letter-spacing:0;  color:#d98026; min-height:14px; }
   /* log */
   #log { flex:1; overflow-y:auto; padding:14px 22px; display:flex; flex-direction:column; gap:10px;
          scrollbar-width:thin; scrollbar-color:#4a2f15 transparent; }
@@ -65,7 +79,7 @@
               background:rgba(255,255,255,.05); border-right:3px solid rgba(255,255,255,.55); }
   .msg.jarvis { align-self:flex-start; color:#ffc8ab; border:1px solid rgba(217,128,38,.32);
                 background:rgba(217,128,38,.06); border-left:3px solid rgba(217,128,38,.65); }
-  .msg .who { display:block; font-size:9px; letter-spacing:2px; text-transform:uppercase; opacity:.55; margin-bottom:3px; }
+  .msg .who { display:block; font-size:9px; letter-spacing:0;  opacity:.55; margin-bottom:3px; }
   /* controls */
   #controls { display:flex; gap:10px; align-items:center; padding:14px 22px 18px; border-top:1px solid rgba(217,128,38,.28); }
   #micBtn { width:52px; height:52px; border-radius:50%; flex:none; cursor:pointer;
@@ -76,7 +90,7 @@
   #textIn { flex:1; padding:13px 16px; font-size:14px; color:#ffe2d1;
             background:rgba(60,40,25,.30); border:1px solid rgba(217,128,38,.32); border-radius:4px; outline:none; }
   #textIn:focus { border-color:rgba(255,170,90,.65); box-shadow:0 0 10px rgba(217,128,38,.32); }
-  .btn { padding:12px 16px; cursor:pointer; font-size:12px; letter-spacing:1px; text-transform:uppercase;
+  .btn { padding:12px 16px; cursor:pointer; font-size:12px; letter-spacing:0; 
          border:1px solid rgba(217,128,38,.45); background:rgba(217,128,38,.10); color:#ffb27a; border-radius:4px; }
   .btn:hover { background:rgba(217,128,38,.20); }
   .btn.off { opacity:.4; }
@@ -89,14 +103,14 @@
       padding:0 22px 40px; pointer-events:auto; }
   /* brief sections (the board's cards) */
   .bsec { opacity:0; animation:cardPop .5s cubic-bezier(.34,1.56,.64,1) forwards; margin-bottom:26px; }
-  .blabel { font-size:11px; letter-spacing:2.5px; text-transform:uppercase; color:#e08a32;
+  .blabel { font-size:13px; font-weight:600; letter-spacing:0; color:#e08a32;
             margin-bottom:10px; border-bottom:1px solid rgba(217,128,38,.2); padding-bottom:5px; }
   .bthumb { display:block; border-radius:10px; overflow:hidden; margin-bottom:10px; }
   .bthumb img { display:block; width:100%; height:200px; object-fit:cover; }
-  .bhead { display:block; color:#fff3e9; font-size:18px; line-height:1.3; font-weight:600; text-decoration:none; margin-bottom:8px; }
+  .bhead { display:block; color:#fff3e9; font-size:23px; line-height:1.18; font-weight:500; text-decoration:none; margin-bottom:8px; }
   .bhead:hover { color:#fff; text-shadow:0 0 8px rgba(255,170,90,.6); }
   .bsum { color:#d9b49a; font-size:14px; line-height:1.55; margin-bottom:7px; }
-  .bmeta { font-size:11px; color:#a06a3a; text-transform:uppercase; letter-spacing:1px; }
+  .bmeta { font-size:11px; color:#a06a3a;  letter-spacing:0; }
   body.bright .blabel { color:#b35f10; }
   body.bright .bhead { color:#2a1c0e; }
   body.bright .bsum { color:#5a4630; }
@@ -106,13 +120,13 @@
     header { padding:calc(10px + env(safe-area-inset-top)) 12px 10px; gap:6px; }
     /* left-align the title (in normal flow) so the Brief/Subscribe buttons can sit
        on the right without colliding with an absolutely-centred title */
-    header .title { font-size:14px; letter-spacing:4px; position:static; transform:none; left:auto; white-space:nowrap; }
+    header .title { font-size:14px; letter-spacing:0; position:static; transform:none; left:auto; white-space:nowrap; }
     #clock { display:none; }                 /* redundant — the time is in the iOS status bar above */
     .cdate { display:none; }
     #brainState { display:none; }            /* drop the techy status text */
     #voiceToggle, #handsFree { display:none; } /* keep the bottom bar uncluttered */
     /* compact the header CTAs so they fit beside the title */
-    #qsubBtn, #qpBtn { font-size:10px; padding:5px 7px; margin-right:6px; letter-spacing:.4px; }
+    #qsubBtn, #qpBtn { font-size:10px; padding:5px 7px; margin-right:6px; letter-spacing:0; }
     #qpSignIn { font-size:10px; padding:5px 3px; margin-right:6px; }
 
     /* reactor on top (must NOT shrink — its rings/core are absolutely positioned,
@@ -133,7 +147,7 @@
     #lens { top:calc(env(safe-area-inset-top) + 10px); bottom:calc(env(safe-area-inset-bottom) + 10px);
             left:8px; right:8px; }
     #lensHead { padding:12px 12px 12px 16px; gap:10px; }
-    #lensTitle { font-size:12px; letter-spacing:2px; }
+    #lensTitle { font-size:12px; letter-spacing:0; }
     #lensCount { display:none; }
     #lensClose { padding:9px 15px; font-size:14px; }
   }
@@ -147,7 +161,7 @@
     animation:bob 6s ease-in-out infinite alternate;
   }
   @keyframes bob { from{ transform:translateY(-7px); } to{ transform:translateY(7px); } }
-  .hcat { font-size:10px; letter-spacing:3px; color:#ffb27a; cursor:pointer;
+  .hcat { font-size:10px; letter-spacing:0; color:#ffb27a; cursor:pointer;
           text-shadow:0 0 8px rgba(217,128,38,.65); }
   .hcat:hover { color:#fff; }
   .hthumb { margin:0 -14px; overflow:hidden; }
@@ -167,10 +181,10 @@
   @keyframes lensIn { from{ opacity:0; transform:scale(.96);} to{ opacity:1; transform:scale(1);} }
   #lensHead { display:flex; justify-content:space-between; align-items:center; gap:14px;
               padding:16px 22px; border-bottom:1px solid rgba(217,128,38,.30); }
-  #lensTitle { font-size:13px; letter-spacing:3px; text-transform:uppercase; color:#ffd9c4;
+  #lensTitle { font-size:13px; letter-spacing:0;  color:#ffd9c4;
                text-shadow:0 0 10px rgba(217,128,38,.65); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
                min-width:0; }   /* allow it to shrink so CLOSE is never pushed off-screen */
-  #lensCount { font-size:10px; letter-spacing:2px; color:#d98026; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  #lensCount { font-size:10px; letter-spacing:0; color:#d98026; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   #lensClose { flex:none; background:none; border:1px solid rgba(217,128,38,.48); border-radius:6px;
                color:#ffb27a; font-size:14px; padding:4px 10px; cursor:pointer; }
   #lensClose:hover { background:rgba(217,128,38,.18); }
@@ -195,7 +209,7 @@
   .lthumb img { display:block; width:100%; height:130px; object-fit:cover;
                 filter:saturate(1.05) contrast(1.02); }
   .lcard:hover { border-color:rgba(255,170,90,.65); box-shadow:0 0 18px rgba(217,128,38,.32), inset 0 1px 0 rgba(255,255,255,.2); transform:translateY(-1px); }
-  .lsrc { display:flex; align-items:center; gap:8px; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:#e89a5a; }
+  .lsrc { display:flex; align-items:center; gap:8px; font-size:10px; letter-spacing:0;  color:#e89a5a; }
   .lsrc img { width:14px; height:14px; border-radius:3px; }
   .lhead a { color:#fff0e6; font-size:14px; line-height:1.4; text-decoration:none; }
   .lhead a:hover { color:#fff; text-shadow:0 0 8px rgba(255,170,90,.65); }
@@ -207,8 +221,8 @@
     transition:right .25s ease; overflow-y:auto;
   }
   #settings.open { right:0; box-shadow:-20px 0 50px rgba(0,0,0,.6); }
-  #settings h2 { font-size:12px; letter-spacing:3px; color:#ffd9c4; margin-bottom:18px; text-transform:uppercase; }
-  #settings label { display:block; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:#d98026; margin:14px 0 5px; }
+  #settings h2 { font-size:12px; letter-spacing:0; color:#ffd9c4; margin-bottom:18px;  }
+  #settings label { display:block; font-size:10px; letter-spacing:0;  color:#d98026; margin:14px 0 5px; }
   #settings input[type=text], #settings input[type=password] {
     width:100%; padding:10px 12px; font-size:13px; color:#ffe2d1;
     background:rgba(60,40,25,.35); border:1px solid rgba(217,128,38,.32); border-radius:4px; outline:none;
@@ -260,8 +274,8 @@
 <body>
 <header>
   <span class="sub" id="clock">--:--:--</span>
-  <span class="title">QUWWAA</span>
-  <span><span class="sub" id="brainState">BRAIN: OFFLINE</span> &nbsp; <button id="briteBtn" title="Bright mode">☀</button> <button id="gear" title="Settings" style="display:none">⚙</button></span>
+  <span class="title">quwwaa</span>
+  <span><span class="sub" id="brainState">Brain: offline</span> &nbsp; <button id="briteBtn" title="Bright mode">☀</button> <button id="gear" title="Settings" style="display:none">⚙</button></span>
 </header>
 
 <div id="reactorWrap">
@@ -269,7 +283,7 @@
     <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
     <div class="core"></div>
   </div>
-  <div id="status">STANDING BY</div>
+  <div id="status">Standing by</div>
   <div id="homeCards"></div>
 </div>
 
@@ -285,7 +299,7 @@
 
 <div id="lens">
   <div id="lensHead">
-    <span id="lensTitle">NEWS LENS</span>
+    <span id="lensTitle">News Lens</span>
     <span id="lensCount"></span>
     <button id="lensClose">✕ CLOSE</button>
   </div>
@@ -340,10 +354,10 @@
   let elevenInfo = '';
   let serverBrain = false, serverVoice = false;
   function brainState(){
-    const b = (serverBrain || cfg.anthropic) ? 'ONLINE' : 'OFFLINE — ADD KEY ⚙';
-    const v = cfg.eleven ? 'ELEVENLABS' + elevenInfo
-            : (serverVoice ? 'BRITISH' : (britishVoice ? britishVoice.name.toUpperCase() : 'SYSTEM'));
-    $('brainState').textContent = 'BRAIN: ' + b + ' · VOICE: ' + v;
+    const b = (serverBrain || cfg.anthropic) ? 'Online' : 'Offline — add key ⚙';
+    const v = cfg.eleven ? 'ElevenLabs' + elevenInfo
+            : (serverVoice ? 'British' : (britishVoice ? britishVoice.name : 'System'));
+    $('brainState').textContent = 'Brain: ' + b + ' · Voice: ' + v;
   }
   // Probe the server-side brain so the public site reads ONLINE without a local key.
   function showLocalSettings(){           // local sandbox only: expose the gear + key fields
@@ -416,7 +430,7 @@
     const div=document.createElement('div');
     div.className='msg '+(role==='user'?'user':'jarvis');
     const who=document.createElement('span'); who.className='who';
-    who.textContent = role==='user' ? 'MR. DEAN' : 'QUWWAA';
+    who.textContent = role==='user' ? 'Mr. Dean' : 'quwwaa';
     div.appendChild(who); div.appendChild(document.createTextNode(text));
     log.appendChild(div); log.scrollTop=log.scrollHeight;
     if(save){
@@ -522,7 +536,7 @@
     if(currentAudio){ try{ currentAudio.pause(); }catch(e){} currentAudio=null; }
     if(ttsAudio){ try{ ttsAudio.pause(); }catch(e){} }
   }
-  function speakDone(){ mode(''); setStatus('STANDING BY'); if(cfg.handsFree && !busy) startListening(); }
+  function speakDone(){ mode(''); setStatus('Standing by'); if(cfg.handsFree && !busy) startListening(); }
 
   async function speak(text, onAudioStart){
     // onAudioStart (optional) fires the instant playback actually begins — used to
@@ -531,7 +545,7 @@
     const start = ()=>{ if(started) return; started = true; if(onAudioStart){ try{ onAudioStart(); }catch(e){} } };
     if(!voiceOn){ start(); speakDone(); return; }
     stopAudio();
-    mode('speaking'); setStatus('RESPONDING');
+    mode('speaking'); setStatus('Responding');
     if(cfg.eleven){
       try{
         const r = await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+cfg.voiceId, {
@@ -606,12 +620,12 @@
   if(useSR){
     rec = new SR();
     rec.lang='en-US'; rec.interimResults=false; rec.maxAlternatives=1;
-    rec.onstart = ()=>{ listening=true; mode('listening'); setStatus('LISTENING'); };
-    rec.onend   = ()=>{ listening=false; if(document.body.classList.contains('listening')){ mode(''); setStatus('STANDING BY'); } };
+    rec.onstart = ()=>{ listening=true; mode('listening'); setStatus('Listening'); };
+    rec.onend   = ()=>{ listening=false; if(document.body.classList.contains('listening')){ mode(''); setStatus('Standing by'); } };
     rec.onerror = e=>{
       listening=false; mode('');
-      setStatus(e.error==='not-allowed' ? 'MIC DENIED — ALLOW IN BROWSER SETTINGS' :
-                e.error==='no-speech'  ? 'NO SPEECH DETECTED' : 'MIC ERROR: '+e.error);
+      setStatus(e.error==='not-allowed' ? 'Mic denied — allow in browser settings' :
+                e.error==='no-speech'  ? 'No speech detected' : 'Mic error: '+e.error);
     };
     rec.onresult = e=>{ handleInput(e.results[0][0].transcript); };
   }
@@ -629,7 +643,7 @@
     stopAudio();
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({audio:true}); }
-    catch(e){ setStatus('MIC ACCESS DENIED — ALLOW IT TO SPEAK'); return; }
+    catch(e){ setStatus('Mic access denied — allow it to speak'); return; }
     audioChunks = [];
     const mime = pickMime();
     try { mediaRec = mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream); }
@@ -640,29 +654,29 @@
       recording = false;
       const type = (mediaRec && mediaRec.mimeType) || mime || 'audio/webm';
       const blob = new Blob(audioChunks, {type});
-      if(!blob.size){ mode(''); setStatus('STANDING BY'); return; }
-      mode('thinking'); setStatus('TRANSCRIBING');
+      if(!blob.size){ mode(''); setStatus('Standing by'); return; }
+      mode('thinking'); setStatus('Transcribing');
       try {
         const r = await fetch('/transcribe', {method:'POST', headers:{'X-Audio-Type': type.split(';')[0]}, body: blob});
         if(r.ok){
           const d = await r.json();
           const t = (d.text||'').trim();
           mode('');
-          if(t){ handleInput(t); } else { setStatus("DIDN'T CATCH THAT — TAP AND TRY AGAIN"); }
-        } else if(r.status===503){ mode(''); setStatus('VOICE TRANSCRIPTION OFFLINE'); }
-          else if(r.status===429){ mode(''); setStatus('ONE MOMENT, SIR — TOO MANY REQUESTS'); }
-          else { mode(''); setStatus('TRANSCRIBE ERROR ' + r.status); }
-      } catch(e){ mode(''); setStatus('TRANSCRIBE FAILED — CHECK CONNECTION'); }
+          if(t){ handleInput(t); } else { setStatus("Didn't catch that — tap and try again"); }
+        } else if(r.status===503){ mode(''); setStatus('Voice transcription offline'); }
+          else if(r.status===429){ mode(''); setStatus('One moment, sir — too many requests'); }
+          else { mode(''); setStatus('Transcribe error ' + r.status); }
+      } catch(e){ mode(''); setStatus('Transcribe failed — check connection'); }
     };
     mediaRec.start();
-    recording = true; mode('listening'); setStatus('LISTENING — TAP TO STOP');
+    recording = true; mode('listening'); setStatus('Listening — tap to stop');
   }
   function stopRecording(){ if(mediaRec && recording){ try{ mediaRec.stop(); }catch(e){} } }
 
   // Unified mic control — tap the reactor or the mic button
   const voiceSupported = useSR || !!(navigator.mediaDevices && window.MediaRecorder);
   function toggleMic(){
-    if(!voiceSupported){ setStatus('VOICE INPUT UNAVAILABLE — PLEASE TYPE'); if(textIn) textIn.focus(); return; }
+    if(!voiceSupported){ setStatus('Voice input unavailable — please type'); if(textIn) textIn.focus(); return; }
     if(useSR){ listening ? (rec && rec.stop()) : startListening(); }
     else     { recording ? stopRecording() : startRecording(); }
   }
@@ -713,8 +727,8 @@
     const arts = (d.articles || []).slice();
     const diag = d.diag ? ' · ' + Object.entries(d.diag).map(([k,v])=>k+' '+v).join(' / ') : '';
     $('lensCount').textContent = (arts.length
-      ? arts.length + ' REPORTS · ' + d.sources + ' SOURCES · LAST ' + days + ' DAYS'
-      : 'NO REPORTS IN LAST ' + days + ' DAYS') + diag;
+      ? arts.length + ' reports · ' + d.sources + ' sources · last ' + days + ' days'
+      : 'No reports in the last ' + days + ' days') + diag;
     // illustrated reports first, text-only dispatches below — newest first within each
     arts.sort((a, b)=> ((b.image?1:0) - (a.image?1:0)) || ((b.ts||0) - (a.ts||0)));
     const body = $('lensBody');
@@ -740,8 +754,8 @@
   async function openLens(q, days){
     days = Math.max(1, Math.min(365, parseInt(days,10) || 7));
     const reqId = ++lensReq;
-    $('lensTitle').textContent = 'NEWS LENS — ' + q.toUpperCase();
-    $('lensCount').textContent = 'SCANNING GLOBAL SOURCES…';
+    $('lensTitle').textContent = 'News Lens — ' + q;
+    $('lensCount').textContent = 'Scanning global sources…';
     $('lensBody').innerHTML = '';
     lens.classList.add('open');
     let shown = false, best = -1;
@@ -761,7 +775,7 @@
     consider(await fullP, false);
     if(!shown) consider(await fastP, true);          // full failed/empty — fall back to fast
     if(reqId === lensReq && !shown){
-      $('lensCount').textContent = 'NO REPORTS FOUND — TRY DIFFERENT TERMS OR CHECK CONNECTION';
+      $('lensCount').textContent = 'No reports found — try different terms or check your connection';
     }
   }
 
@@ -801,22 +815,22 @@
     let sections = [];
     try{ const d = await fetch('/brief', {cache:'no-store'}).then(r=>r.json()); sections = (d && d.sections) || []; }catch(e){}
     if(!sections.length){
-      if(homeRendered < 0) setStatus('ASSEMBLING TODAY’S BRIEF…');
+      if(homeRendered < 0) setStatus('Assembling today’s brief…');
       if(boardRetries < 8){ boardRetries++; setTimeout(()=>loadHome(true), 4000); }
       return;
     }
     boardRetries = 0; lastBrief = sections;
     const ordered = personalizeSections(sections);
     if(ordered.length !== homeRendered || force){ renderBoardSections(ordered, true); homeRendered = ordered.length; }
-    setStatus('STANDING BY');
+    setStatus('Standing by');
     // Members: prepend Local + National sections built from their location.
     try{ if(window.QP && QP.isMember && QP.isMember() && QP.profile){ addMemberLocal(); } }catch(e){}
   }
   async function addMemberLocal(){
     const p = (window.QP && QP.profile) || {};
     const want = [];
-    if(p.city) want.push({label:'LOCAL · '+p.city.toUpperCase(), q:p.city});
-    if(p.country) want.push({label:'NATIONAL', q:p.country+' national news'});
+    if(p.city) want.push({label:'Local · '+p.city, q:p.city});
+    if(p.country) want.push({label:'National', q:p.country+' national news'});
     if(!want.length) return;
     const got = (await Promise.all(want.map(async w=>{
       try{
@@ -846,7 +860,7 @@
     exitHome();
     busy=true;
     addMsg('user', text);
-    mode('thinking'); setStatus('PROCESSING');
+    mode('thinking'); setStatus('Processing');
     // Bug 3: a member asking to be addressed differently updates their profile so it
     // sticks (the server reads display_name from the profile on the next /ask).
     try{
@@ -1136,14 +1150,14 @@
 
   var css=document.createElement('style');
   css.textContent=
-    '#qsubBtn{cursor:pointer;background:rgba(217,128,38,.14);border:1px solid rgba(217,128,38,.5);color:#ffce9a;font:inherit;font-size:11px;letter-spacing:1px;text-transform:uppercase;padding:5px 10px;border-radius:7px;margin-right:10px;white-space:nowrap;}'
+    '#qsubBtn{cursor:pointer;background:rgba(217,128,38,.14);border:1px solid rgba(217,128,38,.5);color:#ffce9a;font:inherit;font-size:11px;letter-spacing:0;padding:5px 10px;border-radius:7px;margin-right:10px;white-space:nowrap;}'
     +'#qsubBtn:hover{background:rgba(217,128,38,.26);color:#fff;}body.bright #qsubBtn{color:#9a5a12;}'
     +'#qsubOverlay{position:fixed;inset:0;z-index:9998;display:none;align-items:center;justify-content:center;background:rgba(8,6,4,.7);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:18px;}'
     +'#qsubOverlay.open{display:flex;}'
     +'#qsubCard{width:100%;max-width:430px;background:linear-gradient(165deg,#211913,#14100b);border:1px solid rgba(217,128,38,.5);border-radius:16px;padding:26px 24px 22px;color:#ffe9d6;box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 30px rgba(217,128,38,.22);text-align:center;font-family:inherit;animation:qsubUp .3s ease;}'
     +'@keyframes qsubUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}'
     +'#qsubCard .qd{width:42px;height:42px;border-radius:50%;margin:0 auto 12px;background:radial-gradient(circle,#ffe9c9 0%,#f0a23c 45%,#a85f17 100%);box-shadow:0 0 22px 4px rgba(217,128,38,.5);}'
-    +'#qsubCard h2{font-size:19px;letter-spacing:.5px;color:#ffd9b3;margin-bottom:7px;}'
+    +'#qsubCard h2{font-size:19px;letter-spacing:0;color:#ffd9b3;margin-bottom:7px;}'
     +'#qsubCard p{font-size:13.5px;line-height:1.5;color:#e7c4a6;margin-bottom:16px;}'
     +'#qsubForm{display:flex;gap:8px;}'
     +'#qsubEmail{flex:1;min-width:0;padding:12px 13px;font-size:14px;border-radius:9px;color:#fff;background:rgba(20,60,80,.18);border:1px solid rgba(217,128,38,.4);outline:none;}'
@@ -1228,24 +1242,24 @@
     const st=document.createElement('style'); st.id='qpCSS';
     st.textContent =
       '#qpBtn{cursor:pointer;background:linear-gradient(135deg,#D98026,#b35f10);border:none;color:#1a1208;'
-      +'font:inherit;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:6px 12px;'
+      +'font:inherit;font-size:11px;font-weight:700;letter-spacing:0;padding:6px 12px;'
       +'border-radius:7px;margin-right:10px;white-space:nowrap;box-shadow:0 0 14px rgba(217,128,38,.4);}'
       +'#qpBtn.acct{background:none;border:1px solid rgba(217,128,38,.55);color:#ffce9a;box-shadow:none;font-weight:600;}'
       +'#qpBtn:hover{filter:brightness(1.08);}'
-      +'#qpSignIn{cursor:pointer;background:none;border:none;color:#ffce9a;font:inherit;font-size:12px;letter-spacing:.5px;text-transform:uppercase;margin-right:10px;padding:6px 4px;white-space:nowrap;}'
+      +'#qpSignIn{cursor:pointer;background:none;border:none;color:#ffce9a;font:inherit;font-size:12px;letter-spacing:0;margin-right:10px;padding:6px 4px;white-space:nowrap;}'
       +'#qpSignIn:hover{color:#fff;}body.bright #qpSignIn{color:#9a5a12;}'
       +'.qpOv{position:fixed;inset:0;z-index:10000;display:none;background:rgba(8,6,4,.82);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);align-items:center;justify-content:center;}'
       +'.qpOv.open{display:flex;}'
       +'.qpCard{width:100%;max-width:420px;margin:16px;max-height:90vh;overflow-y:auto;background:linear-gradient(180deg,#1f1710,#15100b);'
       +'border:1px solid rgba(217,128,38,.45);border-radius:16px;box-shadow:0 0 60px rgba(217,128,38,.2);padding:26px 24px calc(24px + env(safe-area-inset-bottom));color:#ffd9b3;}'
-      +'.qpCard h2{font-size:16px;letter-spacing:2px;text-transform:uppercase;color:#ffd9c4;margin-bottom:6px;}'
+      +'.qpCard h2{font-size:16px;letter-spacing:0;color:#ffd9c4;margin-bottom:6px;}'
       +'.qpCard p{font-size:13px;line-height:1.5;color:#cba98f;margin-bottom:14px;}'
-      +'.qpCard label{display:block;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#d98026;margin:12px 0 5px;}'
+      +'.qpCard label{display:block;font-size:10px;letter-spacing:0;color:#d98026;margin:12px 0 5px;}'
       +'.qpCard input[type=text],.qpCard input[type=email],.qpCard input[type=password]{width:100%;padding:11px 13px;font:inherit;font-size:14px;'
       +'color:#ffe2d1;background:rgba(60,40,25,.35);border:1px solid rgba(217,128,38,.35);border-radius:8px;outline:none;}'
       +'.qpCard input:focus{border-color:rgba(255,170,90,.7);}'
       +'.qpBtnRow{display:flex;gap:10px;margin-top:18px;align-items:center;}'
-      +'.qpPrimary{flex:1;background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border:none;border-radius:9px;padding:12px;font:inherit;font-weight:700;font-size:14px;letter-spacing:.5px;cursor:pointer;}'
+      +'.qpPrimary{flex:1;background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border:none;border-radius:9px;padding:12px;font:inherit;font-weight:700;font-size:14px;letter-spacing:0;cursor:pointer;}'
       +'.qpPrimary:disabled{opacity:.6;cursor:default;}'
       +'.qpGhost{background:none;border:1px solid rgba(217,128,38,.45);color:#ffb27a;border-radius:9px;padding:12px 14px;font:inherit;font-size:13px;cursor:pointer;}'
       +'.qpLink{background:none;border:none;color:#e89a5a;font:inherit;font-size:12px;text-decoration:underline;cursor:pointer;padding:0;margin-top:14px;}'
@@ -1418,9 +1432,9 @@
       +'#qpOnb .dot.on{background:#D98026;}'
       +'#qpOnb .xo{background:none;border:none;color:#b88a5a;font-size:22px;cursor:pointer;}'
       +'#qpOnb .body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 22px 8px;}'
-      +'#qpOnb h1{font-size:22px;line-height:1.25;color:#ffe6cf;margin:8px 0 10px;letter-spacing:.5px;}'
+      +'#qpOnb h1{font-size:22px;line-height:1.25;color:#ffe6cf;margin:8px 0 10px;letter-spacing:0;}'
       +'#qpOnb .sub{font-size:14px;line-height:1.5;color:#cba98f;margin-bottom:18px;}'
-      +'#qpOnb label{display:block;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#d98026;margin:14px 0 6px;}'
+      +'#qpOnb label{display:block;font-size:10px;letter-spacing:0;color:#d98026;margin:14px 0 6px;}'
       +'#qpOnb input[type=text],#qpOnb input[type=email],#qpOnb input[type=password]{width:100%;padding:13px;font:inherit;font-size:16px;color:#ffe2d1;background:rgba(60,40,25,.35);border:1px solid rgba(217,128,38,.35);border-radius:9px;outline:none;}'
       +'#qpOnb input:focus{border-color:rgba(255,170,90,.7);}'
       +'#qpChips{display:flex;flex-wrap:wrap;gap:9px;}'
@@ -1604,7 +1618,7 @@
       +'.qpSeg{display:flex;gap:8px;margin-top:6px;}'
       +'.qpSeg button{flex:1;padding:9px;border-radius:9px;border:1px solid rgba(217,128,38,.4);background:rgba(217,128,38,.06);color:#ffd9b3;font:inherit;font-size:13px;cursor:pointer;}'
       +'.qpSeg button.sel{border-color:#D98026;background:rgba(217,128,38,.18);}'
-      +'.qpStatus{font-size:12px;color:#7bd88f;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;}'
+      +'.qpStatus{font-size:12px;color:#7bd88f;letter-spacing:0;margin-bottom:8px;}'
       +'.qpRow2{display:flex;gap:10px;margin-top:18px;}'
       +'.qpLegal{margin-top:18px;font-size:11px;color:#a98a6a;text-align:center;}.qpLegal a{color:#e89a5a;}'
       +'.qpSO{display:block;width:100%;margin-top:10px;background:none;border:none;color:#cba98f;font:inherit;font-size:12px;text-decoration:underline;cursor:pointer;}';

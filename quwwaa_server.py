@@ -535,19 +535,19 @@ def build_home_snapshot():
 
 # --- Morning Brief: one curated, summarized story per section --------------
 BRIEF_CATS = [
-    {'label': 'US POLITICS',       'q': 'US politics',             'days': 1, 'maxAgeH': 14},
-    {'label': 'WORLD',             'q': 'world news',              'days': 1, 'maxAgeH': 20},
-    {'label': 'MIDDLE EAST',       'q': 'middle east',             'days': 2},
-    {'label': 'SPORTS',            'q': 'sports',                  'days': 2},
-    {'label': 'FINANCE',           'q': 'economy finance',         'days': 2},
-    {'label': 'MARKETS',           'q': 'stock market',            'days': 2},
-    {'label': 'TECH',              'q': 'technology',              'days': 2},
-    {'label': 'AI',                'q': 'artificial intelligence', 'days': 3},
-    {'label': 'POP CULTURE',       'q': 'entertainment celebrity', 'days': 2},
-    {'label': 'SCIENCE',           'q': 'science discovery',       'days': 3},
-    {'label': 'NATURE & DISASTERS','q': 'natural disaster',        'days': 3},
-    {'label': 'CRIME & JUSTICE',   'q': 'crime police court',      'days': 2},
-    {'label': 'WORTH KNOWING',     'q': 'breaking news',           'days': 1, 'maxAgeH': 20},
+    {'label': 'US Politics',        'q': 'US politics',             'days': 1, 'maxAgeH': 14},
+    {'label': 'World',              'q': 'world news',              'days': 1, 'maxAgeH': 20},
+    {'label': 'Middle East',        'q': 'middle east',             'days': 2},
+    {'label': 'Sports',             'q': 'sports',                  'days': 2},
+    {'label': 'Finance',            'q': 'economy finance',         'days': 2},
+    {'label': 'Markets',            'q': 'stock market',            'days': 2},
+    {'label': 'Tech',               'q': 'technology',              'days': 2},
+    {'label': 'AI',                 'q': 'artificial intelligence', 'days': 3},
+    {'label': 'Pop Culture',        'q': 'entertainment celebrity', 'days': 2},
+    {'label': 'Science',            'q': 'science discovery',       'days': 3},
+    {'label': 'Nature & Disasters', 'q': 'natural disaster',        'days': 3},
+    {'label': 'Crime & Justice',    'q': 'crime police court',      'days': 2},
+    {'label': 'Worth Knowing',      'q': 'breaking news',           'days': 1, 'maxAgeH': 20},
 ]
 BRIEF = {'t': 0, 'sections': []}
 BRIEF_TTL = int(os.environ.get('BRIEF_TTL', '10800'))   # rebuild at most every 3 hours
