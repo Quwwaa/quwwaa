@@ -440,8 +440,10 @@
     // 1) Preferred path: the server-side butler. On the public site the key lives
     //    safely on the server, so visitors need no key of their own.
     try{
+      const headers = {'content-type':'application/json'};
+      try{ if(window.QP && QP.token) headers['Authorization'] = 'Bearer ' + QP.token; }catch(e){}  // member → server lifts rate cap + personalizes
       const sr = await fetch('/ask', {
-        method:'POST', headers:{'content-type':'application/json'},
+        method:'POST', headers,
         body: JSON.stringify({messages: msgs})
       });
       if(sr.ok){
@@ -799,6 +801,8 @@
   let homeRetries = 0, homeRendered = -1;
   async function loadHome(force){
     document.body.classList.add('home');
+    // Members get a personalized board built from their interests + location.
+    try{ if(window.QP && QP.isMember && QP.isMember() && QP.profile){ return loadMemberHome(); } }catch(e){}
     // Fast path: the server's prebuilt snapshot — one request, instant, always full.
     try{
       const sr = await fetch('/home', {cache:'no-store'});
@@ -843,6 +847,42 @@
       homeRetries++; setTimeout(()=>loadHome(true), 4000);
     } else { homeRetries = 0; }
   }
+  // ---- member board: built from the member's chosen interests + location ----
+  const INTEREST_Q = {
+    'Politics':{q:'politics',days:1}, 'Sport':{q:'sports',days:2}, 'Tech':{q:'technology',days:2},
+    'AI':{q:'artificial intelligence',days:3}, 'Stocks':{q:'stock market',days:2}, 'Finance':{q:'economy finance',days:2},
+    'Science':{q:'science discovery',days:3}, 'Pop Culture':{q:'entertainment celebrity',days:2},
+    'World':{q:'world news',days:1}, 'National':{q:'national news',days:1}, 'Health':{q:'health medicine',days:3},
+    'Climate':{q:'climate change',days:3}, 'Energy':{q:'energy',days:3}, 'Education':{q:'education',days:3},
+    'Military & Defense':{q:'military defense',days:2}
+  };
+  function memberCats(){
+    const p = (window.QP && QP.profile) || {};
+    const cats = [];
+    (p.interests||[]).forEach(name=>{
+      if(name==='Local'){ if(p.city) cats.push({label:'LOCAL · '+p.city.toUpperCase(), q:p.city, days:3}); return; }
+      const m = INTEREST_Q[name]; if(m) cats.push({label:name.toUpperCase(), q:m.q, days:m.days});
+    });
+    if(p.city && !cats.some(c=>c.label.indexOf('LOCAL')===0)) cats.push({label:'LOCAL · '+p.city.toUpperCase(), q:p.city, days:3});
+    if(p.country && !(p.interests||[]).indexOf('National')>=0 && !cats.some(c=>c.label==='NATIONAL')) cats.push({label:'NATIONAL', q:p.country+' national news', days:1});
+    if(!cats.length) cats.push({label:'WORLD',q:'world news',days:1},{label:'POLITICS',q:'politics',days:1});
+    return cats.slice(0,12);
+  }
+  async function loadMemberHome(){
+    const cats = memberCats();
+    setStatus('CURATING YOUR BOARD…');
+    const pick = arts => (arts||[]).find(x=>x.image) || (arts||[])[0] || null;
+    const fetchCat = async c=>{ try{
+      const r = await fetch('/news?q='+encodeURIComponent(c.q)+'&days='+(c.days||2)+'&fast=1', {cache:'no-store'});
+      const d = await r.json(); const a = pick(d.articles);
+      return a ? {label:c.label, q:c.q, days:c.days, a} : null;
+    }catch(e){ return null; } };
+    const items = (await Promise.all(cats.map(fetchCat))).filter(Boolean);
+    if(items.length){ homeCache = {t:Date.now(), items}; renderHome(items); homeRendered = items.length; }
+    setStatus('STANDING BY');
+  }
+  // re-render the board whenever membership/auth changes (member board <-> free board)
+  document.addEventListener('qp:auth', function(){ try{ loadHome(true); }catch(e){} });
   function resetBoard(){
     history = [];
     try{ localStorage.removeItem('q_history'); }catch(e){}
@@ -905,6 +945,26 @@
     ];
     let text = null, spoken = false;
     function build(){
+      // Members get greeted by name, tuned to their interests. Free users unchanged.
+      try{
+        const QP = window.QP;
+        if(QP && QP.isMember && QP.isMember() && QP.profile){
+          const p = QP.profile;
+          const term = (p.address_style==='name' && (p.display_name||p.first_name)) ? (p.display_name||p.first_name)
+                     : (p.address_style==='madam' ? 'madam' : 'sir');
+          const ints = (p.interests||[]);
+          const topic = ints.length ? ints[Math.floor(Math.random()*ints.length)] : '';
+          const M = topic ? [
+            HI()+', '+term+'. Your '+topic.toLowerCase()+' briefing is ready — shall we begin?',
+            HI()+', '+term+'. I have been watching '+topic.toLowerCase()+' for you. Where shall we start?',
+            HI()+', '+term+'. The board is tuned to your world. What would you like first?'
+          ] : [
+            HI()+', '+term+'. Your personal board is ready. What shall we look at first?',
+            HI()+', '+term+'. Welcome back. Where would you care to begin?'
+          ];
+          return M[Math.floor(Math.random()*M.length)];
+        }
+      }catch(e){}
       const top = (homeCache.items && homeCache.items[0]) ? String(homeCache.items[0].label||'').toLowerCase() : '';
       const pool = top ? GENERIC.concat(TOPICAL) : GENERIC;
       const g = pool[Math.floor(Math.random()*pool.length)];
@@ -1201,6 +1261,16 @@
     fetch('/brief',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
       var s=(d&&d.sections)||[];
       if(!s.length){ body.innerHTML='<div style="color:#b88a5a;text-align:center;padding:48px 16px;">The brief is being prepared — do check back shortly, sir.</div>'; return; }
+      // Members: float the sections matching their interests to the top.
+      try{
+        var QP=window.QP;
+        if(QP && QP.isMember && QP.isMember() && QP.profile && (QP.profile.interests||[]).length){
+          var ints=QP.profile.interests.map(function(x){return String(x).toLowerCase();});
+          var match=function(lbl){ lbl=String(lbl||'').toLowerCase(); return ints.some(function(i){
+            var k=i.split(' ')[0]; return lbl.indexOf(k)>=0 || k.indexOf(lbl.split(' ')[0])>=0; }); };
+          s=s.slice().sort(function(a,b){ return (match(b.label)?1:0)-(match(a.label)?1:0); });
+        }
+      }catch(e){}
       body.innerHTML=s.map(function(x){
         return '<div class="bsec"><div class="blabel">◆ '+esc(x.label)+'</div>'
           +(x.image?'<a class="bthumb" href="'+esc(x.url)+'" target="_blank" rel="noopener"><img src="'+esc(x.image)+'" loading="lazy" onerror="var p=this.closest(\'.bthumb\'); if(p) p.style.display=\'none\';"></a>':'')
@@ -1353,6 +1423,7 @@
 
   async function onSession(session){
     QP.user = session ? session.user : null;
+    QP.token = session ? session.access_token : null;   // sent to /ask so the server can verify membership
     await loadProfile();
     render();
     document.dispatchEvent(new CustomEvent('qp:auth',{detail:{member:QP.isMember(),profile:QP.profile,user:QP.user}}));
