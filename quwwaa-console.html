@@ -1719,13 +1719,15 @@
     +'#controls{display:none !important;}'
     +'body.home #homeCards{padding-bottom:120px;}#log{padding-bottom:120px;}'
     /* glass tab bar */
-    +'#tabbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom));display:flex;gap:4px;padding:6px;border-radius:999px;background:rgba(20,20,20,.55);backdrop-filter:blur(24px) saturate(160%);-webkit-backdrop-filter:blur(24px) saturate(160%);border:1px solid rgba(255,255,255,.12);box-shadow:0 8px 30px rgba(0,0,0,.35);z-index:50;}'
+    /* dock = the 3-tab pill + the talk orb, centred together so the whole group is symmetric */
+    +'#navdock{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:10px;z-index:51;}'
+    +'#tabbar{display:flex;gap:4px;padding:6px;border-radius:999px;background:rgba(20,20,20,.55);backdrop-filter:blur(24px) saturate(160%);-webkit-backdrop-filter:blur(24px) saturate(160%);border:1px solid rgba(255,255,255,.12);box-shadow:0 8px 30px rgba(0,0,0,.35);}'
     +'#tabbar .tab{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 18px;border-radius:999px;background:none;border:none;color:rgba(255,233,210,.62);font:inherit;font-size:10px;letter-spacing:0;cursor:pointer;white-space:nowrap;}'
     +'#tabbar .tab svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.6;}'
     +'#tabbar .tab.active{background:rgba(0,0,0,.5);color:#ffce9a;}'
     +'body.bright #tabbar{background:rgba(245,242,235,.62);border-color:rgba(0,0,0,.08);}body.bright #tabbar .tab{color:rgba(90,60,30,.7);}body.bright #tabbar .tab.active{background:rgba(255,255,255,.72);color:#b35f10;}'
     /* talk orb */
-    +'#talkOrb{position:fixed;right:calc(14px + env(safe-area-inset-right));bottom:calc(15px + env(safe-area-inset-bottom));width:56px;height:56px;border-radius:50%;z-index:51;cursor:pointer;background:rgba(20,20,20,.55);backdrop-filter:blur(24px) saturate(160%);-webkit-backdrop-filter:blur(24px) saturate(160%);border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 30px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;}'
+    +'#talkOrb{flex:none;width:56px;height:56px;border-radius:50%;cursor:pointer;background:rgba(20,20,20,.55);backdrop-filter:blur(24px) saturate(160%);-webkit-backdrop-filter:blur(24px) saturate(160%);border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 30px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;}'
     +'#talkOrb .dot{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle,#fff3e2 0%,#ffbd66 38%,#d98026 75%,#4a2a08 100%);box-shadow:0 0 16px 4px rgba(217,128,38,.55);transition:transform .2s;}'
     +'body.listening #talkOrb .dot{animation:pulse .7s ease-in-out infinite;}body.thinking #talkOrb .dot,body.speaking #talkOrb .dot{animation:pulse 1.4s ease-in-out infinite;}'
     +'body.bright #talkOrb{background:rgba(245,242,235,.62);border-color:rgba(0,0,0,.1);}'
@@ -1760,7 +1762,6 @@
   const orb=document.createElement('div'); orb.id='talkOrb'; orb.title='Talk to QUWWAA';
   orb.innerHTML='<div class="dot"></div>';
   orb.onclick=()=>{ if($('reactor')) $('reactor').click(); };   // same voice capture as the big reactor
-  document.body.appendChild(orb);
 
   // ---- tab bar ----
   let tab='brief';
@@ -1769,7 +1770,11 @@
     '<button class="tab" data-tab="brief">'+I.brief+'<span>News Brief</span></button>'
     +'<button class="tab" data-tab="rumble">'+I.rumble+'<span>Daily Rumble</span></button>'
     +'<button class="tab" data-tab="profile">'+I.profile+'<span>Profile</span></button>';
-  document.body.appendChild(bar);
+  // dock the pill + orb together so the whole assembly is centred (pill sits just
+  // left of true centre, orb to its right) — symmetric rather than shifted right.
+  const dock=document.createElement('div'); dock.id='navdock';
+  dock.appendChild(bar); dock.appendChild(orb);
+  document.body.appendChild(dock);
   function setActive(name){ bar.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active', b.getAttribute('data-tab')===name)); }
   function toast(msg){
     let t=$('qToast'); if(!t){ t=document.createElement('div'); t.id='qToast';
