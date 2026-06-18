@@ -836,6 +836,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_speak()
         if self.path.startswith('/create-checkout-session'):
             return self._handle_checkout()
+        if self.path.startswith('/stripe-webhook'):
+            return self._handle_webhook()
         self.send_error(404)
 
     def _read_json(self):
@@ -874,6 +876,55 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'error': 'stripe_%d' % e.code, 'detail': detail}, 502)
         except Exception as e:
             self._send_json({'error': type(e).__name__}, 500)
+
+    def _handle_webhook(self):
+        length = int(self.headers.get('Content-Length', '0') or '0')
+        payload = self.rfile.read(length) if length else b''
+        if not stripe_verify(payload, self.headers.get('Stripe-Signature', '')):
+            self._send_json({'error': 'bad_signature'}, 400); return
+        try:
+            event = json.loads(payload or b'{}')
+        except Exception:
+            self._send_json({'error': 'bad_json'}, 400); return
+        typ = event.get('type', '')
+        obj = (event.get('data') or {}).get('object') or {}
+        try:
+            self._apply_webhook(typ, obj)
+            self._send_json({'received': True})
+        except Exception as e:
+            # non-2xx so Stripe retries (e.g. transient Supabase failure)
+            self._send_json({'error': type(e).__name__}, 500)
+
+    def _apply_webhook(self, typ, obj):
+        now = datetime.now(timezone.utc).isoformat()
+        def iso(ts):
+            try: return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat() if ts else None
+            except Exception: return None
+        MAP = {'trialing': 'trialing', 'active': 'active', 'past_due': 'past_due',
+               'canceled': 'canceled', 'unpaid': 'canceled', 'incomplete_expired': 'canceled'}
+        if typ == 'checkout.session.completed':
+            uid = obj.get('client_reference_id')
+            fields = {'subscription_status': 'trialing', 'updated_at': now}
+            if obj.get('customer'): fields['stripe_customer_id'] = obj['customer']
+            if obj.get('subscription'): fields['stripe_subscription_id'] = obj['subscription']
+            if uid: supabase_patch_profile(('id', uid), fields)
+        elif typ in ('customer.subscription.created', 'customer.subscription.updated',
+                     'customer.subscription.deleted'):
+            raw = 'canceled' if typ.endswith('deleted') else obj.get('status', '')
+            st = MAP.get(raw, raw if raw in ('trialing', 'active', 'past_due') else 'canceled')
+            fields = {'subscription_status': st, 'stripe_subscription_id': obj.get('id'), 'updated_at': now}
+            if obj.get('customer'): fields['stripe_customer_id'] = obj['customer']
+            te = iso(obj.get('trial_end'))
+            if te: fields['trial_ends_at'] = te
+            uid = (obj.get('metadata') or {}).get('supabase_user_id')
+            if uid:
+                supabase_patch_profile(('id', uid), fields)
+            elif obj.get('customer'):
+                supabase_patch_profile(('stripe_customer_id', obj['customer']), fields)
+        elif typ == 'invoice.payment_failed':
+            if obj.get('customer'):
+                supabase_patch_profile(('stripe_customer_id', obj['customer']),
+                                       {'subscription_status': 'past_due', 'updated_at': now})
 
     def _handle_speak(self):
         if not OPENAI_API_KEY:
