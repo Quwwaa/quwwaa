@@ -1223,5 +1223,169 @@
   if(/(?:[?&]|#)brief\b/i.test(location.search + location.hash)) setTimeout(open, 400);   // opened from the email link
 })();
 </script>
+<script>
+/* ============================================================================
+   QUWWAA Premium — membership (Supabase auth + Stripe billing).
+   Self-contained and ADDITIVE: when /config reports premium:false (no keys),
+   this module does nothing and the free experience is exactly as before.
+   Phase A: config + Supabase init, session/profile state, sign in / sign out.
+   ============================================================================ */
+(function(){
+  const QP = window.QP = {
+    enabled:false, ready:false, cfg:null, sb:null, user:null, profile:null,
+    INTERESTS:['Politics','Sport','Tech','AI','Stocks','Finance','Science','Pop Culture',
+               'Local','World','National','Health','Climate','Energy','Education','Military & Defense'],
+    isMember(){ return !!(this.profile && ['trialing','active'].indexOf(this.profile.subscription_status)>=0); },
+    pastDue(){ return !!(this.profile && this.profile.subscription_status==='past_due'); }
+  };
+  const $=id=>document.getElementById(id);
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  function injectCSS(){
+    if($('qpCSS')) return;
+    const st=document.createElement('style'); st.id='qpCSS';
+    st.textContent =
+      '#qpBtn{cursor:pointer;background:linear-gradient(135deg,#D98026,#b35f10);border:none;color:#1a1208;'
+      +'font:inherit;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:6px 12px;'
+      +'border-radius:7px;margin-right:10px;white-space:nowrap;box-shadow:0 0 14px rgba(217,128,38,.4);}'
+      +'#qpBtn.acct{background:none;border:1px solid rgba(217,128,38,.55);color:#ffce9a;box-shadow:none;font-weight:600;}'
+      +'#qpBtn:hover{filter:brightness(1.08);}'
+      +'.qpOv{position:fixed;inset:0;z-index:10000;display:none;background:rgba(8,6,4,.82);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);align-items:center;justify-content:center;}'
+      +'.qpOv.open{display:flex;}'
+      +'.qpCard{width:100%;max-width:420px;margin:16px;max-height:90vh;overflow-y:auto;background:linear-gradient(180deg,#1f1710,#15100b);'
+      +'border:1px solid rgba(217,128,38,.45);border-radius:16px;box-shadow:0 0 60px rgba(217,128,38,.2);padding:26px 24px calc(24px + env(safe-area-inset-bottom));color:#ffd9b3;}'
+      +'.qpCard h2{font-size:16px;letter-spacing:2px;text-transform:uppercase;color:#ffd9c4;margin-bottom:6px;}'
+      +'.qpCard p{font-size:13px;line-height:1.5;color:#cba98f;margin-bottom:14px;}'
+      +'.qpCard label{display:block;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#d98026;margin:12px 0 5px;}'
+      +'.qpCard input[type=text],.qpCard input[type=email],.qpCard input[type=password]{width:100%;padding:11px 13px;font:inherit;font-size:14px;'
+      +'color:#ffe2d1;background:rgba(60,40,25,.35);border:1px solid rgba(217,128,38,.35);border-radius:8px;outline:none;}'
+      +'.qpCard input:focus{border-color:rgba(255,170,90,.7);}'
+      +'.qpBtnRow{display:flex;gap:10px;margin-top:18px;align-items:center;}'
+      +'.qpPrimary{flex:1;background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border:none;border-radius:9px;padding:12px;font:inherit;font-weight:700;font-size:14px;letter-spacing:.5px;cursor:pointer;}'
+      +'.qpPrimary:disabled{opacity:.6;cursor:default;}'
+      +'.qpGhost{background:none;border:1px solid rgba(217,128,38,.45);color:#ffb27a;border-radius:9px;padding:12px 14px;font:inherit;font-size:13px;cursor:pointer;}'
+      +'.qpLink{background:none;border:none;color:#e89a5a;font:inherit;font-size:12px;text-decoration:underline;cursor:pointer;padding:0;margin-top:14px;}'
+      +'.qpMsg{font-size:12px;margin-top:12px;min-height:14px;color:#ff9b7a;}'
+      +'.qpMsg.ok{color:#7bd88f;}'
+      +'.qpX{position:absolute;top:14px;right:16px;background:none;border:none;color:#b88a5a;font-size:20px;cursor:pointer;}'
+      +'#qpBanner{display:none;background:rgba(180,70,40,.92);color:#fff;text-align:center;font-size:12px;padding:8px 14px;cursor:pointer;}'
+      +'body.bright .qpCard{background:linear-gradient(180deg,#fff,#f3ece2);color:#3a2c1e;border-color:rgba(179,95,16,.4);}'
+      +'body.bright .qpCard p{color:#7a5a3a;}body.bright .qpCard input{background:#fff;color:#2a2118;}';
+    document.head.appendChild(st);
+  }
+
+  // ---- auth modal (returning members sign in; signup handled by onboarding) ----
+  function authModal(){
+    let ov=$('qpAuth'); if(ov) return ov;
+    ov=document.createElement('div'); ov.id='qpAuth'; ov.className='qpOv';
+    ov.innerHTML='<div class="qpCard" style="position:relative"><button class="qpX" data-x type="button">✕</button>'
+      +'<h2 id="qpAuthTitle">Welcome back</h2><p>Sign in to your QUWWAA membership.</p>'
+      +'<form id="qpAuthForm"><label>Email</label><input id="qpEmail" type="email" autocomplete="email" required>'
+      +'<label>Password</label><input id="qpPass" type="password" autocomplete="current-password" required>'
+      +'<div class="qpBtnRow"><button class="qpPrimary" id="qpAuthGo" type="submit">Sign in</button></div>'
+      +'<div class="qpMsg" id="qpAuthMsg"></div></form>'
+      +'<button class="qpLink" id="qpToTrial" type="button">New here? Start your 7-day free trial →</button></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click',e=>{ if(e.target===ov||e.target.hasAttribute('data-x')) ov.classList.remove('open'); });
+    $('qpToTrial').onclick=()=>{ ov.classList.remove('open'); QP.openOnboarding ? QP.openOnboarding() : null; };
+    $('qpAuthForm').onsubmit=async e=>{
+      e.preventDefault();
+      const go=$('qpAuthGo'), msg=$('qpAuthMsg'); msg.className='qpMsg'; msg.textContent='';
+      go.disabled=true; go.textContent='Signing in…';
+      try{
+        const { error } = await QP.sb.auth.signInWithPassword({ email:$('qpEmail').value.trim(), password:$('qpPass').value });
+        if(error){ msg.textContent=error.message; go.disabled=false; go.textContent='Sign in'; return; }
+        msg.className='qpMsg ok'; msg.textContent='Welcome back, '+(QP.profile&&QP.profile.first_name||'sir')+'.';
+        setTimeout(()=>ov.classList.remove('open'), 700);
+      }catch(err){ msg.textContent='Something went wrong. Try again.'; go.disabled=false; go.textContent='Sign in'; }
+    };
+    return ov;
+  }
+  QP.openAuth=()=>{ authModal().classList.add('open'); };
+
+  // ---- account sheet (members) — expanded in Phase F ----
+  QP.openAccount=()=>{ if(QP.openSettings){ QP.openSettings(); } else { QP.signOut(); } };
+  QP.signOut=async()=>{ try{ await QP.sb.auth.signOut(); }catch(e){} };
+
+  // ---- header control + status banner ----
+  function headerButton(){
+    let b=$('qpBtn');
+    if(!b){
+      const hdr=document.querySelector('header'); if(!hdr) return null;
+      const spans=hdr.querySelectorAll(':scope > span'); const right=spans[spans.length-1]||hdr;
+      b=document.createElement('button'); b.id='qpBtn'; b.type='button';
+      right.insertBefore(b, right.firstChild);
+    }
+    return b;
+  }
+  function banner(){
+    let el=$('qpBanner'); if(el) return el;
+    el=document.createElement('div'); el.id='qpBanner';
+    el.textContent='Your payment needs attention — tap to update your card.';
+    el.onclick=()=>{ QP.openPortal ? QP.openPortal() : QP.openAccount(); };
+    const hdr=document.querySelector('header');
+    if(hdr&&hdr.parentNode) hdr.parentNode.insertBefore(el, hdr.nextSibling);
+    return el;
+  }
+  function render(){
+    const b=headerButton(); if(!b) return;
+    if(QP.user){
+      const name=(QP.profile&&(QP.profile.first_name||QP.profile.display_name))||'Account';
+      if(QP.isMember()){ b.className='acct'; b.textContent='✦ '+name; b.onclick=QP.openAccount; }
+      else { b.className=''; b.textContent='✦ Finish signup'; b.onclick=()=>{ QP.openOnboarding ? QP.openOnboarding() : QP.openAuth(); }; }
+    } else {
+      b.className=''; b.textContent='✦ Free trial'; b.onclick=()=>{ QP.openOnboarding ? QP.openOnboarding() : QP.openAuth(); };
+    }
+    banner().style.display = QP.pastDue() ? 'block' : 'none';
+    document.body.classList.toggle('qp-member', QP.isMember());
+  }
+  QP.render=render;
+
+  async function loadProfile(){
+    QP.profile=null;
+    if(!QP.user) return;
+    try{
+      const { data } = await QP.sb.from('profiles').select('*').eq('id', QP.user.id).maybeSingle();
+      QP.profile = data || null;
+    }catch(e){ QP.profile=null; }
+  }
+  QP.loadProfile=loadProfile;
+
+  async function onSession(session){
+    QP.user = session ? session.user : null;
+    await loadProfile();
+    render();
+    document.dispatchEvent(new CustomEvent('qp:auth',{detail:{member:QP.isMember(),profile:QP.profile,user:QP.user}}));
+  }
+  QP.onSession=onSession;
+
+  function loadLib(){
+    return new Promise((resolve,reject)=>{
+      if(window.supabase&&window.supabase.createClient) return resolve();
+      const s=document.createElement('script');
+      s.src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+      s.onload=()=>resolve(); s.onerror=()=>reject(new Error('supabase-js failed to load'));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function boot(){
+    let cfg; try{ cfg=await fetch('/config',{cache:'no-store'}).then(r=>r.json()); }catch(e){ return; }
+    QP.cfg=cfg;
+    if(!cfg||!cfg.premium) return;                 // premium not configured → free experience only
+    QP.enabled=true; injectCSS();
+    try{ await loadLib(); }catch(e){ return; }
+    QP.sb=window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey,
+      {auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+    QP.ready=true;
+    try{ const { data:{ session } } = await QP.sb.auth.getSession(); await onSession(session); }
+    catch(e){ render(); }
+    QP.sb.auth.onAuthStateChange((_e,s)=>{ onSession(s); });
+    // returning from Stripe Checkout: refresh status shortly (webhook may still be in flight)
+    if(/[?&]welcome=1/.test(location.search)){ setTimeout(()=>loadProfile().then(render), 1500); setTimeout(()=>loadProfile().then(render), 6000); }
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>
 </body>
 </html>
