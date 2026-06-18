@@ -80,19 +80,27 @@
          border:1px solid rgba(217,128,38,.45); background:rgba(217,128,38,.10); color:#ffb27a; border-radius:4px; }
   .btn:hover { background:rgba(217,128,38,.20); }
   .btn.off { opacity:.4; }
-  /* home command center */
+  /* the board IS the brief: reactor on top, the brief scrolls beneath it */
   #homeCards { display:none; }
-  body.home #reactorWrap { flex:1; justify-content:center; position:relative; }
   body.home #log { display:none; }
-  body.home #homeCards { display:block; position:absolute; inset:0; pointer-events:none; }
-  /* desktop: two columns of three stories flank the reactor, self-distributing
-     so they never overlap regardless of window height */
-  .hcol { position:absolute; top:5%; bottom:4%; width:clamp(210px,20vw,290px);
-          display:flex; flex-direction:column; justify-content:center; gap:16px;
-          pointer-events:auto; }
-  .hcol.left  { left:3%; }
-  .hcol.right { right:3%; }
-  .hwrap { opacity:0; animation:cardPop .5s cubic-bezier(.34,1.56,.64,1) forwards; }
+  body.home #reactorWrap { flex:1; min-height:0; justify-content:flex-start; position:static;
+      overflow-y:auto; -webkit-overflow-scrolling:touch; padding:20px 0 0; }
+  body.home #homeCards { display:block; width:100%; max-width:660px; margin:18px auto 0;
+      padding:0 22px 40px; pointer-events:auto; }
+  /* brief sections (the board's cards) */
+  .bsec { opacity:0; animation:cardPop .5s cubic-bezier(.34,1.56,.64,1) forwards; margin-bottom:26px; }
+  .blabel { font-size:11px; letter-spacing:2.5px; text-transform:uppercase; color:#e08a32;
+            margin-bottom:10px; border-bottom:1px solid rgba(217,128,38,.2); padding-bottom:5px; }
+  .bthumb { display:block; border-radius:10px; overflow:hidden; margin-bottom:10px; }
+  .bthumb img { display:block; width:100%; height:200px; object-fit:cover; }
+  .bhead { display:block; color:#fff3e9; font-size:18px; line-height:1.3; font-weight:600; text-decoration:none; margin-bottom:8px; }
+  .bhead:hover { color:#fff; text-shadow:0 0 8px rgba(255,170,90,.6); }
+  .bsum { color:#d9b49a; font-size:14px; line-height:1.55; margin-bottom:7px; }
+  .bmeta { font-size:11px; color:#a06a3a; text-transform:uppercase; letter-spacing:1px; }
+  body.bright .blabel { color:#b35f10; }
+  body.bright .bhead { color:#2a1c0e; }
+  body.bright .bsum { color:#5a4630; }
+  body.bright .bmeta { color:#9a7a55; }
   /* ---------- phones: clean header, reactor on top, one scrollable feed ---------- */
   @media(max-width:820px){
     header { padding:calc(10px + env(safe-area-inset-top)) 12px 10px; gap:6px; }
@@ -104,28 +112,18 @@
     #brainState { display:none; }            /* drop the techy status text */
     #voiceToggle, #handsFree { display:none; } /* keep the bottom bar uncluttered */
     /* compact the header CTAs so they fit beside the title */
-    #qbriefBtn, #qsubBtn { font-size:10px; padding:5px 7px; margin-right:6px; letter-spacing:.4px; }
+    #qsubBtn, #qpBtn { font-size:10px; padding:5px 7px; margin-right:6px; letter-spacing:.4px; }
 
-    /* Reactor sits in a NON-scrolling top stage, vertically centred so it shows
-       prominently with equal space above (header) and below (first news card).
-       The news feed scrolls inside its own panel in the lower half.
-       (Crucially the reactor must NOT be a shrinkable flex item — its rings/core
-       are absolutely positioned, so a shrinking column flex parent would collapse
-       it to 0px tall, which rendered as a thin slash instead of a circle.) */
-    body.home #reactorWrap { flex:1; min-height:0; position:static; padding:0;
-        display:flex; flex-direction:column; align-items:center; overflow:hidden; }
-    #reactor { transform:none; margin:0; }                 /* full-size circle, like desktop */
-    body.home #reactor { flex:none; margin:auto 0 0; }     /* no-collapse + push to centre of stage */
-    /* caption is height:0 so it doesn't shift the circle — the CIRCLE stays centred,
-       giving equal space above (header) and below (first news card); the text just
-       floats beneath the reactor in the lower gap */
-    body.home #status  { flex:none; height:0; line-height:1; overflow:visible;
-        margin:6px 0 auto; }
-    body.home #homeCards { flex:none; width:100%; height:40vh;
-        overflow-y:auto; -webkit-overflow-scrolling:touch;
-        position:static; inset:auto; display:block; pointer-events:auto;
-        margin:0; padding:8px 12px 14px; }
-    .hcol { position:static; width:100%; gap:12px; }
+    /* reactor on top (must NOT shrink — its rings/core are absolutely positioned,
+       so a shrinking flex column would collapse it to 0px), the brief scrolls
+       beneath it inside the same scroller. */
+    body.home #reactorWrap { flex:1; min-height:0; position:static; padding:12px 0 0;
+        display:flex; flex-direction:column; align-items:center;
+        overflow-y:auto; -webkit-overflow-scrolling:touch; justify-content:flex-start; }
+    #reactor { transform:scale(.85); margin:-4px 0; }      /* slightly smaller on phones */
+    body.home #reactor, body.home #status { flex:none; }
+    body.home #homeCards { flex:none; width:100%; max-width:none; margin:8px 0 0;
+        position:static; inset:auto; display:block; pointer-events:auto; padding:0 14px 26px; }
     #controls { padding:10px 12px calc(10px + env(safe-area-inset-bottom)); }
     #textIn { padding:12px 14px; }
 
@@ -766,123 +764,70 @@
     }
   }
 
-  // ---------- home command center ----------
-  const HOME_CATS = [
-    {label:'POLITICS',    q:'politics',     days:1, maxAgeH:3},  // politics sours fast
-    {label:'TRUMP',       q:'Trump',        days:1, maxAgeH:5},
-    {label:'MIDDLE EAST', q:'middle east',  days:2},
-    {label:'ISRAEL & IRAN', q:'Israel Iran', days:2},
-    {label:'SPORTS',      q:'sports',       days:2},
-    {label:'MARKETS',     q:'stock market', days:2}
-  ];
-  let homeCache = {t:0, items:[]};
+  // ---------- the board IS the morning brief (multi-section, thumbnailed) ----------
   function exitHome(){ document.body.classList.remove('home'); }
-  function renderHome(items){
-    const wrap = $('homeCards'); wrap.innerHTML = '';
-    const left = document.createElement('div'); left.className = 'hcol left';
-    const right = document.createElement('div'); right.className = 'hcol right';
-    wrap.appendChild(left); wrap.appendChild(right);
-    items.forEach((it, i)=>{
-      const w = document.createElement('div'); w.className = 'hwrap';
-      w.style.animationDelay = (i * 200) + 'ms';
-      popSound(i * 200);
-      const a = it.a;
-      w.innerHTML =
-        '<div class="hcard" style="animation-duration:' + (5.4 + i * 0.7) + 's">' +
-        '<div class="hcat" title="Open full coverage">◈ ' + it.label + '</div>' +
-        (a.image ? '<div class="hthumb"><img src="' + esc(a.image) + '" onerror="this.parentNode.style.display=\'none\'"></div>' : '') +
-        '<div class="hhead"><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.title) + '</a></div>' +
-        '<div class="lmeta"><span>' + esc(a.source) + '</span><span>' + esc(a.time) + '</span></div>' +
-        '</div>';
-      w.querySelector('.hcat').onclick = ()=> openLens(it.q, it.days || 2);
-      (i % 2 === 0 ? left : right).appendChild(w);   // alternate sides: 0,2,4 left · 1,3,5 right
+  function renderBoardSections(sections, sound){
+    const wrap = $('homeCards'); if(!wrap) return;
+    wrap.innerHTML = '';
+    sections.forEach((x, i)=>{
+      if(sound && i < 8) popSound(Math.min(i*110, 1200));
+      const sec = document.createElement('div'); sec.className = 'bsec';
+      const url = esc(x.url || '#');
+      sec.innerHTML =
+        '<div class="blabel">◈ ' + esc(x.label) + '</div>' +
+        (x.image ? '<a class="bthumb" href="'+url+'" target="_blank" rel="noopener"><img src="'+esc(x.image)+'" loading="lazy" onerror="var p=this.closest(\'.bthumb\'); if(p) p.style.display=\'none\';"></a>' : '') +
+        '<a class="bhead" href="'+url+'" target="_blank" rel="noopener">'+esc(x.title||'')+'</a>' +
+        (x.summary ? '<div class="bsum">'+esc(x.summary)+'</div>' : '') +
+        '<div class="bmeta">'+esc(x.source||'')+(x.time?' · '+esc(x.time):'')+'</div>';
+      wrap.appendChild(sec);
     });
   }
-  let homeRetries = 0, homeRendered = -1;
-  async function loadHome(force){
-    document.body.classList.add('home');
-    // Members get a personalized board built from their interests + location.
-    try{ if(window.QP && QP.isMember && QP.isMember() && QP.profile){ return loadMemberHome(); } }catch(e){}
-    // Fast path: the server's prebuilt snapshot — one request, instant, always full.
+  // Member: float the sections matching their interests to the top.
+  function personalizeSections(sections){
     try{
-      const sr = await fetch('/home', {cache:'no-store'});
-      if(sr.ok){
-        const sd = await sr.json();
-        if(sd && sd.items && sd.items.length){
-          homeCache = {t: Date.now(), items: sd.items};
-          if(sd.items.length !== homeRendered){ renderHome(sd.items); homeRendered = sd.items.length; }
-          setStatus('STANDING BY');
-          if(sd.items.length < HOME_CATS.length && homeRetries < 6){ homeRetries++; setTimeout(()=>loadHome(true), 4000); }
-          else { homeRetries = 0; }
-          return;
-        }
+      const QP = window.QP;
+      if(QP && QP.isMember && QP.isMember() && QP.profile && (QP.profile.interests||[]).length){
+        const ints = QP.profile.interests.map(s=>String(s).toLowerCase());
+        const match = lbl=>{ lbl=String(lbl||'').toLowerCase(); return ints.some(i=>{ const k=i.split(' ')[0]; return k && lbl.indexOf(k)>=0; }); };
+        return sections.slice().sort((a,b)=>(match(b.label)?1:0)-(match(a.label)?1:0));
       }
     }catch(e){}
-    if(!force && Date.now() - homeCache.t < 5*60*1000 && homeCache.items.length >= HOME_CATS.length){
-      renderHome(homeCache.items); homeRendered = homeCache.items.length; return;
+    return sections;
+  }
+  let homeRendered = -1, boardRetries = 0, lastBrief = [];
+  async function loadHome(force){
+    document.body.classList.add('home');
+    let sections = [];
+    try{ const d = await fetch('/brief', {cache:'no-store'}).then(r=>r.json()); sections = (d && d.sections) || []; }catch(e){}
+    if(!sections.length){
+      if(homeRendered < 0) setStatus('ASSEMBLING TODAY’S BRIEF…');
+      if(boardRetries < 8){ boardRetries++; setTimeout(()=>loadHome(true), 4000); }
+      return;
     }
-    if(!force){ $('homeCards').innerHTML = ''; homeRendered = -1; setStatus('SCANNING THE WIRES…'); }
-    const pickFresh = (arts, maxAgeH)=>{
-      if(maxAgeH){
-        const cut = Date.now()/1000 - maxAgeH*3600;
-        const fresh = arts.filter(x=>(x.ts||0) >= cut);
-        if(fresh.length) arts = fresh;
-      }
-      return arts.find(x=>x.image) || arts[0];
-    };
-    const fetchCat = async (c)=>{
-      try{
-        const r = await fetch('/news?q=' + encodeURIComponent(c.q) + '&days=' + (c.days||2) + '&fast=1', {cache:'no-store'});
-        const d = await r.json();
-        const a = pickFresh(d.articles || [], c.maxAgeH);
-        return a ? {label:c.label, q:c.q, days:c.days, a} : null;
-      }catch(e){ return null; }
-    };
-    const items = (await Promise.all(HOME_CATS.map(fetchCat))).filter(Boolean);
-    if(items.length >= homeCache.items.length){ homeCache = {t: Date.now(), items}; }  // keep best set
+    boardRetries = 0; lastBrief = sections;
+    const ordered = personalizeSections(sections);
+    if(ordered.length !== homeRendered || force){ renderBoardSections(ordered, true); homeRendered = ordered.length; }
     setStatus('STANDING BY');
-    if(homeCache.items.length !== homeRendered){ renderHome(homeCache.items); homeRendered = homeCache.items.length; }
-    // On a cold server the prewarm cache is still filling — retry quietly until all six arrive.
-    if(homeCache.items.length < HOME_CATS.length && homeRetries < 9){
-      homeRetries++; setTimeout(()=>loadHome(true), 4000);
-    } else { homeRetries = 0; }
+    // Members: prepend Local + National sections built from their location.
+    try{ if(window.QP && QP.isMember && QP.isMember() && QP.profile){ addMemberLocal(); } }catch(e){}
   }
-  // ---- member board: built from the member's chosen interests + location ----
-  const INTEREST_Q = {
-    'Politics':{q:'politics',days:1}, 'Sport':{q:'sports',days:2}, 'Tech':{q:'technology',days:2},
-    'AI':{q:'artificial intelligence',days:3}, 'Stocks':{q:'stock market',days:2}, 'Finance':{q:'economy finance',days:2},
-    'Science':{q:'science discovery',days:3}, 'Pop Culture':{q:'entertainment celebrity',days:2},
-    'World':{q:'world news',days:1}, 'National':{q:'national news',days:1}, 'Health':{q:'health medicine',days:3},
-    'Climate':{q:'climate change',days:3}, 'Energy':{q:'energy',days:3}, 'Education':{q:'education',days:3},
-    'Military & Defense':{q:'military defense',days:2}
-  };
-  function memberCats(){
+  async function addMemberLocal(){
     const p = (window.QP && QP.profile) || {};
-    const cats = [];
-    (p.interests||[]).forEach(name=>{
-      if(name==='Local'){ if(p.city) cats.push({label:'LOCAL · '+p.city.toUpperCase(), q:p.city, days:3}); return; }
-      const m = INTEREST_Q[name]; if(m) cats.push({label:name.toUpperCase(), q:m.q, days:m.days});
-    });
-    if(p.city && !cats.some(c=>c.label.indexOf('LOCAL')===0)) cats.push({label:'LOCAL · '+p.city.toUpperCase(), q:p.city, days:3});
-    if(p.country && !(p.interests||[]).indexOf('National')>=0 && !cats.some(c=>c.label==='NATIONAL')) cats.push({label:'NATIONAL', q:p.country+' national news', days:1});
-    if(!cats.length) cats.push({label:'WORLD',q:'world news',days:1},{label:'POLITICS',q:'politics',days:1});
-    return cats.slice(0,12);
+    const want = [];
+    if(p.city) want.push({label:'LOCAL · '+p.city.toUpperCase(), q:p.city});
+    if(p.country) want.push({label:'NATIONAL', q:p.country+' national news'});
+    if(!want.length) return;
+    const got = (await Promise.all(want.map(async w=>{
+      try{
+        const d = await fetch('/news?q='+encodeURIComponent(w.q)+'&days=3&fast=1', {cache:'no-store'}).then(r=>r.json());
+        const a = (d.articles||[]).find(x=>x.image) || (d.articles||[])[0];
+        return a ? {label:w.label, title:a.title, url:a.url, image:a.image, source:a.source, time:a.time, summary:''} : null;
+      }catch(e){ return null; }
+    }))).filter(Boolean);
+    if(got.length){ renderBoardSections(got.concat(personalizeSections(lastBrief)), false); }
   }
-  async function loadMemberHome(){
-    const cats = memberCats();
-    setStatus('CURATING YOUR BOARD…');
-    const pick = arts => (arts||[]).find(x=>x.image) || (arts||[])[0] || null;
-    const fetchCat = async c=>{ try{
-      const r = await fetch('/news?q='+encodeURIComponent(c.q)+'&days='+(c.days||2)+'&fast=1', {cache:'no-store'});
-      const d = await r.json(); const a = pick(d.articles);
-      return a ? {label:c.label, q:c.q, days:c.days, a} : null;
-    }catch(e){ return null; } };
-    const items = (await Promise.all(cats.map(fetchCat))).filter(Boolean);
-    if(items.length){ homeCache = {t:Date.now(), items}; renderHome(items); homeRendered = items.length; }
-    setStatus('STANDING BY');
-  }
-  // re-render the board whenever membership/auth changes (member board <-> free board)
-  document.addEventListener('qp:auth', function(){ try{ loadHome(true); }catch(e){} });
+  // re-render the board whenever membership/auth changes (free brief <-> personalized)
+  document.addEventListener('qp:auth', function(){ try{ if(document.body.classList.contains('home')) loadHome(true); }catch(e){} });
   function resetBoard(){
     history = [];
     try{ localStorage.removeItem('q_history'); }catch(e){}
@@ -935,59 +880,84 @@
 
   // ---------- spoken welcome — varied every visit, zero ongoing API cost ----------
   (function(){
-    const HI = ()=>{ const h=new Date().getHours(); return h<12?'Good morning':h<18?'Good afternoon':'Good evening'; };
-    const GENERIC = [
-      "{hi}, sir. QUWWAA at your service — your personal news curator. What may I find for you today?",
-      "{hi}, sir. The world has been rather busy; happily, so have I. Where shall we begin?",
-      "{hi}, sir. QUWWAA online and fully briefed. Simply say the word.",
-      "{hi}, sir. I have been keeping an eye on the wires for you. What would you like to know?",
-      "{hi}, sir. Welcome back. The day's intelligence is assembled and at your disposal.",
-      "{hi}, sir. Shall I bring you up to speed, or have you something particular in mind?",
-      "{hi}, sir. QUWWAA reporting. The headlines are warm and waiting.",
-      "{hi}, sir. A pleasure, as always. Which story shall we pursue?",
-      "{hi}, sir. Consider me your eyes on the world. Where would you care to look?",
-      "{hi}, sir. Everything of note has been gathered. Ask, and it is yours.",
-      "{hi}, sir. The newsroom never sleeps, and neither do I. How may I assist?",
-      "{hi}, sir. Your curator awaits. What can I uncover for you?",
-      "{hi}, sir. All systems attentive. Name a subject, and I shall do the rest.",
-      "{hi}, sir. The board is live and the kettle, metaphorically, is on. What shall it be?"
-    ];
-    const TOPICAL = [
-      "{hi}, sir. The wires are rather animated about {topic} just now — shall I bring you the latest?",
-      "{hi}, sir. {topic} appears to be the talk of the hour. Care to take a closer look?",
-      "{hi}, sir. A good deal is stirring around {topic} today. Shall we dive in?",
-      "{hi}, sir. {topic} leads the conversation at the moment. Where would you like to start?",
-      "{hi}, sir. Much afoot in {topic} this hour. Say the word and I shall lay it out."
-    ];
+    // Local time of day → greeting bucket.
+    function bucket(){ const h = new Date().getHours();
+      return h < 5 ? 'late' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'; }
+    // MEMBER copy — {addr} is the member's resolved address. FREE copy carries no name.
+    const MEMBER = {
+      morning:[
+        "Good morning, {addr}. I've compiled your morning brief.",
+        "Good morning, {addr}. Your morning brief is prepared and waiting.",
+        "A fine morning, {addr}. I've assembled the stories that matter to you.",
+        "Good morning, {addr}. Allow me to present your morning brief.",
+        "Morning, {addr}. I took the liberty of curating your brief while you slept.",
+        "Good morning, {addr}. The world's been busy — your brief is ready."],
+      afternoon:[
+        "Good afternoon, {addr}. I've compiled your midday brief.",
+        "Good afternoon, {addr}. Your noon brief is ready.",
+        "Good afternoon, {addr}. Allow me to present the day's developments so far.",
+        "Afternoon, {addr}. I've gathered the stories worth your attention.",
+        "Good afternoon, {addr}. Your midday brief awaits."],
+      evening:[
+        "Good evening, {addr}. I've taken the liberty of compiling the breaking news in your evening brief.",
+        "Good evening, {addr}. Your evening brief is prepared.",
+        "Good evening, {addr}. Allow me to present the day's most consequential stories.",
+        "Good evening, {addr}. I've assembled your evening brief — the day distilled.",
+        "Evening, {addr}. The day's headlines, curated for you below."],
+      late:[
+        "Burning the midnight oil, {addr}? Your brief is ready all the same.",
+        "Up late, {addr}. I've kept your brief current.",
+        "Good evening, {addr}. The overnight wires are compiled below."]
+    };
+    const FREE = {
+      morning:[
+        "Good morning. Here is your morning brief.",
+        "Good morning. I've compiled today's brief for you.",
+        "Good morning. The morning's stories are assembled below.",
+        "A fine morning. Here's what the world has been up to.",
+        "Good morning. Your brief is ready."],
+      afternoon:[
+        "Good afternoon. Here is your midday brief.",
+        "Good afternoon. The day's stories are assembled below.",
+        "Good afternoon. I've compiled the midday brief.",
+        "Good afternoon. Here's where things stand."],
+      evening:[
+        "Good evening. Here is your evening brief.",
+        "Good evening. I've compiled the day's breaking news below.",
+        "Good evening. The evening brief is ready.",
+        "Good evening. Here's the day, distilled."],
+      late:[
+        "Up late? The latest brief is ready below.",
+        "The overnight stories are compiled for you."]
+    };
+    // Member address, or null when free / profile not yet known (→ fall back to FREE).
+    function memberAddr(){
+      try{ const QP = window.QP;
+        if(QP && QP.isMember && QP.isMember() && QP.profile){
+          const p = QP.profile;
+          if(p.address_style==='name' && (p.display_name||p.first_name)) return (p.display_name||p.first_name);
+          if(p.address_style==='madam') return 'madam';
+          return 'sir';
+        }
+      }catch(e){}
+      return null;
+    }
+    // Rotate without repeating the immediately-previous variant for this set.
+    function pick(arr, key){
+      if(!arr || !arr.length) return '';
+      if(arr.length === 1) return arr[0];
+      let last = -1; try{ last = parseInt(localStorage.getItem('q_greet_'+key)||'-1', 10); }catch(e){}
+      let i; do { i = Math.floor(Math.random()*arr.length); } while(i === last);
+      try{ localStorage.setItem('q_greet_'+key, String(i)); }catch(e){}
+      return arr[i];
+    }
     let text = null, spoken = false;
     // If membership is confirmed before the greeting is spoken (e.g. returning from
     // checkout), drop the cached text so it rebuilds with the member's name.
     document.addEventListener('qp:auth', function(){ if(!spoken) text = null; });
     function build(){
-      // Members get greeted by name, tuned to their interests. Free users unchanged.
-      try{
-        const QP = window.QP;
-        if(QP && QP.isMember && QP.isMember() && QP.profile){
-          const p = QP.profile;
-          const term = (p.address_style==='name' && (p.display_name||p.first_name)) ? (p.display_name||p.first_name)
-                     : (p.address_style==='madam' ? 'madam' : 'sir');
-          const ints = (p.interests||[]);
-          const topic = ints.length ? ints[Math.floor(Math.random()*ints.length)] : '';
-          const M = topic ? [
-            HI()+', '+term+'. Your '+topic.toLowerCase()+' briefing is ready — shall we begin?',
-            HI()+', '+term+'. I have been watching '+topic.toLowerCase()+' for you. Where shall we start?',
-            HI()+', '+term+'. The board is tuned to your world. What would you like first?'
-          ] : [
-            HI()+', '+term+'. Your personal board is ready. What shall we look at first?',
-            HI()+', '+term+'. Welcome back. Where would you care to begin?'
-          ];
-          return M[Math.floor(Math.random()*M.length)];
-        }
-      }catch(e){}
-      const top = (homeCache.items && homeCache.items[0]) ? String(homeCache.items[0].label||'').toLowerCase() : '';
-      const pool = top ? GENERIC.concat(TOPICAL) : GENERIC;
-      const g = pool[Math.floor(Math.random()*pool.length)];
-      return g.replace('{hi}', HI()).replace('{topic}', top || 'world affairs');
+      const b = bucket(), addr = memberAddr();
+      return addr ? pick(MEMBER[b], 'm_'+b).replace('{addr}', addr) : pick(FREE[b], 'f_'+b);
     }
     function getText(){ if(!text) text = build(); return text; }
     const style = document.createElement('style');
@@ -1043,7 +1013,7 @@
       if(window.innerWidth > 820) return;
       const reactor = document.getElementById('reactor');
       const cards = document.getElementById('homeCards');
-      const firstCard = cards && cards.querySelector('.hcard, .hwrap, .lcard');
+      const firstCard = cards && cards.querySelector('.bsec, .hcard, .hwrap, .lcard');
       if(!reactor || !firstCard) return;
       const topBound = reactor.getBoundingClientRect().bottom + 26;   // clear the STANDING BY caption
       const cardTop = firstCard.getBoundingClientRect().top;
@@ -1231,85 +1201,6 @@
     if(opened || !e.target.closest) return;
     if(e.target.closest('a[target="_blank"], #reactor, #micBtn')){ count++; localStorage.setItem(ENG,count); if(count>=2) open(); }
   }, true);
-})();
-</script>
-<script>
-/* ---- QUWWAA Morning Brief popup (reads /brief) ---- */
-(function(){
-  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-  var css=document.createElement('style');
-  css.textContent=
-    '#qbriefBtn{cursor:pointer;background:rgba(217,128,38,.14);border:1px solid rgba(217,128,38,.5);color:#ffce9a;font:inherit;font-size:11px;letter-spacing:1px;text-transform:uppercase;padding:5px 10px;border-radius:7px;margin-right:10px;white-space:nowrap;}'
-    +'#qbriefBtn:hover{background:rgba(217,128,38,.26);color:#fff;}body.bright #qbriefBtn{color:#9a5a12;}'
-    +'#qbrief{position:fixed;inset:0;z-index:9997;display:none;background:rgba(8,6,4,.82);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}'
-    +'#qbrief.open{display:flex;justify-content:center;}'
-    +'#qbriefPanel{width:100%;max-width:680px;height:100%;display:flex;flex-direction:column;background:linear-gradient(180deg,#1b140e,#120e09);box-shadow:0 0 60px rgba(0,0,0,.5);}'
-    +'#qbriefHead{display:flex;align-items:center;gap:12px;padding:calc(16px + env(safe-area-inset-top)) 22px 16px;border-bottom:1px solid rgba(217,128,38,.3);background:rgba(20,15,10,.97);position:sticky;top:0;z-index:2;}'
-    +'#qbriefTitle{font-size:13px;letter-spacing:3px;text-transform:uppercase;color:#ffd9b3;text-shadow:0 0 10px rgba(217,128,38,.5);flex:1;}'
-    +'#qbriefDate{font-size:11px;color:#b88a5a;letter-spacing:1px;}'
-    +'#qbriefClose{background:none;border:1px solid rgba(217,128,38,.5);border-radius:6px;color:#ffb27a;font-size:14px;padding:4px 10px;cursor:pointer;}'
-    +'#qbriefClose:hover{background:rgba(217,128,38,.18);}'
-    +'#qbriefBody{flex:1;overflow-y:auto;padding:20px 22px 44px;}'
-    +'.bsec{margin-bottom:26px;}'
-    +'.blabel{font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:#e08a32;margin-bottom:10px;border-bottom:1px solid rgba(217,128,38,.2);padding-bottom:5px;}'
-    +'.bthumb{display:block;border-radius:10px;overflow:hidden;margin-bottom:10px;}'
-    +'.bthumb img{display:block;width:100%;height:200px;object-fit:cover;}'
-    +'.bhead{display:block;color:#fff3e9;font-size:18px;line-height:1.3;font-weight:600;text-decoration:none;margin-bottom:8px;}'
-    +'.bhead:hover{color:#fff;text-shadow:0 0 8px rgba(255,170,90,.6);}'
-    +'.bsum{color:#d9b49a;font-size:14px;line-height:1.55;margin-bottom:7px;}'
-    +'.bmeta{font-size:11px;color:#a06a3a;text-transform:uppercase;letter-spacing:1px;}'
-    +'body.bright #qbrief{background:rgba(245,238,230,.92);}body.bright #qbriefPanel{background:linear-gradient(180deg,#fff,#f3ece2);}'
-    +'body.bright #qbriefHead{background:rgba(250,245,238,.97);}body.bright #qbriefTitle{color:#7a4a12;}'
-    +'body.bright .bhead{color:#2a1c0e;}body.bright .bsum{color:#5a4630;}'
-    +'@media(max-width:680px){.bthumb img{height:170px;}.bhead{font-size:17px;}}';
-  document.head.appendChild(css);
-
-  var ov=document.createElement('div'); ov.id='qbrief';
-  ov.innerHTML='<div id="qbriefPanel"><div id="qbriefHead"><span id="qbriefTitle">☀ QUWWAA Morning Brief</span><span id="qbriefDate"></span><button id="qbriefClose" type="button">✕</button></div><div id="qbriefBody"></div></div>';
-  document.body.appendChild(ov);
-  var body=ov.querySelector('#qbriefBody'), dateEl=ov.querySelector('#qbriefDate');
-  function close(){ ov.classList.remove('open'); }
-  function open(){ ov.classList.add('open'); load(); }
-  ov.querySelector('#qbriefClose').onclick=close;
-  ov.addEventListener('click', function(e){ if(e.target===ov) close(); });
-  document.addEventListener('keydown', function(e){ if(e.key==='Escape' && ov.classList.contains('open')) close(); });
-
-  function load(){
-    try{ dateEl.textContent=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'2-digit',month:'long'}).toUpperCase(); }catch(e){}
-    body.innerHTML='<div style="color:#b88a5a;text-align:center;padding:48px 0;font-size:12px;letter-spacing:2px;">ASSEMBLING TODAY’S BRIEF…</div>';
-    fetch('/brief',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
-      var s=(d&&d.sections)||[];
-      if(!s.length){ body.innerHTML='<div style="color:#b88a5a;text-align:center;padding:48px 16px;">The brief is being prepared — do check back shortly, sir.</div>'; return; }
-      // Members: float the sections matching their interests to the top.
-      try{
-        var QP=window.QP;
-        if(QP && QP.isMember && QP.isMember() && QP.profile && (QP.profile.interests||[]).length){
-          var ints=QP.profile.interests.map(function(x){return String(x).toLowerCase();});
-          var match=function(lbl){ lbl=String(lbl||'').toLowerCase(); return ints.some(function(i){
-            var k=i.split(' ')[0]; return lbl.indexOf(k)>=0 || k.indexOf(lbl.split(' ')[0])>=0; }); };
-          s=s.slice().sort(function(a,b){ return (match(b.label)?1:0)-(match(a.label)?1:0); });
-        }
-      }catch(e){}
-      body.innerHTML=s.map(function(x){
-        return '<div class="bsec"><div class="blabel">◆ '+esc(x.label)+'</div>'
-          +(x.image?'<a class="bthumb" href="'+esc(x.url)+'" target="_blank" rel="noopener"><img src="'+esc(x.image)+'" loading="lazy" onerror="var p=this.closest(\'.bthumb\'); if(p) p.style.display=\'none\';"></a>':'')
-          +'<a class="bhead" href="'+esc(x.url)+'" target="_blank" rel="noopener">'+esc(x.title)+'</a>'
-          +'<div class="bsum">'+esc(x.summary)+'</div>'
-          +'<div class="bmeta">'+esc(x.source)+(x.time?' · '+esc(x.time):'')+'</div></div>';
-      }).join('');
-    }).catch(function(){ body.innerHTML='<div style="color:#b88a5a;text-align:center;padding:48px 16px;">Brief unavailable right now, sir.</div>'; });
-  }
-
-  (function(){   // header button
-    if(document.getElementById('qbriefBtn')) return;
-    var hdr=document.querySelector('header'); if(!hdr) return;
-    var spans=hdr.querySelectorAll(':scope > span'); var right=spans[spans.length-1]||hdr;
-    var b=document.createElement('button'); b.id='qbriefBtn'; b.type='button'; b.textContent='☀ Brief';
-    b.title='Today’s Morning Brief'; b.onclick=open;
-    right.insertBefore(b, right.firstChild);
-  })();
-
-  if(/(?:[?&]|#)brief\b/i.test(location.search + location.hash)) setTimeout(open, 400);   // opened from the email link
 })();
 </script>
 <script>
