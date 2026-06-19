@@ -1051,8 +1051,9 @@
     try{
       const QP = window.QP;
       if(QP && QP.isMember && QP.isMember() && QP.profile && (QP.profile.interests||[]).length){
-        const ints = QP.profile.interests.map(s=>String(s).toLowerCase());
-        const match = lbl=>{ lbl=String(lbl||'').toLowerCase(); return ints.some(i=>{ const k=i.split(' ')[0]; return k && lbl.indexOf(k)>=0; }); };
+        // map the member's topics (parent and/or subtopic) to the brief sections they boost
+        const boost = QP.boostSections ? QP.boostSections(QP.profile.interests) : {};
+        const match = lbl=> !!boost[String(lbl||'').toLowerCase()];
         return sections.slice().sort((a,b)=>(match(b.label)?1:0)-(match(a.label)?1:0));
       }
     }catch(e){}
@@ -1576,6 +1577,105 @@
   const $=id=>document.getElementById(id);
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+  // ---- grouped topic taxonomy (11 parents → subtopics) ----
+  QP.TOPICS = [
+    {p:'Politics & Government', subs:['US Politics','White House','Congress','Elections & Campaigns','Supreme Court & Courts','Immigration','Policy & Legislation','State & Local Government']},
+    {p:'World & Regions', subs:['World News','Middle East','Israel–Palestine','Iran','Gaza & Lebanon','Russia–Ukraine','Europe','China','Asia-Pacific','Africa','Latin America','Diplomacy & the UN']},
+    {p:'Conflict & Security', subs:['War & Conflict','Military & Defense','National Security','Terrorism & Extremism','Intelligence & Espionage','Nuclear & Weapons','Cyber Warfare']},
+    {p:'Business & Money', subs:['Business','Economy','Markets & Stocks','Personal Finance','Crypto','Real Estate & Housing','Jobs & Labor','Startups & Entrepreneurship','Energy & Oil','Inflation & Cost of Living','Trade & Tariffs']},
+    {p:'Tech & Science', subs:['Technology','Artificial Intelligence','Big Tech','Gadgets & Consumer Tech','Cybersecurity','Space','Science','Innovation & Engineering']},
+    {p:'Health & Wellness', subs:['Health','Medicine & Research','Mental Health','Fitness & Wellness','Food & Nutrition','Public Health','Parenting & Family']},
+    {p:'Culture & Entertainment', subs:['Entertainment','Film & TV','Music','Celebrities','Gaming','Books & Literature','Art & Design','Fashion & Style','Streaming']},
+    {p:'Sports', subs:['All Sports','Football (NFL)','Basketball (NBA)','Baseball (MLB)','Soccer','Hockey (NHL)','Combat Sports (MMA & Boxing)','College Sports','Golf','Tennis','Motorsport']},
+    {p:'Society & Faith', subs:['Religion & Faith','Muslim World','Crime & Justice','Law & Courts','Education','Social Issues','Race & Identity','Human Rights']},
+    {p:'Climate & Environment', subs:['Climate Change','Environment','Renewable Energy','Nature & Wildlife','Conservation','Extreme Weather']},
+    {p:'Worth Knowing', subs:['Breaking News','Natural Disasters','Fact-Checks & Misinformation','Good News & Human Interest','Travel','Auto & Cars','Offbeat & Viral','Opinion & Editorial']}
+  ];
+  QP.POPULAR = ['US Politics','World News','Business','Technology','All Sports','Health','State & Local Government'];
+
+  // Old flat interests → new taxonomy labels, so nobody's saved picks break.
+  QP.LEGACY = {'Politics':'US Politics','Sport':'All Sports','Tech':'Technology','AI':'Artificial Intelligence',
+    'Stocks':'Markets & Stocks','Finance':'Economy','Science':'Science','Pop Culture':'Culture & Entertainment',
+    'Local':'State & Local Government','World':'World News','National':'US Politics','Health':'Health',
+    'Climate':'Climate Change','Energy':'Energy & Oil','Education':'Education','Military & Defense':'Military & Defense'};
+  QP.migrateInterests = function(list){
+    const out=[]; (list||[]).forEach(x=>{ const v=QP.LEGACY[x]||x; if(out.indexOf(v)<0) out.push(v); }); return out;
+  };
+
+  // Topic → search keywords (overrides; default strips parentheticals/separators).
+  // Available for personalized queries and the Priority "Track as Priority" prefill.
+  QP.TOPIC_KW = {'US Politics':'US politics','Israel–Palestine':'Israel Palestine','Gaza & Lebanon':'Gaza Lebanon',
+    'Russia–Ukraine':'Russia Ukraine','Artificial Intelligence':'artificial intelligence','Markets & Stocks':'stock market',
+    'Football (NFL)':'NFL football','Basketball (NBA)':'NBA basketball','Baseball (MLB)':'MLB baseball',
+    'Hockey (NHL)':'NHL hockey','Combat Sports (MMA & Boxing)':'MMA boxing','Muslim World':'Muslim world Islam',
+    'Crime & Justice':'crime court','Energy & Oil':'energy oil','Climate Change':'climate change'};
+  QP.topicQuery = function(label){
+    return QP.TOPIC_KW[label] || String(label||'').replace(/\([^)]*\)/g,' ').replace(/[&·–—\/]/g,' ').replace(/\s+/g,' ').trim();
+  };
+
+  // Which morning-brief sections each topic should float to the top of the board.
+  const SEC_PARENT = {
+    'Politics & Government':['US Politics'],'World & Regions':['World','Middle East'],'Conflict & Security':['Middle East','World'],
+    'Business & Money':['Finance','Markets'],'Tech & Science':['Tech','AI','Science'],'Health & Wellness':['Worth Knowing'],
+    'Culture & Entertainment':['Culture & Entertainment'],'Sports':['Sports'],'Society & Faith':['Crime & Justice'],
+    'Climate & Environment':['Nature & Disasters'],'Worth Knowing':['Worth Knowing','Nature & Disasters']};
+  const SEC_SUB = {
+    'US Politics':['US Politics'],'White House':['US Politics'],'Congress':['US Politics'],'Elections & Campaigns':['US Politics'],'Supreme Court & Courts':['US Politics','Crime & Justice'],
+    'World News':['World'],'Middle East':['Middle East'],'Israel–Palestine':['Middle East'],'Iran':['Middle East'],'Gaza & Lebanon':['Middle East'],'Military & Defense':['Middle East','World'],
+    'Business':['Finance','Markets'],'Economy':['Finance'],'Markets & Stocks':['Markets'],'Personal Finance':['Finance'],'Energy & Oil':['Markets','Finance'],
+    'Technology':['Tech'],'Artificial Intelligence':['AI'],'Big Tech':['Tech'],'Cybersecurity':['Tech'],'Space':['Science'],'Science':['Science'],
+    'Culture & Entertainment':['Culture & Entertainment'],'Entertainment':['Culture & Entertainment'],'Film & TV':['Culture & Entertainment'],'Music':['Culture & Entertainment'],'Celebrities':['Culture & Entertainment'],'Gaming':['Culture & Entertainment'],
+    'All Sports':['Sports'],'Football (NFL)':['Sports'],'Basketball (NBA)':['Sports'],'Baseball (MLB)':['Sports'],'Soccer':['Sports'],
+    'Crime & Justice':['Crime & Justice'],'Law & Courts':['Crime & Justice'],
+    'Climate Change':['Nature & Disasters'],'Environment':['Nature & Disasters'],'Extreme Weather':['Nature & Disasters'],'Natural Disasters':['Nature & Disasters'],'Breaking News':['Worth Knowing']};
+  const PARENT_OF = {}; QP.TOPICS.forEach(g=> g.subs.forEach(s=> PARENT_OF[s]=g.p));
+  QP.boostSections = function(interests){
+    const set={};
+    QP.migrateInterests(interests).forEach(label=>{
+      let secs = SEC_SUB[label] || SEC_PARENT[label];
+      if(!secs && PARENT_OF[label]) secs = SEC_PARENT[PARENT_OF[label]];
+      (secs||[]).forEach(s=> set[s.toLowerCase()]=1);
+    });
+    return set;
+  };
+
+  // Reusable grouped accordion topic picker (onboarding Lens 2 + Settings).
+  QP.renderTopicPicker = function(container, selected){
+    injectCSS();
+    const isSel=l=>selected.indexOf(l)>=0;
+    container.innerHTML='<input class="tpSearchIn" placeholder="Search topics…">'
+      +'<div class="tpPopWrap"><div class="tpPopLbl">Popular</div><div class="tpPop"></div></div>'
+      +'<div class="tpList"></div><div class="tpCount"></div>';
+    const pop=container.querySelector('.tpPop'), list=container.querySelector('.tpList'), countEl=container.querySelector('.tpCount');
+    function updCount(){ countEl.textContent = selected.length ? (selected.length+' selected') : 'None yet — pick as many as you like.'; }
+    function syncAll(){ container.querySelectorAll('.tpChip,.tpFollow').forEach(c=> c.classList.toggle('sel', isSel(c.textContent))); }
+    function toggle(l){ const i=selected.indexOf(l); if(i>=0) selected.splice(i,1); else selected.push(l); syncAll(); updCount(); }
+    QP.POPULAR.forEach(l=>{ const c=document.createElement('button'); c.type='button'; c.className='tpChip'+(isSel(l)?' sel':''); c.textContent=l; c.onclick=()=>toggle(l); pop.appendChild(c); });
+    QP.TOPICS.forEach(g=>{
+      const grp=document.createElement('div'); grp.className='tpGroup'; grp.dataset.parent=g.p.toLowerCase();
+      const head=document.createElement('div'); head.className='tpHead';
+      const follow=document.createElement('button'); follow.type='button'; follow.className='tpFollow'+(isSel(g.p)?' sel':''); follow.textContent=g.p;
+      follow.onclick=e=>{ e.stopPropagation(); toggle(g.p); };
+      const caret=document.createElement('span'); caret.className='tpCaret'; caret.textContent='▾';
+      head.appendChild(follow); head.appendChild(caret);
+      head.onclick=()=> grp.classList.toggle('open');
+      const subs=document.createElement('div'); subs.className='tpSubs';
+      g.subs.forEach(s=>{ const c=document.createElement('button'); c.type='button'; c.className='tpChip'+(isSel(s)?' sel':''); c.textContent=s; c.onclick=()=>toggle(s); subs.appendChild(c); });
+      grp.appendChild(head); grp.appendChild(subs); list.appendChild(grp);
+    });
+    const sin=container.querySelector('.tpSearchIn');
+    sin.oninput=()=>{ const q=sin.value.trim().toLowerCase();
+      container.querySelector('.tpPopWrap').style.display = q?'none':'';
+      container.querySelectorAll('.tpGroup').forEach(grp=>{
+        if(!q){ grp.style.display=''; grp.classList.remove('open'); grp.querySelectorAll('.tpChip').forEach(c=>c.style.display=''); return; }
+        const ph = grp.dataset.parent.indexOf(q)>=0; let any=ph;
+        grp.querySelectorAll('.tpChip').forEach(c=>{ const m=ph||c.textContent.toLowerCase().indexOf(q)>=0; c.style.display=m?'':'none'; if(m)any=true; });
+        grp.style.display=any?'':'none'; grp.classList.toggle('open', any);
+      });
+    };
+    updCount();
+  };
+
   QP.baseCSS = injectCSS;   // exposed so the settings/auth modals always have the base card styles
   function injectCSS(){
     if($('qpCSS')) return;
@@ -1707,6 +1807,8 @@
     try{
       const { data } = await QP.sb.from('profiles').select('*').eq('id', QP.user.id).maybeSingle();
       QP.profile = data || null;
+      // normalise any legacy interest labels (e.g. "Pop Culture") to the new taxonomy
+      if(QP.profile && QP.profile.interests && QP.migrateInterests) QP.profile.interests = QP.migrateInterests(QP.profile.interests);
     }catch(e){ QP.profile=null; }
   }
   QP.loadProfile=loadProfile;
@@ -1780,6 +1882,23 @@
       +'#qpChips{display:flex;flex-wrap:wrap;gap:9px;}'
       +'.qpChip{padding:9px 14px;border-radius:20px;border:1px solid rgba(217,128,38,.4);background:rgba(217,128,38,.06);color:#ffce9a;font:inherit;font-size:13px;cursor:pointer;}'
       +'.qpChip.sel{background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border-color:transparent;font-weight:700;}'
+      /* grouped topic picker */
+      +'.tpSearchIn{width:100%;padding:11px 13px;font:inherit;font-size:14px;color:#ffe2d1;background:rgba(60,40,25,.35);border:1px solid rgba(217,128,38,.35);border-radius:10px;outline:none;}'
+      +'.tpSearchIn:focus{border-color:rgba(255,170,90,.7);}'
+      +'.tpPopWrap{margin-top:13px;}.tpPopLbl{font-size:10px;letter-spacing:0;color:#a06a3a;margin-bottom:7px;}'
+      +'.tpPop{display:flex;flex-wrap:wrap;gap:8px;}'
+      +'.tpList{margin-top:14px;}'
+      +'.tpGroup{border-bottom:1px solid rgba(217,128,38,.16);}'
+      +'.tpHead{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 2px;cursor:pointer;}'
+      +'.tpFollow{background:none;border:1px solid rgba(217,128,38,.4);color:#ffd9b3;font:inherit;font-size:14px;padding:7px 13px;border-radius:18px;cursor:pointer;}'
+      +'.tpFollow.sel{background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border-color:transparent;font-weight:700;}'
+      +'.tpCaret{color:#a06a3a;font-size:12px;transition:transform .2s;flex:none;padding:0 4px;}'
+      +'.tpGroup.open .tpCaret{transform:rotate(180deg);}'
+      +'.tpSubs{display:none;flex-wrap:wrap;gap:8px;padding:2px 0 14px;}.tpGroup.open .tpSubs{display:flex;}'
+      +'.tpChip{padding:8px 13px;border-radius:18px;border:1px solid rgba(217,128,38,.38);background:rgba(217,128,38,.06);color:#ffce9a;font:inherit;font-size:13px;cursor:pointer;}'
+      +'.tpChip.sel{background:linear-gradient(135deg,#D98026,#b35f10);color:#1a1208;border-color:transparent;font-weight:700;}'
+      +'.tpCount{margin-top:14px;font-size:12px;color:#a06a3a;text-align:center;}'
+      +'body.bright .tpFollow{color:#3a2c1e;}body.bright .tpChip{color:#9a5a12;}body.bright .tpSearchIn{background:#fff;color:#2a2118;border-color:rgba(179,95,16,.4);}'
       +'.qpOpt{display:block;width:100%;text-align:left;padding:14px 16px;margin-top:10px;border-radius:11px;border:1px solid rgba(217,128,38,.4);background:rgba(217,128,38,.06);color:#ffd9b3;font:inherit;font-size:15px;cursor:pointer;}'
       +'.qpOpt.sel{border-color:#D98026;background:rgba(217,128,38,.18);}'
       +'#qpOnb .foot{padding:12px 22px calc(16px + env(safe-area-inset-bottom));border-top:1px solid rgba(217,128,38,.2);display:flex;gap:10px;align-items:center;}'
@@ -1827,13 +1946,8 @@
       body.innerHTML='<h1>QUWWAA becomes your personal news anchor.</h1>'
         +'<div class="sub">7 days free. I’ll greet you by name and tune the board, the morning brief, and the butler to exactly the world you care about — your topics, your city.</div>';
     } else if(step===2){
-      body.innerHTML='<h1>Select your news</h1><div class="sub">Pick the avenues you want me to follow. Choose as many as you like.</div><div id="qpChips"></div>';
-      const wrap=$('qpChips');
-      QP.INTERESTS.forEach(name=>{
-        const c=document.createElement('button'); c.type='button'; c.className='qpChip'+(S.interests.indexOf(name)>=0?' sel':''); c.textContent=name;
-        c.onclick=()=>{ const i=S.interests.indexOf(name); if(i>=0)S.interests.splice(i,1); else S.interests.push(name); c.classList.toggle('sel'); };
-        wrap.appendChild(c);
-      });
+      body.innerHTML='<h1>Select your news</h1><div class="sub">Pick a whole category, or tap one to narrow it down. Choose as many as you like.</div><div id="qpChips"></div>';
+      QP.renderTopicPicker($('qpChips'), S.interests);
     } else if(step===3){
       body.innerHTML='<h1>Your location</h1><div class="sub">So I can bring you what’s happening close to home.</div>'
         +'<label>City</label><input id="qpCity" type="text" autocomplete="address-level2" value="'+esc(S.city)+'">'
@@ -2003,7 +2117,7 @@
   const sel = { interests:[], address_style:'name' };
   function fill(){
     const p=QP.profile||{};
-    sel.interests = (p.interests||[]).slice();
+    sel.interests = QP.migrateInterests(p.interests);
     sel.address_style = p.address_style||'name';
     $('qpSetStatus').textContent = (p.subscription_status||'').toUpperCase()
       + (p.trial_ends_at ? ' · trial ends '+new Date(p.trial_ends_at).toLocaleDateString() : '');
@@ -2011,11 +2125,7 @@
     $('qpSetCity').value = p.city||''; $('qpSetState').value = p.state||''; $('qpSetCountry').value = p.country||'';
     const seg=$('qpSetStyle'); seg.querySelectorAll('button').forEach(b=>{ b.classList.toggle('sel', b.getAttribute('data-as')===sel.address_style);
       b.onclick=()=>{ sel.address_style=b.getAttribute('data-as'); seg.querySelectorAll('button').forEach(x=>x.classList.toggle('sel',x===b)); }; });
-    const chips=$('qpSetChips'); chips.innerHTML='';
-    (QP.INTERESTS||[]).forEach(name=>{ const c=document.createElement('button'); c.type='button';
-      c.className='qpSetChip'+(sel.interests.indexOf(name)>=0?' sel':''); c.textContent=name;
-      c.onclick=()=>{ const i=sel.interests.indexOf(name); if(i>=0)sel.interests.splice(i,1); else sel.interests.push(name); c.classList.toggle('sel'); };
-      chips.appendChild(c); });
+    QP.renderTopicPicker($('qpSetChips'), sel.interests);
   }
   async function save(){
     const btn=$('qpSetSave'), msg=$('qpSetMsg'); msg.className='qpMsg'; msg.textContent='';
