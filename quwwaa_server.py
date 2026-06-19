@@ -1716,11 +1716,8 @@ class Handler(SimpleHTTPRequestHandler):
                     full = anthropic_stream(msgs, extra, _w)
                     if not full.strip() and wrote[0] == 0:
                         _w('I received an empty transmission, sir.')
-                except Exception as e:
-                    if data.get('diag'):
-                        try: _w('[diag] ' + type(e).__name__ + ': ' + (e.read().decode('utf-8','ignore')[:400] if hasattr(e,'read') else str(e)))
-                        except Exception: _w('[diag] ' + type(e).__name__)
-                    elif wrote[0] == 0:
+                except Exception:
+                    if wrote[0] == 0:
                         # streaming failed before any token → serve the full reply non-streamed
                         try: _w(anthropic_chat(msgs, extra) or 'I received an empty transmission, sir.')
                         except Exception: _w('I encountered a fault processing that, sir.')
