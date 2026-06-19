@@ -740,7 +740,27 @@
       };
       typeLine();
     }
-    return { play, stop(){ clear(); hide(); } };
+    // ---- live streaming typewriter (fed by the /ask token stream) ----
+    // Shows the latest sentence, typed progressively, as tokens arrive — so the
+    // butler appears to start talking the instant the first words land.
+    let streamMode=false, sTarget='', sShown=0, sTimer=null;
+    function lastSentence(t){
+      t=t.replace(/\s+$/,''); let idx=0; const re=/[.!?]\s/g; let m;
+      while((m=re.exec(t))) idx=m.index+1;
+      return (idx>0 ? t.slice(idx) : t).replace(/^\s+/,'');
+    }
+    function sTick(){ if(!streamMode) return;
+      if(sShown<sTarget.length){ sShown=Math.min(sTarget.length, sShown+2); cap.textContent=sTarget.slice(0,sShown); }
+      sTimer=setTimeout(sTick, 26);
+    }
+    function beginStream(){ ensure(); clear(); active=true; streamMode=true; sTarget=''; sShown=0;
+      document.body.classList.add('cap-open'); bar.classList.add('show'); cap.classList.add('caret'); cap.textContent=''; sTick(); }
+    function feed(visible){ if(!streamMode) return; const s=lastSentence(String(visible||''));
+      if(s!==sTarget){ if(!s.startsWith(sTarget)) sShown=0; sTarget=s; fitLine(s); cap.textContent=sTarget.slice(0,sShown); } }
+    function endStream(){ if(sTimer) clearTimeout(sTimer); streamMode=false;
+      cap.textContent=sTarget; if(sTarget) fitLine(sTarget);
+      timers.push(setTimeout(()=>{ active=false; hide(); }, 1300)); }
+    return { play, beginStream, feed, endStream, stop(){ streamMode=false; if(sTimer)clearTimeout(sTimer); clear(); hide(); } };
   })();
 
   // ---------- voice input ----------
@@ -1105,6 +1125,89 @@
   }
 
   // ---------- pipeline ----------
+  // Sentence-by-sentence TTS queue: speak the first sentence the moment it's
+  // ready (while the rest still streams), then the remainder — plays in order
+  // through the gesture-primed audio element (iPhone-safe). Falls back per chunk
+  // to the native voice if the server voice is unavailable.
+  function makeTtsQueue(){
+    const q=[]; let playing=false, finished=false;
+    function finishMaybe(){ if(finished && !playing && !q.length) speakDone(); }
+    function playNext(){
+      if(playing) return;
+      if(!q.length){ finishMaybe(); return; }
+      playing=true; const text=q.shift();
+      const after=()=>{ playing=false; playNext(); };
+      (async()=>{
+        if(serverVoice){
+          try{
+            const r=await fetch('/speak',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})});
+            if(r.ok){
+              const url=URL.createObjectURL(await r.blob());
+              const a=getTtsAudio(); a.muted=false; a.src=url;
+              a.onended=()=>{ try{URL.revokeObjectURL(url);}catch(e){} after(); };
+              a.onerror=()=>{ after(); };
+              currentAudio=a; await a.play(); return;
+            }
+          }catch(e){}
+        }
+        try{
+          const u=new SpeechSynthesisUtterance(text);
+          if(britishVoice) u.voice=britishVoice; u.lang=(britishVoice&&britishVoice.lang)||'en-GB'; u.rate=1.0; u.pitch=0.9;
+          u.onend=after; u.onerror=after; speechSynthesis.speak(u);
+        }catch(e){ after(); }
+      })();
+    }
+    return { push(t){ t=(t||'').trim(); if(t){ q.push(t); playNext(); } }, done(){ finished=true; finishMaybe(); } };
+  }
+
+  // Stream the butler's reply: render tokens into the caption typewriter as they
+  // arrive and start speaking the first sentence early. Returns false (→ caller
+  // falls back to the non-streaming path) if streaming isn't available/usable.
+  async function streamReply(){
+    if(cfg.eleven) return false;              // ElevenLabs path stays whole-reply (non-stream)
+    const headers={'content-type':'application/json'};
+    try{ if(window.QP && QP.token) headers['Authorization']='Bearer '+QP.token; }catch(e){}
+    const msgs = history.slice(-20).map(m=>({role:m.role, content:m.content}));
+    let resp;
+    try{ resp = await fetch('/ask',{method:'POST', headers, body:JSON.stringify({messages:msgs, stream:true})}); }
+    catch(e){ return false; }
+    if(!resp.ok || !resp.body || !resp.body.getReader) return false;   // 429/503/no-stream → fallback
+    mode('speaking'); setStatus('Responding');
+    stopAudio();
+    Caption.beginStream();
+    const reader=resp.body.getReader(), dec=new TextDecoder();
+    const tts = voiceOn ? makeTtsQueue() : null;
+    const lensTag=/\[LENS:/;
+    const visible=s=>{ const i=s.indexOf('[LENS:'); return i>=0 ? s.slice(0,i) : s; };
+    let full='', firstSpoken=false, spokenLen=0;
+    function maybeFirst(){
+      if(firstSpoken || !tts) return;
+      const v=visible(full); const m=v.match(/^[\s\S]*?[.!?](\s|$)/);
+      if(m && m[0].trim().length>1){ firstSpoken=true; spokenLen=m[0].length; tts.push(m[0]); }
+    }
+    try{
+      while(true){
+        const {value, done} = await reader.read();
+        if(done) break;
+        full += dec.decode(value, {stream:true});
+        Caption.feed(visible(full));
+        maybeFirst();
+      }
+    }catch(e){ Caption.stop(); mode(''); return false; }
+    if(!full.trim()){ Caption.stop(); mode(''); return false; }   // empty → fallback
+    let reply=full.trim();
+    const lm=reply.match(/\[LENS:\s*([^\]|]+)(?:\|\s*(\d+)d?\s*)?\]/i);
+    if(lm){ reply=reply.replace(lm[0],'').trim(); openLens(lm[1].trim(), lm[2]); }
+    Caption.endStream();
+    addMsg('jarvis', reply);
+    if(tts){
+      if(firstSpoken){ const rest=reply.slice(spokenLen).trim(); if(rest) tts.push(rest); }
+      else if(reply) tts.push(reply);
+      tts.done();
+    } else { speakDone(); }
+    return true;
+  }
+
   async function handleInput(text){
     text=(text||'').trim();
     if(!text || busy) return;
@@ -1132,14 +1235,19 @@
         }
       }
     }catch(e){}
-    let reply;
-    try{ reply = await ask(); }
-    catch(e){ reply = "I'm afraid the uplink failed, sir"+(e&&e.message?': '+e.message:'.'); }
-    const lm = reply.match(/\[LENS:\s*([^\]|]+)(?:\|\s*(\d+)d?\s*)?\]/i);
-    if(lm){ reply = reply.replace(lm[0], '').trim(); openLens(lm[1].trim(), lm[2]); }
-    addMsg('jarvis', reply);
+    let streamed = false;
+    try{ streamed = await streamReply(); }catch(e){ streamed = false; }
+    if(!streamed){
+      // fallback: non-streaming reply (also covers the no-server-key sandbox path)
+      let reply;
+      try{ reply = await ask(); }
+      catch(e){ reply = "I'm afraid the uplink failed, sir"+(e&&e.message?': '+e.message:'.'); }
+      const lm = reply.match(/\[LENS:\s*([^\]|]+)(?:\|\s*(\d+)d?\s*)?\]/i);
+      if(lm){ reply = reply.replace(lm[0], '').trim(); openLens(lm[1].trim(), lm[2]); }
+      addMsg('jarvis', reply);
+      speak(reply);
+    }
     busy=false;
-    speak(reply);
   }
   $('sendBtn').onclick = ()=>{ handleInput(textIn.value); textIn.value=''; };
   textIn.addEventListener('keydown', e=>{ if(e.key==='Enter'){ handleInput(textIn.value); textIn.value=''; }});

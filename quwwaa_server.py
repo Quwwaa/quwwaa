@@ -871,18 +871,54 @@ PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS
     "panel shows the last 7 days by default; only if the user explicitly asks for older coverage add a day "
     "window after a pipe: [LENS: keywords | 30d]. Do not use the tag for non-news questions.")
 
-def anthropic_chat(messages, extra_system=''):
-    body = json.dumps({
-        'model': ASK_MODEL, 'max_tokens': 600, 'system': PERSONA + (extra_system or ''), 'messages': messages,
+ASK_MAX_TOKENS = int(os.environ.get('ASK_MAX_TOKENS', '400'))   # punchy butler — shorter = faster + cheaper
+
+def _anthropic_body(messages, extra_system, stream=False):
+    return json.dumps({
+        'model': ASK_MODEL, 'max_tokens': ASK_MAX_TOKENS, 'system': PERSONA + (extra_system or ''),
+        'messages': messages, 'stream': bool(stream),
         'tools': [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 3}],
     }).encode()
-    req = urllib.request.Request('https://api.anthropic.com/v1/messages', data=body, headers={
+
+def anthropic_chat(messages, extra_system=''):
+    req = urllib.request.Request('https://api.anthropic.com/v1/messages',
+        data=_anthropic_body(messages, extra_system, False), headers={
         'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with urllib.request.urlopen(req, timeout=45) as r:   # fail-fast cap
         data = json.loads(r.read())
     parts = [b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text']
     return ' '.join(parts).strip()
+
+def anthropic_stream(messages, extra_system, write):
+    """Proxy Anthropic's SSE token stream; call write(chunk) per text delta.
+    Returns the full text. Fail-fast socket timeout so a stalled stream can't hang."""
+    req = urllib.request.Request('https://api.anthropic.com/v1/messages',
+        data=_anthropic_body(messages, extra_system, True), headers={
+        'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'})
+    full = []
+    with urllib.request.urlopen(req, timeout=45) as r:
+        for raw in r:                                    # SSE lines
+            line = raw.decode('utf-8', 'ignore').strip()
+            if not line.startswith('data:'):
+                continue
+            payload = line[5:].strip()
+            if payload == '[DONE]':
+                break
+            try:
+                ev = json.loads(payload)
+            except Exception:
+                continue
+            if ev.get('type') == 'content_block_delta':
+                d = ev.get('delta') or {}
+                if d.get('type') == 'text_delta':
+                    t = d.get('text') or ''
+                    if t:
+                        full.append(t); write(t)
+            elif ev.get('type') == 'error':
+                break
+    return ''.join(full)
 
 # --- Speech-to-text via Whisper ---------------------------------------------
 AUDIO_EXT = {'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'mp4',
@@ -1284,7 +1320,7 @@ def _push_send_one(row, payload):
     ep = row.get('endpoint') or ''
     info = {'endpoint': ep, 'keys': {'p256dh': row.get('p256dh'), 'auth': row.get('auth')}}
     try:
-        webpush(subscription_info=info, data=json.dumps(payload), ttl=86400,
+        webpush(subscription_info=info, data=json.dumps(payload), ttl=86400, timeout=10,
                 vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims={'sub': VAPID_SUBJECT})
         return True
     except WebPushException as e:
@@ -1666,6 +1702,22 @@ class Handler(SimpleHTTPRequestHandler):
                 extra = (" MEMBER CONTEXT: You are speaking with a QUWWAA member. Address them as '%s'." % addr)
                 if ints:
                     extra += " They follow these interests: %s. Weight your awareness and suggestions toward them when relevant." % ints
+            if data.get('stream'):                       # stream tokens for a snappy butler
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('X-Accel-Buffering', 'no')   # ask proxies not to buffer
+                self.end_headers()
+                def _w(t):
+                    self.wfile.write(t.encode('utf-8')); self.wfile.flush()
+                try:
+                    full = anthropic_stream(msgs, extra, _w)
+                    if not full.strip():
+                        _w('I received an empty transmission, sir.')
+                except Exception:
+                    try: _w(' …forgive me, sir — the uplink faltered.')
+                    except Exception: pass
+                return
             reply = anthropic_chat(msgs, extra) or 'I received an empty transmission, sir.'
             self._send_json({'reply': reply})
         except urllib.error.HTTPError as e:
