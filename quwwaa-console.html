@@ -211,6 +211,9 @@
   #lensBody { flex:1; overflow-y:auto; padding:18px 22px; display:grid;
               grid-template-columns:repeat(auto-fill, minmax(290px, 1fr)); gap:14px; align-content:start;
               scrollbar-width:thin; scrollbar-color:#4a2f15 transparent; }
+  /* the search Lens reuses the home-board card (.bsec); grid gap handles spacing */
+  #lensBody .bsec { margin-bottom:0; align-self:start; }
+  #lensBody .bthumb img { height:150px; }
   .lcard {
     padding:14px 16px; border-radius:10px; display:flex; flex-direction:column; gap:8px;
     background:linear-gradient(160deg, rgba(217,128,38,.10), rgba(45,28,14,.25));
@@ -870,17 +873,13 @@
     const prevScroll = body.scrollTop;
     body.innerHTML = '';
     arts.forEach((a, i)=>{
-      const c = document.createElement('div'); c.className = 'lcard';
+      // same card + same metered openArticle() as the home board / brief — search
+      // is no longer a backdoor around the paywall.
+      const x = {title:a.title, url:a.url, source:a.source, image:a.image, time:a.time,
+                 summary:a.summary||'', label:a.source||''};
+      const c = storyCard(x, a.source||'', (a.time||'')+(a.via?' · '+a.via:''));
       if(animate){ const delay = Math.min(i * 55, 2600); c.style.animationDelay = delay + 'ms'; if(i < 18) popSound(delay); }
       else { c.style.animation = 'none'; c.style.opacity = '1'; }   // quiet upgrade — no re-pop
-      const fav = 'https://www.google.com/s2/favicons?sz=32&domain=' + encodeURIComponent(a.source||'');
-      const thumb = a.image
-        ? '<div class="lthumb"><img src="'+esc(a.image)+'" loading="lazy" onerror="this.parentNode.style.display=\'none\'"></div>'
-        : '';
-      c.innerHTML = thumb +
-        '<div class="lsrc"><img src="'+fav+'" onerror="this.style.display=\'none\'">'+esc(a.source||'')+'</div>' +
-        '<div class="lhead"><a href="'+esc(a.url||'#')+'" target="_blank" rel="noopener">'+esc(a.title||'')+'</a></div>' +
-        '<div class="lmeta"><span>'+esc(a.time||'')+'</span><span>'+esc(a.via||'')+'</span></div>';
       body.appendChild(c);
     });
     if(!animate) body.scrollTop = prevScroll;   // keep the reader's place on a quiet upgrade
@@ -916,23 +915,27 @@
 
   // ---------- the board IS the morning brief (multi-section, thumbnailed) ----------
   function exitHome(){ document.body.classList.remove('home'); }
+  // One card component shared by the home board, the brief, and the search Lens —
+  // so format + behaviour can't drift. Tapping always opens the in-app article
+  // view (Summary + Sources) through the single metered openArticle().
+  function storyCard(x, label, meta){
+    const sec = document.createElement('div'); sec.className = 'bsec';
+    sec.innerHTML =
+      (label ? '<div class="blabel">◈ ' + esc(label) + '</div>' : '') +
+      (x.image ? '<div class="bthumb"><img src="'+esc(x.image)+'" loading="lazy" onerror="var p=this.closest(\'.bthumb\'); if(p) p.style.display=\'none\';"></div>' : '') +
+      '<div class="bhead">'+esc(x.title||'')+'</div>' +
+      (x.summary ? '<div class="bsum">'+esc(x.summary)+'</div>' : '') +
+      '<div class="bmeta">'+esc(meta||'')+'</div>';
+    sec.style.cursor = 'pointer';
+    sec.onclick = ()=> openArticle(x);
+    return sec;
+  }
   function renderBoardSections(sections, sound){
     const wrap = $('homeCards'); if(!wrap) return;
     wrap.innerHTML = '';
     sections.forEach((x, i)=>{
       if(sound && i < 8) popSound(Math.min(i*110, 1200));
-      const sec = document.createElement('div'); sec.className = 'bsec';
-      // tapping a card now opens the in-app article view (summary + sources),
-      // not a jump to the source — the source link lives under the Sources tab.
-      sec.innerHTML =
-        '<div class="blabel">◈ ' + esc(x.label) + '</div>' +
-        (x.image ? '<div class="bthumb"><img src="'+esc(x.image)+'" loading="lazy" onerror="var p=this.closest(\'.bthumb\'); if(p) p.style.display=\'none\';"></div>' : '') +
-        '<div class="bhead">'+esc(x.title||'')+'</div>' +
-        (x.summary ? '<div class="bsum">'+esc(x.summary)+'</div>' : '') +
-        '<div class="bmeta">'+esc(x.source||'')+(x.time?' · '+esc(x.time):'')+'</div>';
-      sec.style.cursor = 'pointer';
-      sec.onclick = ()=> openArticle(x);
-      wrap.appendChild(sec);
+      wrap.appendChild(storyCard(x, x.label, (x.source||'')+(x.time?' · '+x.time:'')));
     });
   }
   // ---------- in-app article view (Summary + Sources) + 1/day metered paywall ----------
