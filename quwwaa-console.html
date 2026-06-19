@@ -2514,6 +2514,11 @@
   });
   // deep link from a push notification (e.g. a Priority update) → open that tab
   if(/[?&]open=priority/.test(location.search)){ setTimeout(()=>setTab('priority'), 500); }
+  // deep link from the Morning Brief email (?a=url&t=&s=&lbl=) → open that article
+  (function(){ try{ const q=new URLSearchParams(location.search); const a=q.get('a');
+    if(a){ setTimeout(()=>{ if(window.QUWWAA_openArticle) window.QUWWAA_openArticle(
+      {url:a, title:q.get('t')||'', source:q.get('s')||'', label:q.get('lbl')||''}); }, 700); }
+  }catch(e){} })();
 })();
 </script>
 </body>

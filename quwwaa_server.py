@@ -8,7 +8,7 @@ import urllib.request, urllib.parse, urllib.error
 import xml.etree.ElementTree as ET
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 PORT = int(os.environ.get('PORT', '8765'))      # cloud hosts inject PORT; 8765 locally
 HOST = os.environ.get('HOST', '0.0.0.0')         # bind all interfaces in the cloud
@@ -62,6 +62,13 @@ KIT_FORM_ID = os.environ.get('KIT_FORM_ID', '9570921')                   # the f
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')                # exposed via /config (client needs it)
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')             # secret — signs Web Push
 VAPID_SUBJECT = os.environ.get('VAPID_SUBJECT', 'mailto:quwwaa.io@gmail.com')
+# Daily Morning Brief email (Kit broadcast). Mode: off | draft | send.
+BRIEF_EMAIL_MODE = os.environ.get('BRIEF_EMAIL_MODE', 'draft').lower()
+BRIEF_SEND_HOUR = int(os.environ.get('BRIEF_SEND_HOUR', '6'))                       # America/Phoenix clock hour
+BRIEF_COMPOSE_HOUR = int(os.environ.get('BRIEF_COMPOSE_HOUR', str(max(0, BRIEF_SEND_HOUR - 1))))
+BRIEF_EMAIL_TOKEN = os.environ.get('BRIEF_EMAIL_TOKEN', '')                         # gates the manual /admin trigger
+ADMIN_USER_ID = os.environ.get('ADMIN_USER_ID', '')                                # optional: who to ping for draft review
+PHOENIX_TZ = timezone(timedelta(hours=-7))                                          # MST, no DST
 # Premium activates only when the WHOLE paid flow is ready — auth (Supabase) +
 # checkout (price + secret key) + status updates (webhook secret + service role).
 # This prevents a half-configured state from showing a premium UI that can't
@@ -706,6 +713,125 @@ def build_brief(full=False):
         if out:
             BRIEF['sections'] = list(out)               # publish progress so /brief fills in live
     BRIEF['t'] = time.time()               # always stamp so we don't loop full rebuilds
+
+# --- Daily Morning Brief email (Kit broadcast, teaser format) ------------------
+BRIEF_EMAIL = {'day': None}
+
+def _brief_article_link(s):
+    """Deep-link into the on-site article view (counts toward the free meter)."""
+    q = urllib.parse.urlencode({'a': s.get('url', ''), 't': s.get('title', ''),
+                                's': s.get('source', ''), 'lbl': s.get('label', '')})
+    return SITE_URL + '/?' + q
+
+def compose_brief_email():
+    """Teaser email: butler intro + each section's headline + thumbnail, both
+    clickable to quwwaa.com. No summaries in the email. Returns (subject, html)."""
+    secs = list(BRIEF.get('sections') or [])
+    now_phx = datetime.now(timezone.utc).astimezone(PHOENIX_TZ)
+    try: date_str = now_phx.strftime('%A, %B %-d')
+    except Exception: date_str = now_phx.strftime('%A, %B %d')
+    top = secs[0].get('title') if secs else ''
+    subject = ('QUWWAA Brief — ' + top) if top else ('Your QUWWAA Morning Brief · ' + date_str)
+    intro = "Good morning. Here's the world this morning — tap any headline to read it on QUWWAA."
+    rows = []
+    for s in secs:
+        link = _brief_article_link(s); img = s.get('image', '')
+        thumb = ('<a href="%s"><img src="%s" width="150" height="100" alt="" '
+                 'style="display:block;width:150px;height:100px;object-fit:cover;border-radius:8px;border:0;"></a>'
+                 % (link, html.escape(img))) if img else ''
+        rows.append(
+            '<tr><td style="padding:14px 0;border-bottom:1px solid #2a2018;">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+            + ('<td valign="top" width="150" style="padding-right:14px;">' + thumb + '</td>' if thumb else '')
+            + '<td valign="top">'
+            '<div style="font:600 11px Arial,sans-serif;color:#e08a32;margin-bottom:5px;">' + html.escape(s.get('label', '')) + '</div>'
+            '<a href="' + link + '" style="font:500 19px Georgia,\'Times New Roman\',serif;color:#fff3e9;text-decoration:none;line-height:1.25;">' + html.escape(s.get('title', '')) + '</a>'
+            '<div style="font:11px Arial,sans-serif;color:#a06a3a;margin-top:6px;">' + html.escape(s.get('source', '')) + '</div>'
+            '</td></tr></table></td></tr>')
+    doc = (
+        '<div style="background:#141414;margin:0;padding:0;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#141414;">'
+        '<tr><td align="center" style="padding:24px 12px;">'
+        '<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">'
+        '<tr><td align="center" style="padding:6px 0 2px;"><span style="font:500 30px Georgia,serif;color:#e08a32;letter-spacing:1px;">quwwaa</span></td></tr>'
+        '<tr><td align="center" style="font:13px Arial,sans-serif;color:#a06a3a;padding-bottom:18px;">Your Morning Brief · ' + html.escape(date_str) + '</td></tr>'
+        '<tr><td style="font:15px Georgia,serif;color:#e7d3c0;line-height:1.6;padding:0 4px 8px;">' + html.escape(intro) + '</td></tr>'
+        '<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + ''.join(rows) + '</table></td></tr>'
+        '<tr><td align="center" style="padding:26px 0 8px;"><a href="' + SITE_URL + '/" style="background:#d98026;color:#1a1208;font:700 15px Arial,sans-serif;text-decoration:none;padding:13px 26px;border-radius:10px;display:inline-block;">Read the full brief on QUWWAA &rarr;</a></td></tr>'
+        '<tr><td align="center" style="padding:12px 16px 4px;font:13px Arial,sans-serif;color:#cba98f;line-height:1.5;">Make it yours &mdash; <a href="' + SITE_URL + '/" style="color:#e89a5a;">start your 7-day QUWWAA Gold trial</a> for unlimited articles and a butler who knows your beats.</td></tr>'
+        '<tr><td align="center" style="padding:18px 0 0;font:11px Arial,sans-serif;color:#6a4a2a;">You\'re receiving the QUWWAA Morning Brief.</td></tr>'
+        '</table></td></tr></table></div>')
+    return subject, doc
+
+def create_kit_broadcast(subject, content, preview_text='', send_at=None):
+    """Create a Kit v4 broadcast. No send_at -> draft; with send_at -> scheduled."""
+    if not KIT_API_KEY:
+        return None
+    body = {'subject': subject, 'content': content, 'description': 'QUWWAA Morning Brief',
+            'public': False}
+    if preview_text:
+        body['preview_text'] = preview_text[:150]
+    if send_at:
+        body['send_at'] = send_at
+    req = urllib.request.Request('https://api.kit.com/v4/broadcasts', data=json.dumps(body).encode(),
+        method='POST', headers={'X-Kit-Api-Key': KIT_API_KEY, 'Content-Type': 'application/json',
+                                'Accept': 'application/json'})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read() or b'{}')
+
+def run_brief_email(force=False):
+    """Compose + create the daily broadcast. Idempotent per Phoenix day (one auto
+    attempt/day); force=True (manual admin trigger) bypasses the day guard."""
+    if not KIT_API_KEY or BRIEF_EMAIL_MODE == 'off':
+        return {'skipped': 'disabled'}
+    now_phx = datetime.now(timezone.utc).astimezone(PHOENIX_TZ)
+    today = now_phx.strftime('%Y-%m-%d')
+    if not force and BRIEF_EMAIL['day'] == today:
+        return {'skipped': 'already_today'}
+    try:
+        if BRIEF['t'] == 0 or len(BRIEF['sections']) < len(BRIEF_CATS):
+            build_brief(full=(BRIEF['t'] == 0))        # freshen before composing
+    except Exception:
+        pass
+    if not BRIEF.get('sections'):
+        return {'skipped': 'no_brief'}
+    BRIEF_EMAIL['day'] = today                          # consume the day (1 auto attempt; manual can force)
+    subject, content = compose_brief_email()
+    send_at = None
+    if BRIEF_EMAIL_MODE == 'send':
+        send_dt = now_phx.replace(hour=BRIEF_SEND_HOUR, minute=0, second=0, microsecond=0)
+        if send_dt <= now_phx:
+            send_dt += timedelta(days=1)
+        send_at = send_dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    try:
+        res = create_kit_broadcast(subject, content, preview_text=subject, send_at=send_at)
+        bid = None
+        if isinstance(res, dict):
+            bid = (res.get('broadcast') or {}).get('id') if isinstance(res.get('broadcast'), dict) else res.get('id')
+        if BRIEF_EMAIL_MODE == 'draft' and ADMIN_USER_ID:
+            try: push_to_user(ADMIN_USER_ID, {'title': 'Morning Brief draft ready',
+                'body': 'Review & send in Kit — ' + subject[:80], 'url': '/'}, 'notify_brief')
+            except Exception: pass
+        print('[brief-email] %s broadcast created id=%s subject=%r' % (BRIEF_EMAIL_MODE, bid, subject))
+        return {'ok': True, 'mode': BRIEF_EMAIL_MODE, 'subject': subject, 'broadcast_id': bid, 'send_at': send_at}
+    except Exception as e:
+        detail = ''
+        try: detail = e.read().decode()[:300] if hasattr(e, 'read') else str(e)
+        except Exception: detail = str(e)
+        print('[brief-email] FAILED: %s' % detail)
+        return {'error': type(e).__name__, 'detail': detail}
+
+def brief_email_loop():
+    """Fire once per Phoenix day on/after the compose hour."""
+    if not KIT_API_KEY or BRIEF_EMAIL_MODE == 'off':
+        return
+    while True:
+        try:
+            if datetime.now(timezone.utc).astimezone(PHOENIX_TZ).hour >= BRIEF_COMPOSE_HOUR:
+                run_brief_email()
+        except Exception:
+            pass
+        time.sleep(int(os.environ.get('BRIEF_EMAIL_POLL_SEC', '900')))
 
 def prewarm():
     """Keep the home snapshot fresh, and rebuild the morning brief every few hours."""
@@ -1600,6 +1726,20 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json({'member': True, 'max': MAX_PRIORITIES, 'priorities': get_priorities(uid)})
             except Exception as e:
                 self._send_json({'error': str(e)}, 500)
+        elif self.path.startswith('/admin/brief-email'):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            token = (qs.get('token') or [''])[0]
+            if not (BRIEF_EMAIL_TOKEN and token == BRIEF_EMAIL_TOKEN):
+                self._send_json({'error': 'forbidden'}, 403); return
+            if (qs.get('preview') or ['0'])[0] == '1':      # view the composed HTML in a browser
+                subject, doc = compose_brief_email()
+                body = ('<!-- subject: ' + subject + ' -->\n' + doc).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers(); self.wfile.write(body); return
+            self._send_json(run_brief_email(force=True))     # force a real compose+create (test)
         else:
             base = urllib.parse.urlparse(self.path).path
             if base in ('/', ''):
@@ -1624,5 +1764,6 @@ if __name__ == '__main__':
     import threading
     threading.Thread(target=prewarm, daemon=True).start()
     threading.Thread(target=priorities_loop, daemon=True).start()
+    threading.Thread(target=brief_email_loop, daemon=True).start()
     print('QUWWAA server on http://%s:%d (news lens active, prewarming home)' % (HOST, PORT))
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
