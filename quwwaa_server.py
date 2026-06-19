@@ -1703,15 +1703,23 @@ class Handler(SimpleHTTPRequestHandler):
                 if ints:
                     extra += " They follow these interests: %s. Weight your awareness and suggestions toward them when relevant." % ints
             if data.get('stream'):                       # stream tokens for a snappy butler
+                # HTTP/1.1 chunked so the proxy forwards each token immediately
+                # (a plain HTTP/1.0 body gets buffered until close → no streaming).
+                self.protocol_version = 'HTTP/1.1'
+                self.close_connection = True
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('Cache-Control', 'no-store')
-                self.send_header('X-Accel-Buffering', 'no')   # ask proxies not to buffer
+                self.send_header('X-Accel-Buffering', 'no')
+                self.send_header('Transfer-Encoding', 'chunked')
+                self.send_header('Connection', 'close')
                 self.end_headers()
                 wrote = [0]
                 def _w(t):
                     if not t: return
-                    wrote[0] += len(t); self.wfile.write(t.encode('utf-8')); self.wfile.flush()
+                    b = t.encode('utf-8')
+                    self.wfile.write(b'%X\r\n' % len(b) + b + b'\r\n'); self.wfile.flush()
+                    wrote[0] += len(t)
                 try:
                     full = anthropic_stream(msgs, extra, _w)
                     if not full.strip() and wrote[0] == 0:
@@ -1721,6 +1729,8 @@ class Handler(SimpleHTTPRequestHandler):
                         # streaming failed before any token → serve the full reply non-streamed
                         try: _w(anthropic_chat(msgs, extra) or 'I received an empty transmission, sir.')
                         except Exception: _w('I encountered a fault processing that, sir.')
+                try: self.wfile.write(b'0\r\n\r\n'); self.wfile.flush()   # terminating chunk
+                except Exception: pass
                 return
             reply = anthropic_chat(msgs, extra) or 'I received an empty transmission, sir.'
             self._send_json({'reply': reply})
