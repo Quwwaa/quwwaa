@@ -1708,15 +1708,22 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_header('Cache-Control', 'no-store')
                 self.send_header('X-Accel-Buffering', 'no')   # ask proxies not to buffer
                 self.end_headers()
+                wrote = [0]
                 def _w(t):
-                    self.wfile.write(t.encode('utf-8')); self.wfile.flush()
+                    if not t: return
+                    wrote[0] += len(t); self.wfile.write(t.encode('utf-8')); self.wfile.flush()
                 try:
                     full = anthropic_stream(msgs, extra, _w)
-                    if not full.strip():
+                    if not full.strip() and wrote[0] == 0:
                         _w('I received an empty transmission, sir.')
-                except Exception:
-                    try: _w(' …forgive me, sir — the uplink faltered.')
-                    except Exception: pass
+                except Exception as e:
+                    if data.get('diag'):
+                        try: _w('[diag] ' + type(e).__name__ + ': ' + (e.read().decode('utf-8','ignore')[:400] if hasattr(e,'read') else str(e)))
+                        except Exception: _w('[diag] ' + type(e).__name__)
+                    elif wrote[0] == 0:
+                        # streaming failed before any token → serve the full reply non-streamed
+                        try: _w(anthropic_chat(msgs, extra) or 'I received an empty transmission, sir.')
+                        except Exception: _w('I encountered a fault processing that, sir.')
                 return
             reply = anthropic_chat(msgs, extra) or 'I received an empty transmission, sir.'
             self._send_json({'reply': reply})
