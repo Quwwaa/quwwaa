@@ -1,2 +1,4 @@
-# QUWWAA backend uses only the Python standard library — no third-party packages.
-# This file exists so cloud hosts (Render) detect a Python service and build it.
+# QUWWAA backend. The core uses only the Python standard library; pywebpush
+# (and its cryptography dependency) is needed to SEND Web Push notifications.
+# Render installs these via the build command (pip install -r requirements.txt).
+pywebpush>=1.14.0

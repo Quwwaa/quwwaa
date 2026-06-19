@@ -59,6 +59,9 @@ STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
 SITE_URL = os.environ.get('SITE_URL', 'https://quwwaa.com').rstrip('/')   # for Checkout success/cancel
 KIT_API_KEY = os.environ.get('KIT_API_KEY', '')                          # secret — newsletter auto-subscribe for paying members
 KIT_FORM_ID = os.environ.get('KIT_FORM_ID', '9570921')                   # the free daily-brief form
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')                # exposed via /config (client needs it)
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')             # secret — signs Web Push
+VAPID_SUBJECT = os.environ.get('VAPID_SUBJECT', 'mailto:quwwaa.io@gmail.com')
 # Premium activates only when the WHOLE paid flow is ready — auth (Supabase) +
 # checkout (price + secret key) + status updates (webhook secret + service role).
 # This prevents a half-configured state from showing a premium UI that can't
@@ -718,6 +721,8 @@ def prewarm():
                 build_brief(full=False)                             # fill only the missing sections
         except Exception:
             pass
+        try: maybe_send_brief_push()        # once/day "your brief is ready" (no-op until push configured)
+        except Exception: pass
         full = len(HOME_SNAPSHOT['items']) >= len(HOME_CATS)
         time.sleep(HOME_REFRESH if full else 45)
 
@@ -1024,7 +1029,7 @@ MAX_PRIORITIES = int(os.environ.get('MAX_PRIORITIES', '1'))   # raise later for 
 PRIORITY_POLL_SEC = int(os.environ.get('PRIORITY_POLL_SEC', '1800'))  # scan cadence (each polls <=2x/day)
 _UUID_RE = re.compile(r'^[0-9a-fA-F-]{36}$')
 
-def sb_rest(method, path_q, body=None):
+def sb_rest(method, path_q, body=None, prefer=None):
     """Supabase REST with the service-role key. path_q = 'table?filters'. The server
     always scopes by user_id, so bypassing RLS here is safe. Returns list/dict/None."""
     if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
@@ -1032,7 +1037,7 @@ def sb_rest(method, path_q, body=None):
     headers = {'apikey': SUPABASE_SERVICE_ROLE_KEY, 'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY,
                'Content-Type': 'application/json'}
     if method in ('POST', 'PATCH'):
-        headers['Prefer'] = 'return=representation'
+        headers['Prefer'] = prefer or 'return=representation'
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(SUPABASE_URL + '/rest/v1/' + path_q, data=data, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=20) as r:
@@ -1086,6 +1091,15 @@ def poll_priority(p):
     if fresh:
         try: sb_rest('POST', 'priority_items', fresh)
         except Exception: pass
+        # notify the member of the new development (Gold + their notify_priority pref)
+        try:
+            uid = p.get('user_id')
+            prof = supabase_get_status(uid) if uid else None
+            if prof and prof.get('subscription_status') in ('trialing', 'active'):
+                push_to_user(uid, {'title': 'Priority update',
+                    'body': 'New development on “%s”.' % (p.get('label') or 'your tracked story'),
+                    'url': '/?open=priority'}, 'notify_priority')
+        except Exception: pass
     try:
         sb_rest('PATCH', 'priorities?id=eq.%s' % pid,
                 {'last_checked_at': datetime.now(timezone.utc).isoformat()})
@@ -1113,6 +1127,82 @@ def priorities_loop():
         except Exception:
             pass
         time.sleep(PRIORITY_POLL_SEC)
+
+
+# --- Web Push (VAPID) ----------------------------------------------------------
+try:
+    from pywebpush import webpush, WebPushException
+except Exception:                    # not installed yet -> push send disabled, app unaffected
+    webpush = None
+    class WebPushException(Exception):
+        pass
+
+PUSH_ENABLED = bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+
+def user_id_from_request(handler):
+    """The signed-in user's id from the JWT (no membership requirement), or None.
+    Push opt-in is open to everyone (the 'brief ready' alert is free)."""
+    auth = handler.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None
+    try:
+        u = supabase_user_from_token(auth[7:].strip())
+        return u.get('id') if u else None
+    except Exception:
+        return None
+
+def _push_send_one(row, payload):
+    """Send one Web Push; prune the row on a dead endpoint (404/410)."""
+    if not (webpush and PUSH_ENABLED):
+        return False
+    ep = row.get('endpoint') or ''
+    info = {'endpoint': ep, 'keys': {'p256dh': row.get('p256dh'), 'auth': row.get('auth')}}
+    try:
+        webpush(subscription_info=info, data=json.dumps(payload), ttl=86400,
+                vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims={'sub': VAPID_SUBJECT})
+        return True
+    except WebPushException as e:
+        code = getattr(getattr(e, 'response', None), 'status_code', None)
+        if code in (404, 410) and ep:
+            try: sb_rest('DELETE', 'push_subscriptions?endpoint=eq.' + urllib.parse.quote(ep, safe=''))
+            except Exception: pass
+        return False
+    except Exception:
+        return False
+
+def push_to_query(query, payload):
+    """Send to every push_subscriptions row matching a PostgREST filter."""
+    if not PUSH_ENABLED:
+        return 0
+    try:
+        rows = sb_rest('GET', 'push_subscriptions?' + query + '&select=*') or []
+    except Exception:
+        rows = []
+    return sum(1 for r in rows if _push_send_one(r, payload))
+
+def push_to_user(user_id, payload, pref='notify_priority'):
+    if not (PUSH_ENABLED and user_id):
+        return 0
+    return push_to_query('user_id=eq.%s&%s=eq.true' % (user_id, pref), payload)
+
+# Brief-ready: at most once per UTC day, on/after the morning hour, to opted-in subs.
+BRIEF_PUSH = {'day': None}
+BRIEF_PUSH_HOUR = int(os.environ.get('BRIEF_PUSH_HOUR', '11'))   # UTC ~ US morning
+
+def maybe_send_brief_push():
+    if not PUSH_ENABLED:
+        return
+    now = datetime.now(timezone.utc)
+    today = now.strftime('%Y-%m-%d')
+    if BRIEF_PUSH['day'] == today or now.hour < BRIEF_PUSH_HOUR or not BRIEF['sections']:
+        return
+    BRIEF_PUSH['day'] = today
+    try:
+        push_to_query('notify_brief=eq.true',
+                      {'title': 'Your brief is ready',
+                       'body': 'Today’s QUWWAA morning brief is in. Tap to read.', 'url': '/'})
+    except Exception:
+        pass
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -1158,7 +1248,42 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_portal()
         if self.path.startswith('/priorities'):
             return self._handle_priorities()
+        if self.path.startswith('/push/subscribe'):
+            return self._handle_push(False)
+        if self.path.startswith('/push/unsubscribe'):
+            return self._handle_push(True)
         self.send_error(404)
+
+    def _handle_push(self, unsub):
+        """Store / update / remove a Web Push subscription. Open to everyone
+        (the brief-ready alert is free); a signed-in user's id is attached when present."""
+        d = self._read_json()
+        sub = d.get('subscription') or {}
+        endpoint = (sub.get('endpoint') or d.get('endpoint') or '').strip()
+        if not endpoint:
+            self._send_json({'error': 'missing'}, 400); return
+        try:
+            if unsub:
+                sb_rest('DELETE', 'push_subscriptions?endpoint=eq.' + urllib.parse.quote(endpoint, safe=''))
+                self._send_json({'ok': True}); return
+            keys = sub.get('keys') or {}
+            if not (keys.get('p256dh') and keys.get('auth')):
+                self._send_json({'error': 'bad_keys'}, 400); return
+            row = {'endpoint': endpoint, 'p256dh': keys['p256dh'], 'auth': keys['auth'],
+                   'platform': (d.get('platform') or '')[:20],
+                   'notify_brief': bool(d.get('notify_brief', True)),
+                   'notify_priority': bool(d.get('notify_priority', True)),
+                   'notify_breaking': bool(d.get('notify_breaking', False)),
+                   'last_seen_at': datetime.now(timezone.utc).isoformat()}
+            uid = user_id_from_request(self)
+            if uid:
+                row['user_id'] = uid
+            # upsert on the unique endpoint; merge-duplicates keeps existing user_id if anon
+            sb_rest('POST', 'push_subscriptions?on_conflict=endpoint', row,
+                    prefer='resolution=merge-duplicates,return=minimal')
+            self._send_json({'ok': True})
+        except Exception as e:
+            self._send_json({'error': type(e).__name__}, 500)
 
     def _handle_priorities(self):
         """Create / change / delete / mark-seen the member's one tracked priority.
@@ -1436,7 +1561,7 @@ class Handler(SimpleHTTPRequestHandler):
             # public config only — the page boots Supabase + Stripe.js from these
             self._send_json({'supabaseUrl': SUPABASE_URL, 'supabaseAnonKey': SUPABASE_ANON_KEY,
                              'stripePublishableKey': STRIPE_PUBLISHABLE_KEY, 'priceId': STRIPE_PRICE_ID,
-                             'premium': PREMIUM_ENABLED})
+                             'premium': PREMIUM_ENABLED, 'vapidPublicKey': VAPID_PUBLIC_KEY})
         elif self.path.startswith('/home'):
             self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
         elif self.path.startswith('/brief'):

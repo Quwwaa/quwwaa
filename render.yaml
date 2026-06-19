@@ -6,7 +6,7 @@ services:
     name: quwwaa
     runtime: python
     plan: free            # upgrade to "starter" ($7/mo) to stop the free tier sleeping
-    buildCommand: ""      # nothing to build — stdlib only
+    buildCommand: "pip install -r requirements.txt"   # pywebpush for Web Push (core stays stdlib)
     startCommand: python quwwaa_server.py
     healthCheckPath: /health
     envVars:
@@ -16,3 +16,9 @@ services:
         value: "6"
       - key: ASK_DAILY_CAP
         value: "2000"
+      - key: VAPID_PUBLIC_KEY
+        sync: false        # Web Push — paste the generated keypair + mailto subject
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false

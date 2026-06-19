@@ -5,7 +5,7 @@
      - static assets (icons, manifest) -> cache-first (fast, offline-friendly)
      - the page / HTML -> network-first, falling back to cache only when offline
    Bump CACHE on any shell change to retire old caches. */
-const CACHE = 'quwwaa-v42';
+const CACHE = 'quwwaa-v43';
 const SHELL = ['/', '/quwwaa-console.html', '/manifest.json',
                '/icon-192.png', '/icon-512.png', '/icon-180.png', '/logo-q.png'];
 
@@ -50,4 +50,28 @@ self.addEventListener('fetch', e => {
       }).catch(() => caches.match(req).then(hit => hit || caches.match('/quwwaa-console.html')))
     );
   }
+});
+
+/* ---- Web Push: show the notification, and deep-link on click ---- */
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data && e.data.text() }; }
+  const title = d.title || 'QUWWAA';
+  e.waitUntil(self.registration.showNotification(title, {
+    body: d.body || '',
+    icon: d.icon || '/icon-192.png',
+    badge: '/icon-192.png',
+    data: { url: d.url || '/' }
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(ws => {
+    for (const w of ws) {
+      if ('focus' in w) { if (w.navigate) { try { w.navigate(url); } catch (_) {} } return w.focus(); }
+    }
+    return clients.openWindow(url);
+  }));
 });

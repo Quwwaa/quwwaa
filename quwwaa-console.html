@@ -2328,10 +2328,12 @@
       +'<button class="prow ptoggle" data-act="theme"><span>Light / Dark mode</span><span>'+(document.body.classList.contains('bright')?'Light':'Dark')+'</span></button>';
     if(!(window.QUWWAA_canInstall) || window.QUWWAA_canInstall()){ h+='<button class="prow" data-act="a2hs">Add to home screen</button>'; }
     if(user){ h+='<button class="prow" data-act="logout">Log out</button>'; }
+    h+='<div class="psec">Notifications</div><div id="qpNotif"></div>';
     h+='<div class="psec" style="text-align:center;margin-top:24px"><a href="/terms" target="_blank" style="color:#e89a5a">Terms</a> · <a href="/privacy" target="_blank" style="color:#e89a5a">Privacy</a></div>';
     h+='</div>';
     prof.innerHTML=h;
     prof.querySelectorAll('[data-act]').forEach(b=> b.onclick=()=>act(b.getAttribute('data-act')) );
+    renderNotif();
   }
   function act(a){
     const QP=window.QP||{};
@@ -2344,6 +2346,77 @@
     if(a==='a2hs'){ if(window.QUWWAA_addToHome) window.QUWWAA_addToHome(); return; }
     if(a==='theme'){ click('briteBtn'); renderProfile(); return; }  // reuse the existing theme toggle
   }
+
+  // ---- Web Push (brief-ready + Priority) ----
+  const Push = (function(){
+    let vapid=null;
+    function supported(){ return ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
+    function standalone(){ return matchMedia('(display-mode: standalone)').matches || navigator.standalone===true; }
+    function isIOS(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1); }
+    function plat(){ return isIOS()?'ios':(/Android/.test(navigator.userAgent)?'android':'desktop'); }
+    async function getVapid(){ if(vapid!=null) return vapid;
+      try{ const c=(window.QP&&QP.cfg)|| (await fetch('/config',{cache:'no-store'}).then(r=>r.json())); vapid=c.vapidPublicKey||''; }catch(e){ vapid=''; } return vapid; }
+    function b64(s){ const pad='='.repeat((4-s.length%4)%4); const r=(s+pad).replace(/-/g,'+').replace(/_/g,'/'); const raw=atob(r); return Uint8Array.from([...raw].map(c=>c.charCodeAt(0))); }
+    async function current(){ try{ const reg=await navigator.serviceWorker.ready; return await reg.pushManager.getSubscription(); }catch(e){ return null; } }
+    function authHdr(){ const h={'content-type':'application/json'}; try{ if(window.QP&&QP.token) h.Authorization='Bearer '+QP.token; }catch(e){} return h; }
+    async function postSub(sub, prefs){
+      await fetch('/push/subscribe',{method:'POST',headers:authHdr(),
+        body:JSON.stringify(Object.assign({subscription:sub.toJSON(), platform:plat()}, prefs||{}))});
+    }
+    async function enable(prefs){
+      const v=await getVapid(); if(!v) throw new Error('push not configured');
+      const perm=await Notification.requestPermission(); if(perm!=='granted') throw new Error('denied');
+      const reg=await navigator.serviceWorker.ready;
+      let sub=await reg.pushManager.getSubscription();
+      if(!sub) sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64(v)});
+      await postSub(sub, prefs); return sub;
+    }
+    async function setPrefs(prefs){ const sub=await current(); if(sub) await postSub(sub, prefs); }
+    async function disable(){ const sub=await current(); if(!sub) return;
+      const ep=sub.endpoint; try{ await sub.unsubscribe(); }catch(e){}
+      try{ await fetch('/push/unsubscribe',{method:'POST',headers:authHdr(),body:JSON.stringify({endpoint:ep})}); }catch(e){} }
+    return {supported, standalone, isIOS, current, enable, disable, setPrefs, getVapid};
+  })();
+  const PUSH_PREFS='quwwaa_push_prefs';
+  function readPushPrefs(){ try{ return Object.assign({brief:true,priority:true}, JSON.parse(localStorage.getItem(PUSH_PREFS)||'{}')); }catch(e){ return {brief:true,priority:true}; } }
+  function savePushPrefs(p){ try{ localStorage.setItem(PUSH_PREFS, JSON.stringify(p)); }catch(e){} }
+
+  async function renderNotif(){
+    const box=document.getElementById('qpNotif'); if(!box) return;
+    const member = !!(window.QP && QP.isMember && QP.isMember());
+    if(!Push.supported()){ box.innerHTML='<div class="prempty" style="text-align:left">Notifications aren’t supported on this browser.</div>'; return; }
+    if(Push.isIOS() && !Push.standalone()){
+      box.innerHTML='<div class="prempty" style="text-align:left">Add QUWWAA to your Home Screen first to enable notifications on iPhone.</div>'
+        +'<button class="prow" data-na="a2hs">Add to home screen</button>';
+      box.querySelector('[data-na="a2hs"]').onclick=()=>{ if(window.QUWWAA_addToHome) window.QUWWAA_addToHome(); };
+      return;
+    }
+    let vap=''; try{ vap=await Push.getVapid(); }catch(e){}
+    if(!vap){ box.innerHTML='<div class="prempty" style="text-align:left">Notifications aren’t available yet.</div>'; return; }
+    const sub=await Push.current();
+    const perm=(window.Notification&&Notification.permission)||'default';
+    const on=!!sub && perm==='granted';
+    if(!on){
+      box.innerHTML='<button class="prow primary" data-na="enable">Enable notifications</button>'
+        +'<div class="prempty" style="text-align:left">Get “Your brief is ready” each morning'+(member?', plus Priority updates on the story you track.':'.')+'</div>';
+      box.querySelector('[data-na="enable"]').onclick=async()=>{
+        const b=box.querySelector('[data-na="enable"]'); b.textContent='Enabling…'; b.disabled=true;
+        try{ const p=readPushPrefs(); p.priority=member?p.priority:false; savePushPrefs(p);
+          await Push.enable({notify_brief:p.brief, notify_priority:p.priority}); renderNotif(); }
+        catch(e){ b.textContent='Enable notifications'; b.disabled=false; toast(e&&e.message==='denied'?'Permission was blocked.':'Couldn’t enable notifications.'); }
+      };
+      return;
+    }
+    const p=readPushPrefs();
+    let h='<button class="prow ptoggle" data-na="brief"><span>Your brief is ready</span><span>'+(p.brief?'On':'Off')+'</span></button>';
+    if(member) h+='<button class="prow ptoggle" data-na="priority"><span>Priority updates</span><span>'+(p.priority?'On':'Off')+'</span></button>';
+    h+='<button class="prow" data-na="off">Turn off notifications</button>';
+    box.innerHTML=h;
+    box.querySelector('[data-na="brief"]').onclick=async()=>{ p.brief=!p.brief; savePushPrefs(p); await Push.setPrefs({notify_brief:p.brief, notify_priority:member&&p.priority}); renderNotif(); };
+    if(member){ box.querySelector('[data-na="priority"]').onclick=async()=>{ p.priority=!p.priority; savePushPrefs(p); await Push.setPrefs({notify_brief:p.brief, notify_priority:p.priority}); renderNotif(); }; }
+    box.querySelector('[data-na="off"]').onclick=async()=>{ await Push.disable(); renderNotif(); };
+  }
+
   // ---- Priority tab (Gold-only story tracker) ----
   const prio=document.createElement('div'); prio.id='qpriority'; document.body.appendChild(prio);
   let prState={member:false, list:[], max:1};
@@ -2439,6 +2512,8 @@
     if(tab==='profile') renderProfile();
     fetchPriorities().then(()=>{ if(tab==='priority') openPriority(); });
   });
+  // deep link from a push notification (e.g. a Priority update) → open that tab
+  if(/[?&]open=priority/.test(location.search)){ setTimeout(()=>setTab('priority'), 500); }
 })();
 </script>
 </body>
