@@ -921,6 +921,8 @@ def build_brief(full=False):
     for cat in BRIEF_CATS:
         label = cat['label']
         p = prev.get(label)
+        if p and not _is_article_url(p.get('url', '')):
+            p = None              # never carry forward an image-host/thumbnail link → re-pick fresh
         # Re-validate each previously-built card. Keep it only if its summary is
         # genuinely good or we've already retried it enough; otherwise re-summarize
         # — this flushes stale headline-restatement slop even when it was stored as
@@ -953,8 +955,8 @@ def build_brief(full=False):
                 out.append({'label': label, 'title': a.get('title', ''), 'url': url,
                             'source': a.get('source', ''), 'image': a.get('image', ''),
                             'time': a.get('time', ''), 'summary': summ, 'degraded': deg})
-            elif label in prev:
-                out.append(prev[label])                 # keep the previous good story rather than drop the section
+            elif p:
+                out.append(p)                           # keep the previous good story rather than drop the section
         if out:
             BRIEF['sections'] = list(out)               # publish progress so /brief fills in live
     BRIEF['t'] = time.time()               # always stamp so we don't loop full rebuilds
