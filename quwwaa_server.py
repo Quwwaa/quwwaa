@@ -69,6 +69,10 @@ BRIEF_COMPOSE_HOUR = int(os.environ.get('BRIEF_COMPOSE_HOUR', str(max(0, BRIEF_S
 BRIEF_EMAIL_TOKEN = os.environ.get('BRIEF_EMAIL_TOKEN', '')                         # gates the manual /admin trigger
 ADMIN_USER_ID = os.environ.get('ADMIN_USER_ID', '')                                # optional: who to ping for draft review
 PHOENIX_TZ = timezone(timedelta(hours=-7))                                          # MST, no DST
+GA_MEASUREMENT_ID = os.environ.get('GA_MEASUREMENT_ID', '')                         # GA4 (exposed via /config)
+# Registration-wall meter for FREE registered members (server-enforced per profile).
+FREE_PER_DAY = int(os.environ.get('FREE_PER_DAY', '1'))
+FREE_PER_MONTH = int(os.environ.get('FREE_PER_MONTH', '5'))
 # Premium activates only when the WHOLE paid flow is ready — auth (Supabase) +
 # checkout (price + secret key) + status updates (webhook secret + service role).
 # This prevents a half-configured state from showing a premium UI that can't
@@ -1185,6 +1189,50 @@ def member_from_request(handler):
         return None
     return None
 
+def auth_user(handler):
+    """The signed-in user dict from the Bearer token (any tier), or None."""
+    auth = handler.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None
+    try:
+        return supabase_user_from_token(auth[7:].strip())
+    except Exception:
+        return None
+
+def free_meter(user_id, status, url, day, month):
+    """Registration-wall meter for FREE registered members: 1/day AND 5/month,
+    enforced server-side on the profile (can't be reset by clearing the browser).
+    Gold = unlimited. Best-effort: any DB hiccup → allow (client still gates).
+    Returns (allowed, reason, info)."""
+    if status in ('trialing', 'active'):
+        return True, '', {'tier': 'gold'}
+    if not (user_id and SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
+        return True, '', {'tier': 'free'}
+    try:
+        prof = supabase_get_profile(user_id, 'free_reads_count,free_reads_month,free_reads_day,free_reads_last_url') or {}
+    except Exception:
+        return True, '', {'tier': 'free'}
+    same = bool(url and url == prof.get('free_reads_last_url'))
+    cnt = prof.get('free_reads_count') or 0
+    pmonth = prof.get('free_reads_month') or ''
+    pday = prof.get('free_reads_day') or ''
+    if month and pmonth != month:            # monthly reset (1st of the month, local)
+        cnt = 0; pmonth = month
+    if same:                                  # re-reading the same article is free
+        return True, '', {'tier': 'free', 'used_month': cnt, 'limit_month': FREE_PER_MONTH}
+    if cnt >= FREE_PER_MONTH:
+        return False, 'month', {'tier': 'free', 'used_month': cnt, 'limit_month': FREE_PER_MONTH}
+    if day and pday == day:                   # already used today's free read (local midnight reset)
+        return False, 'day', {'tier': 'free', 'used_month': cnt, 'limit_month': FREE_PER_MONTH}
+    cnt += 1                                   # allow + record this read
+    try:
+        supabase_patch_profile(('id', user_id), {'free_reads_count': cnt,
+            'free_reads_month': (month or pmonth), 'free_reads_day': (day or pday),
+            'free_reads_last_url': url})
+    except Exception:
+        pass
+    return True, '', {'tier': 'free', 'used_month': cnt, 'limit_month': FREE_PER_MONTH}
+
 
 # --- Priority tracker (Gold-only): one tracked subject, polled twice a day ---
 MAX_PRIORITIES = int(os.environ.get('MAX_PRIORITIES', '1'))   # raise later for a higher tier
@@ -1414,7 +1462,22 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_push(False)
         if self.path.startswith('/push/unsubscribe'):
             return self._handle_push(True)
+        if self.path.startswith('/brief-subscribe'):
+            return self._handle_brief_subscribe()
         self.send_error(404)
+
+    def _handle_brief_subscribe(self):
+        """Add a signed-in (free or paid) member's email to the Kit daily brief.
+        Used on free registration — extends the paid auto-subscribe to everyone."""
+        u = auth_user(self)
+        email = (u or {}).get('email')
+        if not email:
+            self._send_json({'error': 'unauthorized'}, 401); return
+        try:
+            kit_subscribe(email)
+            self._send_json({'ok': True})
+        except Exception as e:
+            self._send_json({'error': type(e).__name__}, 500)
 
     def _handle_push(self, unsub):
         """Store / update / remove a Web Push subscription. Open to everyone
@@ -1753,7 +1816,9 @@ class Handler(SimpleHTTPRequestHandler):
             # public config only — the page boots Supabase + Stripe.js from these
             self._send_json({'supabaseUrl': SUPABASE_URL, 'supabaseAnonKey': SUPABASE_ANON_KEY,
                              'stripePublishableKey': STRIPE_PUBLISHABLE_KEY, 'priceId': STRIPE_PRICE_ID,
-                             'premium': PREMIUM_ENABLED, 'vapidPublicKey': VAPID_PUBLIC_KEY})
+                             'premium': PREMIUM_ENABLED, 'vapidPublicKey': VAPID_PUBLIC_KEY,
+                             'gaMeasurementId': GA_MEASUREMENT_ID,
+                             'freePerDay': FREE_PER_DAY, 'freePerMonth': FREE_PER_MONTH})
         elif self.path.startswith('/home'):
             self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
         elif self.path.startswith('/brief'):
@@ -1776,12 +1841,28 @@ class Handler(SimpleHTTPRequestHandler):
             url = (qs.get('url') or [''])[0].strip()
             title = (qs.get('title') or [''])[0].strip()
             source = (qs.get('source') or [''])[0].strip()
+            day = (qs.get('day') or [''])[0].strip()       # client's LOCAL date/month for the meter
+            month = (qs.get('month') or [''])[0].strip()
             if not (url or title):
                 self._send_json({'error': 'missing'}, 400); return
+            # registration-wall meter (logged-in users only; anon is gated client-side)
+            uid = None; status = None
+            u = auth_user(self)
+            if u and u.get('id'):
+                uid = u['id']
+                try: status = (supabase_get_status(uid) or {}).get('subscription_status')
+                except Exception: status = None
+                allowed, reason, info = free_meter(uid, status, url, day, month)
+                if not allowed:
+                    self._send_json({'locked': True, 'reason': reason, 'meter': info}); return
+            else:
+                info = {'tier': 'anon'}
             if not article_rate_check(self._client_ip()):
                 self._send_json({'error': 'rate'}, 429); return
             try:
-                self._send_json(build_article(url, title, source))
+                payload = build_article(url, title, source)
+                payload['meter'] = info
+                self._send_json(payload)
             except Exception as e:
                 self._send_json({'error': str(e)}, 500)
         elif self.path.startswith('/priorities'):

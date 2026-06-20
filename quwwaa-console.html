@@ -907,6 +907,7 @@
   let lensReq = 0;
   async function openLens(q, days){
     days = Math.max(1, Math.min(365, parseInt(days,10) || 7));
+    try{ if(window.QUWWAA_track) window.QUWWAA_track('search_performed', {search_term:q}); }catch(e){}
     const reqId = ++lensReq;
     $('lensTitle').textContent = 'News Lens — ' + q;
     $('lensCount').textContent = 'Scanning global sources…';
@@ -972,6 +973,10 @@
   }
   function meterSave(m){ try{ localStorage.setItem(METER_KEY, JSON.stringify(m)); }catch(e){} }
   function isMemberNow(){ try{ return !!(window.QP && QP.isMember && QP.isMember()); }catch(e){ return false; } }
+  function isLoggedIn(){ try{ return !!(window.QP && QP.user); }catch(e){ return false; } }
+  function trk(ev, p){ try{ if(window.QUWWAA_track) window.QUWWAA_track(ev, p||{}); }catch(e){} }
+  function localDay(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function localMonth(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
 
   let artEl=null, artReq=0, curArt=null, curData=null, curTab='summary';
   function ensureArt(){
@@ -1020,18 +1025,43 @@
       body.innerHTML=h;
     }
   }
-  function showPaywall(){
-    artEl.querySelector('.qarttabs').style.display='none';           // can't open the article
+  function lockShell(inner){
+    artEl.querySelector('.qarttabs').style.display='none';   // can't open the article
+    const tb=artEl.querySelector('.qarttrack'); if(tb) tb.style.display='none';
     const snip=esc(curArt.summary||curArt.title||'');
-    const body=artEl.querySelector('.qartbody');
-    body.innerHTML=
+    artEl.querySelector('.qartbody').innerHTML=
       '<div class="qartlock"><div class="qartfade"><p>'+snip+'</p><p>'+snip+'</p></div>'
-      +'<div class="qartpay"><div class="qpaydot"></div>'
-      +'<h3>You’ve read your free article for today.</h3>'
-      +'<p>Go unlimited with <b>QUWWAA Gold</b> — unlimited articles, your personal news butler who knows your name and your beats, the daily brief by email, and more.</p>'
+      +'<div class="qartpay">'+inner+'</div></div>';
+    return artEl.querySelector('.qartbody');
+  }
+  // Anonymous reader who's used the free taste → create a free account to keep reading.
+  function showRegWall(){
+    pendingArticle = curArt;
+    const body=lockShell(
+      '<div class="qpaydot"></div>'
+      +'<h3>Create a free account to keep reading</h3>'
+      +'<p>One free account unlocks more reading and the QUWWAA <b>daily brief</b> — the world’s most important stories each morning.</p>'
+      +'<button class="qpaygo" data-r="google">Continue with Google</button>'
+      +'<button class="qpaygo" data-r="apple" style="background:#111;color:#fff;margin-top:9px">Continue with Apple</button>'
+      +'<button class="qpaygo" data-r="email" style="background:none;color:#ffce9a;border:1px solid rgba(217,128,38,.5);margin-top:9px">Continue with email</button>'
+      +'<button class="qpaylater">Maybe later</button>');
+    body.querySelector('[data-r="google"]').onclick=()=>{ trk('registration_started',{method:'google'}); try{ QP.signInWithOAuth && QP.signInWithOAuth('google'); }catch(e){} };
+    body.querySelector('[data-r="apple"]').onclick=()=>{ trk('registration_started',{method:'apple'}); try{ QP.signInWithOAuth && QP.signInWithOAuth('apple'); }catch(e){} };
+    body.querySelector('[data-r="email"]').onclick=()=>{ trk('registration_started',{method:'email'}); closeArticle(); try{ QP.openFreeSignup ? QP.openFreeSignup() : (QP.openAuth&&QP.openAuth()); }catch(e){} };
+    body.querySelector('.qpaylater').onclick=closeArticle;
+  }
+  // Free registered member who hit the cap → QUWWAA Gold (lead with the unique features).
+  function showGoldPaywall(reason){
+    const line = reason==='month'
+      ? 'You’ve read your 5 free articles this month — it resets on the 1st, or go unlimited now.'
+      : 'That’s your free article for today.';
+    const body=lockShell(
+      '<div class="qpaydot"></div>'
+      +'<h3>'+esc(line)+'</h3>'
+      +'<p>Unlock <b>QUWWAA Gold</b>: a butler that knows your name and your beats, <b>Priority</b> story-tracking, a board and brief personalized to you, push alerts — and unlimited reading.</p>'
       +'<button class="qpaygo">Start your 7-day free trial</button>'
-      +'<button class="qpaylater">Maybe later</button></div></div>';
-    body.querySelector('.qpaygo').onclick=()=>{ closeArticle(); try{ (QP.openOnboarding||QP.openAuth||function(){})(); }catch(e){} };
+      +'<button class="qpaylater">Maybe later</button>');
+    body.querySelector('.qpaygo').onclick=()=>{ trk('trial_started',{from:'paywall'}); closeArticle(); try{ (QP.openOnboarding||QP.openAuth||function(){})(); }catch(e){} };
     body.querySelector('.qpaylater').onclick=closeArticle;
   }
   function openArticle(x){
@@ -1051,22 +1081,33 @@
     const sc=artEl.querySelector('.qartscroll'); if(sc) sc.scrollTop=0;
     artEl.classList.add('open');
 
-    if(!isMemberNow()){
+    // Tier gating. Gold = unlimited. Anonymous = 1 free taste then the
+    // registration wall. Free registered = server-enforced 1/day AND 5/month
+    // (handled by the /article response below).
+    if(!isMemberNow() && !isLoggedIn()){
       const m=meterRead();
-      const already = x.url && m.urls.indexOf(x.url)>=0;            // re-reading today's unlocked one is free
-      if(!already && m.c>=FREE_PER_DAY){ showPaywall(); return; }   // 2nd+ distinct article today → locked
+      const already = x.url && m.urls.indexOf(x.url)>=0;            // re-reading the taste is free
+      if(!already && m.c>=FREE_PER_DAY){ trk('paywall_hit',{tier:'anon'}); showRegWall(); return; }
       if(!already){ m.c++; if(x.url) m.urls.push(x.url); meterSave(m); }
     }
+    trk('article_open', {item_category:(x.label||''), item_id:(x.url||''), title:(x.title||'')});
+    try{ if(window.QUWWAA_pageview) window.QUWWAA_pageview('/article', 'Article — '+(x.title||'')); }catch(e){}
     setArtTab('summary');                                            // shows the "reading…" placeholder
     const reqId=++artReq;
-    const qs='?url='+encodeURIComponent(x.url||'')+'&title='+encodeURIComponent(x.title||'')+'&source='+encodeURIComponent(x.source||'');
-    fetch('/article'+qs, {cache:'no-store'}).then(r=> r.ok ? r.json() : null).then(d=>{
+    const qs='?url='+encodeURIComponent(x.url||'')+'&title='+encodeURIComponent(x.title||'')+'&source='+encodeURIComponent(x.source||'')
+      +'&day='+encodeURIComponent(localDay())+'&month='+encodeURIComponent(localMonth());
+    const headers={}; try{ if(window.QP && QP.token) headers['Authorization']='Bearer '+QP.token; }catch(e){}
+    fetch('/article'+qs, {cache:'no-store', headers}).then(r=> r.ok ? r.json() : null).then(d=>{
       if(reqId!==artReq) return;                                    // a newer open (or close) superseded this
+      if(d && d.locked){ trk('paywall_hit',{tier:'free', reason:d.reason}); showGoldPaywall(d.reason); return; }
       curData = (d && !d.error) ? d : {summary:(x.summary||''), grounded:false, related:[]};
       renderArtBody();
     }).catch(()=>{ if(reqId!==artReq) return; curData={summary:(x.summary||''), grounded:false, related:[]}; renderArtBody(); });
   }
+  let pendingArticle=null;
   window.QUWWAA_openArticle = openArticle;
+  // re-open the article a visitor was blocked on, once they've registered
+  window.QUWWAA_resumePending = function(){ if(pendingArticle){ const a=pendingArticle; pendingArticle=null; openArticle(a); } };
   window.QUWWAA_closeArticle = closeArticle;
 
   // Member: float the sections matching their interests to the top.
@@ -1860,6 +1901,62 @@
   }
   QP.openAuth=()=>{ authModal().classList.add('open'); };
 
+  // ---- free registration (one-tap OAuth + email) for the registration wall ----
+  QP.signInWithOAuth=function(provider){
+    if(!(QP.sb && QP.sb.auth && QP.sb.auth.signInWithOAuth)) return;
+    try{ localStorage.setItem('qp_pending_register', provider); }catch(e){}
+    try{ QP.sb.auth.signInWithOAuth({ provider:provider, options:{ redirectTo: location.origin+'/' } }); }catch(e){}
+  };
+  QP.openFreeSignup=function(){
+    let ov=$('qpFree');
+    if(!ov){
+      ov=document.createElement('div'); ov.id='qpFree'; ov.className='qpOv';
+      ov.innerHTML='<div class="qpCard" style="position:relative"><button class="qpX" data-x type="button">✕</button>'
+        +'<h2>Create your free account</h2><p>Keep reading and get the QUWWAA daily brief. Free.</p>'
+        +'<button class="qpPrimary" id="qpFreeGoog" type="button" style="width:100%">Continue with Google</button>'
+        +'<button class="qpPrimary" id="qpFreeApple" type="button" style="width:100%;background:#111;color:#fff;margin-top:8px">Continue with Apple</button>'
+        +'<div style="text-align:center;color:#a06a3a;font-size:11px;margin:12px 0">or with email</div>'
+        +'<form id="qpFreeForm"><label>Email</label><input id="qpFreeEmail" type="email" autocomplete="email" required>'
+        +'<label>Password</label><input id="qpFreePass" type="password" autocomplete="new-password" minlength="6" required>'
+        +'<div class="qpBtnRow"><button class="qpPrimary" id="qpFreeGo" type="submit">Create free account</button></div>'
+        +'<div class="qpMsg" id="qpFreeMsg"></div></form>'
+        +'<button class="qpLink" id="qpFreeSignin" type="button" style="display:block;margin-top:8px">Already have an account? Sign in →</button></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener('click',e=>{ if(e.target===ov||e.target.hasAttribute('data-x')) ov.classList.remove('open'); });
+      $('qpFreeGoog').onclick=()=>{ try{window.QUWWAA_track&&window.QUWWAA_track('registration_started',{method:'google'});}catch(e){} QP.signInWithOAuth('google'); };
+      $('qpFreeApple').onclick=()=>{ try{window.QUWWAA_track&&window.QUWWAA_track('registration_started',{method:'apple'});}catch(e){} QP.signInWithOAuth('apple'); };
+      $('qpFreeSignin').onclick=()=>{ ov.classList.remove('open'); QP.openAuth&&QP.openAuth(); };
+      $('qpFreeForm').onsubmit=async e=>{
+        e.preventDefault(); const go=$('qpFreeGo'), msg=$('qpFreeMsg'); msg.className='qpMsg'; msg.textContent='';
+        const email=$('qpFreeEmail').value.trim(), pass=$('qpFreePass').value;
+        go.disabled=true; go.textContent='Creating…';
+        try{
+          const { error } = await QP.sb.auth.signUp({ email, password:pass });
+          if(error){ msg.textContent=error.message; go.disabled=false; go.textContent='Create free account'; return; }
+          try{ localStorage.setItem('qp_pending_register','email'); }catch(e){}
+          try{ await QP.sb.auth.signInWithPassword({ email, password:pass }); }catch(e){}   // read now; verify async
+          msg.className='qpMsg ok'; msg.textContent='Welcome to QUWWAA.';
+          setTimeout(()=>ov.classList.remove('open'), 600);
+        }catch(err){ msg.textContent='Something went wrong. Try again.'; go.disabled=false; go.textContent='Create free account'; }
+      };
+    }
+    ov.classList.add('open');
+  };
+  // on a completed registration: fire funnel events, add to the daily brief, resume reading
+  document.addEventListener('qp:auth', function(){
+    if(!QP.user) return;
+    let method=null; try{ method=localStorage.getItem('qp_pending_register'); }catch(e){}
+    if(method){
+      try{ localStorage.removeItem('qp_pending_register'); }catch(e){}
+      try{ window.QUWWAA_track && window.QUWWAA_track('registration_completed',{method:method}); }catch(e){}
+      try{ if(QP.token) fetch('/brief-subscribe',{method:'POST',headers:{'Authorization':'Bearer '+QP.token}})
+             .then(r=>{ if(r.ok && window.QUWWAA_track) window.QUWWAA_track('brief_subscribed',{}); }).catch(()=>{}); }catch(e){}
+      try{ if(window.QUWWAA_resumePending) setTimeout(window.QUWWAA_resumePending, 500); }catch(e){}
+    }
+    // observe a subscription becoming active (webhook is source of truth; fire once)
+    try{ if(QP.isMember && QP.isMember() && !localStorage.getItem('qp_sub_fired')){ localStorage.setItem('qp_sub_fired','1'); window.QUWWAA_track && window.QUWWAA_track('subscribed',{}); } }catch(e){}
+  });
+
   // ---- account sheet (members) — expanded in Phase F ----
   QP.openAccount=()=>{ if(QP.openSettings){ QP.openSettings(); } else { QP.signOut(); } };
   QP.signOut=async()=>{ try{ await QP.sb.auth.signOut(); }catch(e){} };
@@ -2154,6 +2251,7 @@
     const fail = (t)=>{ const m=document.getElementById('qpOnbMsg'); if(m) m.textContent=t;
       const b=document.getElementById('qpNext'); if(b){ b.disabled=false; b.textContent='Create account →'; } };
     try{
+      try{ if(window.QUWWAA_track) window.QUWWAA_track('trial_started', {from:'onboarding'}); }catch(e){}
       const r = await fetch('/create-checkout-session', {method:'POST', headers:{'content-type':'application/json'},
         body: JSON.stringify({ email, userId, profile: opts.profile || null })});
       const d = await r.json().catch(()=>({}));
@@ -2399,6 +2497,7 @@
     document.body.classList.toggle('view-priority', name==='priority');
     if(name==='profile') renderProfile();
     if(name==='priority') openPriority();
+    try{ if(window.QUWWAA_pageview){ const t={brief:'News Brief',priority:'Priority',profile:'Profile'}[name]||name; window.QUWWAA_pageview('/'+name, 'QUWWAA — '+t); } }catch(e){}
   }
   bar.querySelectorAll('.tab').forEach(b=> b.onclick=()=>setTab(b.getAttribute('data-tab')) );
   setActive('brief');
@@ -2595,6 +2694,7 @@
   async function createPriority(label){
     const d=await prPost({op:'create', label:label.slice(0,120), query:prKeyTerms(label)});
     if(d && d.error==='cap'){ toast('You can track one subject — use Change to swap it.'); return; }
+    try{ if(window.QUWWAA_track) window.QUWWAA_track('priority_created', {label:label}); }catch(e){}
     toast('Now tracking: '+label); await fetchPriorities(); if(tab==='priority') renderPriority();
   }
   async function changePriority(id, label){
@@ -2630,6 +2730,35 @@
     if(a){ setTimeout(()=>{ if(window.QUWWAA_openArticle) window.QUWWAA_openArticle(
       {url:a, title:q.get('t')||'', source:q.get('s')||'', label:q.get('lbl')||''}); }, 700); }
   }catch(e){} })();
+})();
+</script>
+<script>
+/* ---- GA4 analytics + funnel events ---- */
+(function(){
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){ dataLayer.push(arguments); }
+  window.gtag = gtag;
+  let ready=false;
+  // US-first Consent Mode default (analytics on; ads off), with a minimal notice.
+  gtag('consent','default',{ad_storage:'denied', ad_user_data:'denied', ad_personalization:'denied', analytics_storage:'granted'});
+  window.QUWWAA_track   = function(ev, params){ try{ if(ready) gtag('event', ev, params||{}); }catch(e){} };
+  window.QUWWAA_pageview= function(path, title){ try{ if(ready) gtag('event','page_view',{page_path:path||(location.pathname+location.hash), page_title:title||document.title}); }catch(e){} };
+  fetch('/config',{cache:'no-store'}).then(r=>r.json()).then(function(c){
+    var id = c && c.gaMeasurementId; if(!id) return;
+    var s=document.createElement('script'); s.async=true;
+    s.src='https://www.googletagmanager.com/gtag/js?id='+encodeURIComponent(id);
+    document.head.appendChild(s);
+    gtag('js', new Date()); gtag('config', id, {send_page_view:true});
+    ready=true;
+    if(!localStorage.getItem('quwwaa_consent')) showConsent();
+  }).catch(function(){});
+  function showConsent(){
+    var d=document.createElement('div'); d.id='gaConsent';
+    d.style.cssText='position:fixed;left:12px;right:12px;bottom:calc(150px + env(safe-area-inset-bottom));max-width:520px;margin:0 auto;z-index:9400;background:rgba(20,15,10,.97);border:1px solid rgba(217,128,38,.5);border-radius:12px;padding:11px 13px;color:#e7c4a6;font:13px/1.45 var(--font-sans,sans-serif);display:flex;gap:10px;align-items:center;box-shadow:0 10px 30px rgba(0,0,0,.55);';
+    d.innerHTML='<span style="flex:1">We use cookies for basic analytics. See our <a href="/privacy" target="_blank" style="color:#e89a5a">Privacy Policy</a>.</span><button style="flex:none;background:#d98026;color:#1a1208;border:none;border-radius:8px;padding:8px 14px;font:inherit;font-weight:700;cursor:pointer">OK</button>';
+    d.querySelector('button').onclick=function(){ try{localStorage.setItem('quwwaa_consent','1');}catch(e){} d.remove(); };
+    document.body.appendChild(d);
+  }
 })();
 </script>
 </body>
