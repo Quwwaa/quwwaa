@@ -665,14 +665,21 @@ def build_article(url, title, source):
     if hit and time.time() - hit[0] < ARTICLE_TTL:
         return hit[1]
     desc = og_desc(url) if url.startswith('http') else ''
-    summary, grounded = summarize_article(title, desc, source)
+    body = fetch_article_text(url, timeout=7) if url and url.startswith('http') else ''
+    # tier-2 neighbours (with bodies) when the article body is thin/unfetchable
+    neighbors = _neighbors_with_bodies(title, source, url, budget=9) if (not body or len(body) < 400) else []
+    summary, degraded = make_summary(title, source, '', url, desc, longer=True, body=body, neighbors=neighbors)
     payload = {'url': url, 'title': title, 'source': source, 'summary': summary,
-               'grounded': grounded, 'related': related_articles(title, source, url)}
+               'grounded': (not degraded), 'related': related_articles(title, source, url)}
     if summary and url:
         if len(ARTICLE_CACHE) > 500:                          # cap memory
             for k in list(ARTICLE_CACHE)[:120]:
                 ARTICLE_CACHE.pop(k, None)
-        ARTICLE_CACHE[url] = (time.time(), payload)
+        # good summaries cache for the full TTL; degraded (tier-3) ones expire in
+        # ~30 min so the body / related coverage gets another try, without
+        # re-spending on every open.
+        offset = (ARTICLE_TTL - 1800) if degraded else 0
+        ARTICLE_CACHE[url] = (time.time() - offset, payload)
     return payload
 
 _article_hits = {}                  # ip -> recent /article timestamps (own bucket)
@@ -764,10 +771,12 @@ LEDE_SYS = ("You are QUWWAA, a wire-service editor. Write a tight, factual news 
     "facts you are confident are true (from the provided material or well-established public knowledge) and do not "
     "invent specifics. Output only the summary, nothing else.")
 
-def _lede(user_content, strict=False):
-    sysmsg = LEDE_SYS + (" A generic restatement is unacceptable — include concrete, verifiable specifics "
-                         "(names, places, numbers, what happened)." if strict else "")
-    body = json.dumps({'model': ASK_MODEL, 'max_tokens': 170, 'system': sysmsg,
+def _lede(user_content, strict=False, longer=False):
+    sysmsg = LEDE_SYS \
+        + (" Write 2-3 short paragraphs (about 60-110 words)." if longer else "") \
+        + (" A generic restatement is unacceptable — include concrete, verifiable specifics "
+           "(names, places, numbers, what happened)." if strict else "")
+    body = json.dumps({'model': ASK_MODEL, 'max_tokens': (380 if longer else 170), 'system': sysmsg,
                        'messages': [{'role': 'user', 'content': user_content}]}).encode()
     req = urllib.request.Request('https://api.anthropic.com/v1/messages', data=body, headers={
         'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01'})
@@ -797,43 +806,46 @@ def _neighbors_with_bodies(title, source, exclude_url, budget=9):
         pass
     return [a for a in out if (a.get('body') or '').strip()]
 
-def quality_summary(title, source='', section='', url='', desc=''):
-    """Tiered, quality-checked wire-lede. Returns (summary, degraded). Never emits
-    meta/apology/headline-restatement slop. Runs on the background prewarm path."""
+def make_summary(title, source='', section='', url='', desc='', longer=False, body=None, neighbors=None):
+    """Tiered, quality-checked summary used by BOTH the brief cards (longer=False)
+    and the in-app article view (longer=True). Returns (summary, degraded). Never
+    emits meta/apology/headline-restatement slop — a failing tier is rejected and
+    the next tier runs; the safety net is the publisher snippet, never an apology."""
     title = (title or '').strip(); desc = (desc or '').strip()
     if not ANTHROPIC_API_KEY:
         return (desc or title), False
     attempts = []
     # Tier 1 — the source article body
-    body = fetch_article_text(url, timeout=7) if url else ''
+    if body is None:
+        body = fetch_article_text(url, timeout=7) if url else ''
     if body and len(body) > 400:
         try:
-            s = _lede('Section: %s\nSource: %s\nHeadline: %s\n\nArticle:\n%s\n\nWrite the lede.'
-                      % (section, source, title, body))
+            s = _lede('Section: %s\nSource: %s\nHeadline: %s\n\nArticle:\n%s\n\nWrite the summary.'
+                      % (section, source, title, body), longer=longer)
             if _ok_summary(s, title): return s, False
             attempts.append(s)
         except Exception: pass
-    # Tier 2 — synthesize across related coverage
-    try:
-        neighbors = _neighbors_with_bodies(title, source, url, budget=9)
-    except Exception:
-        neighbors = []
+    # Tier 2 — synthesize across related coverage (read the neighbours)
+    if neighbors is None:
+        try: neighbors = _neighbors_with_bodies(title, source, url, budget=9) if (not body or len(body) < 400) else []
+        except Exception: neighbors = []
     if neighbors:
         ctx = ('Section: %s\nHeadline: %s\nSource: %s\n\nCoverage from multiple outlets:\n%s\n\n'
-               'Synthesize ONE factual lede across these reports.'
+               'Synthesize ONE factual summary across these reports.'
                % (section, title, source, '\n'.join('— %s (%s): %s'
                   % (n.get('title', ''), n.get('source', ''), (n.get('body') or '')[:600]) for n in neighbors)))
         for strict in (False, True):
             try:
-                s = _lede(ctx, strict=strict)
+                s = _lede(ctx, strict=strict, longer=longer)
                 if _ok_summary(s, title): return s, False
                 attempts.append(s)
             except Exception: pass
-    # Tier 3 — confident lede from headline + context (degraded: re-try next prewarm cycle)
+    # Tier 3 — confident summary from headline + context + world knowledge (degraded)
     try:
-        s = _lede('Section: %s\nSource: %s\nHeadline: %s\nSnippet: %s\n\nWrite a confident, factual lede about '
-                  'this event from the headline, snippet and your knowledge of it. Name who/what/where.'
-                  % (section, source, title, desc or '(none)'), strict=True)
+        s = _lede('Section: %s\nSource: %s\nHeadline: %s\nSnippet: %s\n\nWrite a confident, factual summary of '
+                  'this event using the headline, snippet and your knowledge of it. Name the who/what/where. Do '
+                  'not apologize or say you lack information.'
+                  % (section, source, title, desc or '(none)'), strict=True, longer=longer)
         if _ok_summary(s, title): return s, True
         attempts.append(s)
     except Exception: pass
@@ -841,6 +853,10 @@ def quality_summary(title, source='', section='', url='', desc=''):
     for s in attempts:
         if s and not _banned_summary(s): return s, True
     return (desc or title), True
+
+def quality_summary(title, source='', section='', url='', desc=''):
+    """Short wire-lede for the brief cards — background prewarm path."""
+    return make_summary(title, source, section, url, desc, longer=False)
 
 def build_brief(full=False):
     """Assemble one summarized story per section. On a 'full' rebuild every
