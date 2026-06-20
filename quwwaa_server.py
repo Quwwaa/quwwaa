@@ -437,6 +437,33 @@ def fill_images(arts, limit=16):
             except Exception:
                 pass
 
+# Hosts that only ever serve images/thumbnails (a favicon or photo CDN), never an
+# article page. Some feeds hand back one of these as the item's `url` (e.g. a
+# Google "=w16" favicon thumbnail), which then opens the wrong thing and starves
+# the summarizer's body fetch — so such items are dropped at the aggregation gate.
+_IMG_HOST_RE = re.compile(
+    r'(?:^|\.)(?:googleusercontent\.com|ggpht\.com|gstatic\.com|fbcdn\.net|'
+    r'pbs\.twimg\.com|i\.ytimg\.com|ytimg\.com|i\.redd\.it|preview\.redd\.it|'
+    r'imgur\.com|cdninstagram\.com)$', re.I)
+
+def _is_article_url(u):
+    """True only for links that plausibly point at a readable article page."""
+    u = (u or '').strip()
+    if not u.startswith('http'):
+        return False
+    try:
+        p = urllib.parse.urlparse(u)
+    except Exception:
+        return False
+    host = (p.netloc or '').lower().split(':')[0]
+    if _IMG_HOST_RE.search(host):
+        return False
+    if re.search(r'\.(?:jpe?g|png|gif|webp|svg|bmp|avif)(?:$|[?#])', (p.path or '').lower()):
+        return False
+    if re.search(r'=w\d+(?:-h\d+)?(?:-[a-z0-9]+)*$', u):   # Google sized-image suffix, e.g. =w16, =s96-c
+        return False
+    return True
+
 def aggregate(q, days=7, fast=False):
     results, seen, arts = [], set(), []
     diag = {}
@@ -472,6 +499,8 @@ def aggregate(q, days=7, fast=False):
         # undated search hits so a quick source like Bing isn't filtered down to
         # nothing; the full pass below stays strict for quality.
         if a['ts'] < cutoff and not (fast and a['ts'] == 0):
+            continue
+        if not _is_article_url(a.get('url', '')):     # drop image-host / thumbnail links
             continue
         key = re.sub(r'[^a-z0-9]+', '', (a['title'] or '').lower())[:60]
         if not key or key in seen:
