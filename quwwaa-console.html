@@ -373,6 +373,10 @@
   <span class="title"><img class="qmark" src="logo-q.png" alt="q" draggable="false"><span class="qrest">uwwaa</span></span>
   <span><span class="sub" id="brainState">Brain: offline</span> &nbsp; <button id="briteBtn" title="Bright mode">☀</button> <button id="gear" title="Settings" style="display:none">⚙</button></span>
 </header>
+<!-- Sponsor strip: a thin auto-scrolling logo marquee directly under the wordmark,
+     shown to all users. Populated by the sponsor module from /sponsors; hidden
+     until there's at least one active sponsor. -->
+<div id="sponsorStrip" hidden></div>
 <!-- Logged-out landing only: one clarifying tagline under the wordmark (hidden once signed in). -->
 <div id="tagline">your AI news butler — a personalized brief and assistant for the stories you care about</div>
 
@@ -3025,6 +3029,90 @@
     d.querySelector('button').onclick=function(){ try{localStorage.setItem('quwwaa_consent','1');}catch(e){} d.remove(); };
     document.body.appendChild(d);
   }
+})();
+</script>
+<script>
+/* ---- QUWWAA sponsor strip (managed, Phase 1) ----
+   Thin auto-scrolling logo marquee under the wordmark, shown to ALL users.
+   Driven by /sponsors; pauses on hover/tap; each sponsor links out (tracked);
+   respects prefers-reduced-motion (fade-rotate instead of scroll). */
+(function(){
+  var strip=document.getElementById('sponsorStrip');
+  if(!strip) return;
+  var reduce=false; try{ reduce=matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){}
+  var IMP_KEY='quwwaa_sp_imp';            // sessionStorage: sponsor ids already counted this session
+
+  var css=document.createElement('style');
+  css.textContent=
+    '#sponsorStrip{display:flex;align-items:center;gap:12px;width:100%;max-width:760px;margin:10px auto 0;padding:7px 18px;border-top:1px solid rgba(217,128,38,.18);border-bottom:1px solid rgba(217,128,38,.18);overflow:hidden;}'
+    +'#sponsorStrip .spLabel{flex:none;font-family:var(--font-sans);font-size:10px;letter-spacing:.5px;text-transform:lowercase;color:#a06a3a;opacity:.85;}'
+    +'#sponsorStrip .spView{position:relative;flex:1;min-width:0;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent);mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent);}'
+    +'#sponsorStrip .spTrack{display:flex;align-items:center;gap:34px;width:max-content;will-change:transform;}'
+    +'#sponsorStrip .spTrack.run{animation:spScroll linear infinite;}'
+    +'#sponsorStrip:hover .spTrack.run,#sponsorStrip.paused .spTrack.run{animation-play-state:paused;}'
+    +'#sponsorStrip .spItem{flex:none;display:inline-flex;align-items:center;text-decoration:none;color:#e7c4a6;font-family:var(--font-serif);font-weight:500;font-size:15px;letter-spacing:.2px;opacity:.72;transition:opacity .2s;white-space:nowrap;}'
+    +'#sponsorStrip .spItem:hover{opacity:1;}'
+    +'#sponsorStrip .spItem img{height:20px;width:auto;display:block;filter:grayscale(1) brightness(1.7);opacity:.85;transition:filter .2s,opacity .2s;}'
+    +'#sponsorStrip .spItem:hover img{filter:none;opacity:1;}'
+    +'@keyframes spScroll{from{transform:translateX(0);}to{transform:translateX(-50%);}}'
+    +'body.bright #sponsorStrip{border-color:rgba(0,0,0,.1);}body.bright #sponsorStrip .spItem{color:#6a4a2a;}body.bright #sponsorStrip .spLabel{color:#9a6a3a;}';
+  document.head.appendChild(css);
+
+  function track(id, kind){
+    try{ fetch('/sponsor-event',{method:'POST',headers:{'content-type':'application/json'},keepalive:true,
+      body:JSON.stringify({id:id, kind:kind, surface:'app'})}).catch(function(){}); }catch(e){}
+  }
+  function alreadyImpressed(id){
+    try{ var set=JSON.parse(sessionStorage.getItem(IMP_KEY)||'[]'); if(set.indexOf(id)>=0) return true;
+      set.push(id); sessionStorage.setItem(IMP_KEY, JSON.stringify(set)); return false; }catch(e){ return false; }
+  }
+  function itemEl(s){
+    var a=document.createElement('a'); a.className='spItem'; a.href=s.link_url||'#';
+    a.target='_blank'; a.rel='noopener noreferrer sponsored';
+    if(s.logo_url){
+      var img=new Image(); img.src=s.logo_url; img.alt=s.name||'';
+      img.onerror=function(){ a.innerHTML=''; a.textContent=s.name||''; };   // logo fails → styled wordmark
+      a.appendChild(img);
+    } else { a.textContent=s.name||''; }
+    a.addEventListener('click', function(){ track(s.id,'click'); });
+    return a;
+  }
+
+  function render(list){
+    strip.innerHTML='';
+    var label=document.createElement('span'); label.className='spLabel'; label.textContent='sponsors';
+    var view=document.createElement('div'); view.className='spView';
+    var trackEl=document.createElement('div'); trackEl.className='spTrack';
+    view.appendChild(trackEl); strip.appendChild(label); strip.appendChild(view);
+    strip.hidden=false;
+
+    if(reduce || list.length<=1){
+      list.forEach(function(s){ trackEl.appendChild(itemEl(s)); });
+      if(reduce && list.length>1){                          // fade one at a time (no motion)
+        var items=Array.prototype.slice.call(trackEl.children), i=0;
+        trackEl.style.position='relative'; view.style.height='24px';
+        items.forEach(function(el,idx){ el.style.position='absolute'; el.style.left='50%'; el.style.transform='translateX(-50%)';
+          el.style.transition='opacity .6s'; el.style.opacity=idx===0?'1':'0'; });
+        setInterval(function(){ items[i].style.opacity='0'; i=(i+1)%items.length; items[i].style.opacity='1'; }, 5000);
+      }
+    } else {
+      var build=function(){ list.forEach(function(s){ trackEl.appendChild(itemEl(s)); }); };
+      build(); build();                                     // duplicate so translateX(-50%) loops seamlessly
+      trackEl.classList.add('run');
+      requestAnimationFrame(function(){
+        var w=trackEl.scrollWidth/2;                        // one set's width
+        trackEl.style.animationDuration=Math.max(14, Math.round(w/40))+'s';   // ~40px/s, calm
+      });
+      strip.addEventListener('touchstart', function(){ strip.classList.add('paused'); }, {passive:true});
+      strip.addEventListener('touchend',   function(){ strip.classList.remove('paused'); }, {passive:true});
+    }
+    list.forEach(function(s){ if(s && s.id && !alreadyImpressed(s.id)) track(s.id,'impression'); });
+  }
+
+  fetch('/sponsors',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    var list=(d&&d.sponsors)||[];
+    if(list.length) render(list);
+  }).catch(function(){});
 })();
 </script>
 </body>

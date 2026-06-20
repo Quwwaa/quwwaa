@@ -997,6 +997,30 @@ def compose_brief_email():
             '<a href="' + link + '" style="font:500 19px Georgia,\'Times New Roman\',serif;color:#fff3e9;text-decoration:none;line-height:1.25;">' + html.escape(s.get('title', '')) + '</a>'
             '<div style="font:11px Arial,sans-serif;color:#a06a3a;margin-top:6px;">' + html.escape(s.get('source', '')) + '</div>'
             '</td></tr></table></td></tr>')
+    # One sponsor block after the first story (separately sellable email real estate).
+    # Click + open are tracked through the server (redirect + pixel) per send.
+    try:
+        sp = pick_email_sponsor()
+    except Exception:
+        sp = None
+    if sp and rows:
+        sid = sp.get('id')
+        click = SITE_URL + '/sponsor-click?' + urllib.parse.urlencode({'id': sid, 'surface': 'email'})
+        pixel = SITE_URL + '/sponsor-pixel?' + urllib.parse.urlencode({'id': sid, 'surface': 'email'})
+        mark = (('<img src="' + html.escape(sp.get('logo_url')) + '" alt="' + html.escape(sp.get('name', ''))
+                 + '" height="30" style="height:30px;max-width:200px;vertical-align:middle;">')
+                if sp.get('logo_url') else
+                ('<span style="font:600 21px Georgia,serif;color:#ffd9c4;letter-spacing:.5px;">'
+                 + html.escape(sp.get('name', '')) + '</span>'))
+        rows.insert(1,
+            '<tr><td style="padding:14px 0;">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" '
+            'style="border:1px solid #2a2018;border-radius:10px;padding:18px 16px;background:#1a140e;">'
+            '<div style="font:600 10px Arial,sans-serif;color:#8a6a3a;letter-spacing:1.5px;margin-bottom:9px;">SPONSOR</div>'
+            '<a href="' + click + '" style="text-decoration:none;color:#ffd9c4;">' + mark + '</a>'
+            '</td></tr></table>'
+            '<img src="' + pixel + '" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;opacity:0;">'
+            '</td></tr>')
     doc = (
         '<div style="background:#141414;margin:0;padding:0;">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#141414;">'
@@ -1541,6 +1565,80 @@ def sb_rest(method, path_q, body=None, prefer=None):
         raw = r.read()
         return json.loads(raw) if raw else []
 
+# --- Sponsors (Phase 1, managed) -------------------------------------------
+# A rentable brand strip under the wordmark + one block in the brief email. The
+# managed sponsor list lives in the `sponsors` table; impressions/clicks land in
+# `sponsor_stats` via the sponsor_bump() RPC. All reads/writes use the service
+# role (the client only ever talks to this server, never Supabase directly).
+SPONSORS = {'t': 0, 'items': []}
+SPONSORS_TTL = 60   # seconds; a managed list changes rarely
+
+def _parse_ts(s):
+    try:
+        dt = datetime.fromisoformat(str(s).replace('Z', '+00:00'))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+def _sponsors_fetch():
+    try:
+        rows = sb_rest('GET', 'sponsors?select=id,name,logo_url,link_url,starts_at,ends_at'
+                              '&active=is.true&order=sort_order.asc,created_at.asc') or []
+    except Exception:
+        rows = []
+    now = datetime.now(timezone.utc)
+    out = []
+    for r in rows:
+        s, e = _parse_ts(r.get('starts_at')), _parse_ts(r.get('ends_at'))
+        if (s and s > now) or (e and e < now):
+            continue                                   # outside its scheduled window
+        out.append({'id': r.get('id'), 'name': r.get('name', ''),
+                    'logo_url': r.get('logo_url') or '', 'link_url': r.get('link_url') or ''})
+    return out
+
+def get_sponsors():
+    """Active, in-window sponsors (cached briefly so /sponsors is instant)."""
+    if SPONSORS['t'] == 0 or time.time() - SPONSORS['t'] > SPONSORS_TTL:
+        try:
+            SPONSORS['items'] = _sponsors_fetch()
+        except Exception:
+            pass
+        SPONSORS['t'] = time.time()
+    return SPONSORS['items']
+
+def sponsor_bump(sponsor_id, surface, kind):
+    """Record one impression/click for a sponsor (atomic daily counter via RPC)."""
+    if not sponsor_id:
+        return
+    try:
+        sb_rest('POST', 'rpc/sponsor_bump',
+                {'p_sponsor': sponsor_id, 'p_surface': (surface or 'app'), 'p_kind': (kind or 'impression')},
+                prefer='return=minimal')
+    except Exception:
+        pass
+
+def sponsor_link(sponsor_id):
+    """The destination URL for a sponsor id — looked up server-side so the click
+    redirect can never be turned into an open redirect by a crafted query param."""
+    for s in get_sponsors():
+        if s.get('id') == sponsor_id:
+            return s.get('link_url') or ''
+    try:
+        rows = sb_rest('GET', 'sponsors?select=link_url&id=eq.' + urllib.parse.quote(str(sponsor_id))) or []
+        if rows:
+            return rows[0].get('link_url') or ''
+    except Exception:
+        pass
+    return ''
+
+def pick_email_sponsor():
+    """One sponsor per brief send — rotate by Phoenix day so each gets exposure."""
+    items = get_sponsors()
+    if not items:
+        return None
+    doy = datetime.now(timezone.utc).astimezone(PHOENIX_TZ).timetuple().tm_yday
+    return items[doy % len(items)]
+
 def member_id_from_request(handler):
     """Verified member's user_id, or None (confirms the JWT + trialing/active)."""
     auth = handler.headers.get('Authorization', '')
@@ -1755,7 +1853,21 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_brief_status()
         if self.path.startswith('/sync-account'):
             return self._handle_sync_account()
+        if self.path.startswith('/sponsor-event'):
+            return self._handle_sponsor_event()
         self.send_error(404)
+
+    def _handle_sponsor_event(self):
+        """In-app impression/click tracking for the sponsor strip (anonymous,
+        aggregate-only — no personal data)."""
+        d = self._read_json()
+        sid = (d.get('id') or '').strip()
+        kind = d.get('kind') if d.get('kind') in ('impression', 'click') else 'impression'
+        surface = d.get('surface') if d.get('surface') in ('app', 'email') else 'app'
+        if sid:
+            try: sponsor_bump(sid, surface, kind)
+            except Exception: pass
+        self._send_json({'ok': True})
 
     def _handle_sync_account(self):
         """Keep downstream services on the account's current login email — used
@@ -2159,6 +2271,39 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
         elif self.path.startswith('/brief'):
             self._send_json({'sections': BRIEF['sections'], 't': BRIEF['t']})
+        elif self.path.startswith('/sponsors'):
+            try: items = get_sponsors()
+            except Exception: items = []
+            self._send_json({'sponsors': items})
+        elif self.path.startswith('/sponsor-click'):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            sid = (qs.get('id') or [''])[0].strip()
+            surface = (qs.get('surface') or ['email'])[0]
+            surface = surface if surface in ('app', 'email') else 'email'
+            dest = sponsor_link(sid) if sid else ''
+            if sid:
+                try: sponsor_bump(sid, surface, 'click')
+                except Exception: pass
+            self.send_response(302)
+            self.send_header('Location', dest or (SITE_URL + '/'))   # server-resolved link — never an open redirect
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+        elif self.path.startswith('/sponsor-pixel'):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            sid = (qs.get('id') or [''])[0].strip()
+            surface = (qs.get('surface') or ['email'])[0]
+            surface = surface if surface in ('app', 'email') else 'email'
+            if sid:
+                try: sponsor_bump(sid, surface, 'impression')
+                except Exception: pass
+            gif = (b'GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!\xf9\x04\x01\x00'
+                   b'\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;')
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/gif')
+            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+            self.send_header('Content-Length', str(len(gif)))
+            self.end_headers()
+            self.wfile.write(gif)
         elif self.path.startswith('/news'):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             q = (qs.get('q') or [''])[0].strip()
