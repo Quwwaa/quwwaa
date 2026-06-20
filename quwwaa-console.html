@@ -104,11 +104,14 @@
   body.home #homeCards { display:block; width:100%; max-width:660px; margin:18px auto 0;
       padding:0 22px 40px; pointer-events:auto; }
   /* brief sections (the board's cards) */
-  .bsec { opacity:0; animation:cardPop .5s cubic-bezier(.34,1.56,.64,1) forwards; margin-bottom:26px; }
+  /* Cards are visible by default; the entry animation is opt-in via .pop so a
+     re-render (reconcile) can never leave a card stuck invisible or replay it. */
+  .bsec { margin-bottom:26px; }
+  .bsec.pop { opacity:0; animation:cardPop .5s cubic-bezier(.34,1.56,.64,1) forwards; }
   .blabel { font-size:13px; font-weight:600; letter-spacing:0; color:#e08a32;
             margin-bottom:10px; border-bottom:1px solid rgba(217,128,38,.2); padding-bottom:5px; }
-  .bthumb { display:block; border-radius:10px; overflow:hidden; margin-bottom:10px; }
-  .bthumb img { display:block; width:100%; height:200px; object-fit:cover; }
+  .bthumb { display:block; border-radius:10px; overflow:hidden; margin-bottom:10px; height:200px; background:rgba(255,180,90,.06); }
+  .bthumb img { display:block; width:100%; height:100%; object-fit:cover; }
   .bhead { display:block; color:#fff3e9; font-size:23px; line-height:1.18; font-weight:500; text-decoration:none; margin-bottom:8px; }
   .bhead:hover { color:#fff; text-shadow:0 0 8px rgba(255,170,90,.6); }
   .bsum { color:#d9b49a; font-size:14px; line-height:1.55; margin-bottom:7px; }
@@ -133,7 +136,7 @@
     body.home #homeCards { display:block; column-count:2; column-gap:380px; column-fill:balance;
         width:auto; max-width:1240px; margin:0 auto; padding:30px 44px 80px; }
     body.home .bsec { break-inside:avoid; -webkit-column-break-inside:avoid; margin-bottom:30px; }
-    body.home .bthumb img { height:180px; }
+    body.home .bthumb { height:180px; }
   }
   /* ---------- phones: clean header, reactor on top, one scrollable feed ---------- */
   @media(max-width:820px){
@@ -213,7 +216,7 @@
               scrollbar-width:thin; scrollbar-color:#4a2f15 transparent; }
   /* the search Lens reuses the home-board card (.bsec); grid gap handles spacing */
   #lensBody .bsec { margin-bottom:0; align-self:start; }
-  #lensBody .bthumb img { height:150px; }
+  #lensBody .bthumb { height:150px; }
   .lcard {
     padding:14px 16px; border-radius:10px; display:flex; flex-direction:column; gap:8px;
     background:linear-gradient(160deg, rgba(217,128,38,.10), rgba(45,28,14,.25));
@@ -898,8 +901,8 @@
       const x = {title:a.title, url:a.url, source:a.source, image:a.image, time:a.time,
                  summary:a.summary||'', label:a.source||''};
       const c = storyCard(x, a.source||'', (a.time||'')+(a.via?' · '+a.via:''));
-      if(animate){ const delay = Math.min(i * 55, 2600); c.style.animationDelay = delay + 'ms'; if(i < 18) popSound(delay); }
-      else { c.style.animation = 'none'; c.style.opacity = '1'; }   // quiet upgrade — no re-pop
+      if(animate){ const delay = Math.min(i * 55, 2600); c.classList.add('pop'); c.style.animationDelay = delay + 'ms'; if(i < 18) popSound(delay); }
+      // quiet upgrade → leave the card in its default (visible) state, no re-pop
       body.appendChild(c);
     });
     if(!animate) body.scrollTop = prevScroll;   // keep the reader's place on a quiet upgrade
@@ -951,13 +954,43 @@
     sec.onclick = ()=> openArticle(x);
     return sec;
   }
+  // Stable per-story key. Some brief items share a placeholder thumbnail as their
+  // url, so url alone collides — combine url + title so distinct stories never
+  // share a key (collisions would make reconcile recreate the card → jitter).
+  function cardKey(x){ return String((x&&x.url)||'')+'␟'+String((x&&x.title)||''); }
+  function cardSig(x){ return cardKey(x)+'||'+(x.summary||'')+'||'+(x.image||'')+'||'+(x.label||'')+'||'+(x.source||'')+'||'+(x.time||''); }
+  // Reconcile the board by stable key so a re-render with the same data reuses the
+  // existing DOM nodes — the first card never unmounts/remounts, so its entry
+  // animation can't replay (the "jitter"). Only genuinely new cards animate in.
   function renderBoardSections(sections, sound){
     const wrap = $('homeCards'); if(!wrap) return;
-    wrap.innerHTML = '';
-    sections.forEach((x, i)=>{
-      if(sound && i < 8) popSound(Math.min(i*110, 1200));
-      wrap.appendChild(storyCard(x, x.label, (x.source||'')+(x.time?' · '+x.time:'')));
+    const have = new Map();
+    Array.from(wrap.children).forEach(n=>{ const k=n.getAttribute('data-key'); if(k!=null) have.set(k, n); });
+    let prev = null, animIdx = 0;
+    sections.forEach((x)=>{
+      const key = cardKey(x), sig = cardSig(x);
+      const existing = have.get(key);
+      let node;
+      if(existing && existing.getAttribute('data-sig') === sig){
+        node = existing; have.delete(key);                  // unchanged → reuse as-is, no animation
+      } else {
+        node = storyCard(x, x.label, (x.source||'')+(x.time?' · '+x.time:''));
+        node.setAttribute('data-key', key); node.setAttribute('data-sig', sig);
+        if(existing){                                        // same story, changed content → swap in place, no pop
+          wrap.replaceChild(node, existing); have.delete(key);
+        } else if(sound){                                   // brand-new card on the first paint → animate in once
+          const delay = Math.min(animIdx*110, 1200);
+          node.classList.add('pop'); node.style.animationDelay = delay+'ms';
+          if(animIdx < 8) popSound(delay);
+          animIdx++;
+        }
+        // quiet additions (member Local/National, later data) stay visible, no pop
+      }
+      const target = prev ? prev.nextSibling : wrap.firstChild;
+      if(node !== target) wrap.insertBefore(node, target);   // place in order (no-op if already there)
+      prev = node;
     });
+    have.forEach(n=> n.remove());                            // drop cards no longer in the brief
   }
   // ---------- in-app article view (Summary + Sources) + 1/day metered paywall ----------
   // Tapping a story opens an AI summary grounded in the source (cached server-side).
@@ -1120,22 +1153,34 @@
     }catch(e){}
     return sections;
   }
-  let homeRendered = -1, boardRetries = 0, lastBrief = [];
+  let homeRendered = -1, boardRetries = 0, lastBrief = [], briefInFlight = null;
+  // Re-render the board from the brief we already have — used when auth/membership
+  // settles so we re-personalize WITHOUT hitting /brief again. Reconcile keeps it
+  // flicker-free even if this fires several times in a row.
+  function paintBrief(){
+    if(!lastBrief.length) return;
+    const ordered = personalizeSections(lastBrief);
+    renderBoardSections(ordered, homeRendered < 0);   // animate only on the very first paint
+    homeRendered = ordered.length;
+    setStatus('Standing by');
+    try{ if(window.QP && QP.isMember && QP.isMember() && QP.profile){ addMemberLocal(); } }catch(e){}
+  }
   async function loadHome(force){
     document.body.classList.add('home');
-    let sections = [];
-    try{ const d = await fetch('/brief', {cache:'no-store'}).then(r=>r.json()); sections = (d && d.sections) || []; }catch(e){}
+    // Already loaded and this isn't a real refresh (e.g. auth settled) → just repaint.
+    if(lastBrief.length && !force){ paintBrief(); return; }
+    // Coalesce concurrent callers onto one in-flight /brief request (no triple fetch).
+    if(briefInFlight){ try{ await briefInFlight; }catch(e){} if(lastBrief.length) paintBrief(); return; }
+    briefInFlight = fetch('/brief', {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+    let d=null; try{ d = await briefInFlight; }catch(e){} finally { briefInFlight = null; }
+    const sections = (d && d.sections) || [];
     if(!sections.length){
       if(homeRendered < 0) setStatus('Assembling today’s brief…');
       if(boardRetries < 8){ boardRetries++; setTimeout(()=>loadHome(true), 4000); }
       return;
     }
     boardRetries = 0; lastBrief = sections;
-    const ordered = personalizeSections(sections);
-    if(ordered.length !== homeRendered || force){ renderBoardSections(ordered, true); homeRendered = ordered.length; }
-    setStatus('Standing by');
-    // Members: prepend Local + National sections built from their location.
-    try{ if(window.QP && QP.isMember && QP.isMember() && QP.profile){ addMemberLocal(); } }catch(e){}
+    paintBrief();
   }
   async function addMemberLocal(){
     const p = (window.QP && QP.profile) || {};
@@ -1153,7 +1198,7 @@
     if(got.length){ renderBoardSections(got.concat(personalizeSections(lastBrief)), false); }
   }
   // re-render the board whenever membership/auth changes (free brief <-> personalized)
-  document.addEventListener('qp:auth', function(){ try{ if(document.body.classList.contains('home')) loadHome(true); }catch(e){} });
+  document.addEventListener('qp:auth', function(){ try{ if(document.body.classList.contains('home')) loadHome(false); }catch(e){} });
   function resetBoard(){
     history = [];
     try{ localStorage.removeItem('q_history'); }catch(e){}
@@ -2044,7 +2089,9 @@
   }
 
   async function boot(){
-    let cfg; try{ cfg=await fetch('/config',{cache:'no-store'}).then(r=>r.json()); }catch(e){ return; }
+    // Shared, memoized /config — loaded once per session and reused by every module
+    // (premium boot, push VAPID, GA4) instead of each fetching it independently.
+    let cfg; try{ cfg=await (window.__cfgP || (window.__cfgP=fetch('/config',{cache:'no-store'}).then(r=>r.json()))); }catch(e){ return; }
     QP.cfg=cfg;
     if(!cfg||!cfg.premium) return;                 // premium not configured → free experience only
     QP.enabled=true; injectCSS();
@@ -2692,7 +2739,7 @@
     function isIOS(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1); }
     function plat(){ return isIOS()?'ios':(/Android/.test(navigator.userAgent)?'android':'desktop'); }
     async function getVapid(){ if(vapid!=null) return vapid;
-      try{ const c=(window.QP&&QP.cfg)|| (await fetch('/config',{cache:'no-store'}).then(r=>r.json())); vapid=c.vapidPublicKey||''; }catch(e){ vapid=''; } return vapid; }
+      try{ const c=(window.QP&&QP.cfg)|| (await (window.__cfgP || (window.__cfgP=fetch('/config',{cache:'no-store'}).then(r=>r.json())))); vapid=c.vapidPublicKey||''; }catch(e){ vapid=''; } return vapid; }
     function b64(s){ const pad='='.repeat((4-s.length%4)%4); const r=(s+pad).replace(/-/g,'+').replace(/_/g,'/'); const raw=atob(r); return Uint8Array.from([...raw].map(c=>c.charCodeAt(0))); }
     async function current(){ try{ const reg=await navigator.serviceWorker.ready; return await reg.pushManager.getSubscription(); }catch(e){ return null; } }
     function authHdr(){ const h={'content-type':'application/json'}; try{ if(window.QP&&QP.token) h.Authorization='Bearer '+QP.token; }catch(e){} return h; }
@@ -2871,7 +2918,7 @@
   gtag('consent','default',{ad_storage:'denied', ad_user_data:'denied', ad_personalization:'denied', analytics_storage:'granted'});
   window.QUWWAA_track   = function(ev, params){ try{ if(ready) gtag('event', ev, params||{}); }catch(e){} };
   window.QUWWAA_pageview= function(path, title){ try{ if(ready) gtag('event','page_view',{page_path:path||(location.pathname+location.hash), page_title:title||document.title}); }catch(e){} };
-  fetch('/config',{cache:'no-store'}).then(r=>r.json()).then(function(c){
+  (window.__cfgP || (window.__cfgP=fetch('/config',{cache:'no-store'}).then(r=>r.json()))).then(function(c){
     var id = c && c.gaMeasurementId; if(!id) return;
     var s=document.createElement('script'); s.async=true;
     s.src='https://www.googletagmanager.com/gtag/js?id='+encodeURIComponent(id);
