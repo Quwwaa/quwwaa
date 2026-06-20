@@ -3,7 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>QUWWAA Console</title>
+<title>QUWWAA — your AI news butler</title>
+<!-- Purpose for crawlers + Google OAuth branding review (invisible to running app) -->
+<meta name="description" content="QUWWAA is an AI news butler — a personalized daily news brief and an intelligent assistant that tracks the stories you care about and answers your questions in plain language.">
+<meta property="og:title" content="QUWWAA — your AI news butler">
+<meta property="og:description" content="QUWWAA is an AI news butler — a personalized daily news brief and an intelligent assistant that tracks the stories you care about and answers your questions in plain language.">
+<meta property="og:url" content="https://quwwaa.com">
+<meta property="og:type" content="website">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebApplication","name":"QUWWAA","url":"https://quwwaa.com","applicationCategory":"NewsApplication","description":"QUWWAA is an AI news butler — a personalized daily news brief and an intelligent assistant that tracks the stories you care about and answers your questions in plain language."}
+</script>
 <!-- PWA: installable home-screen app -->
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#000000">
@@ -352,11 +361,20 @@
 </style>
 </head>
 <body>
+<noscript>
+  <div style="max-width:640px;margin:40px auto;padding:0 22px;color:#e7d6c4;font-family:sans-serif;line-height:1.6;">
+    <h1>QUWWAA</h1>
+    <p>QUWWAA is an AI news butler — a personalized daily news brief and an intelligent assistant that tracks the stories you care about and answers your questions in plain language.</p>
+    <p><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>
+  </div>
+</noscript>
 <header>
   <span class="sub" id="clock">--:--:--</span>
   <span class="title"><img class="qmark" src="logo-q.png" alt="q" draggable="false"><span class="qrest">uwwaa</span></span>
   <span><span class="sub" id="brainState">Brain: offline</span> &nbsp; <button id="briteBtn" title="Bright mode">☀</button> <button id="gear" title="Settings" style="display:none">⚙</button></span>
 </header>
+<!-- Logged-out landing only: one clarifying tagline under the wordmark (hidden once signed in). -->
+<div id="tagline">your AI news butler — a personalized brief and assistant for the stories you care about</div>
 
 <div id="reactorWrap">
   <div id="reactor" title="Tap to speak">
@@ -2054,6 +2072,7 @@
     }
     banner().style.display = QP.pastDue() ? 'block' : 'none';
     document.body.classList.toggle('qp-member', QP.isMember());
+    document.body.classList.toggle('qp-signedin', !!QP.user);   // hides the logged-out landing tagline
   }
   QP.render=render;
 
@@ -2519,6 +2538,10 @@
     +'header #clock,header #brainState,header #briteBtn,header #gear,header #qpBtn,header #qpSignIn,header #qsubBtn{display:none !important;}'
     +'header .title{position:static !important;transform:none !important;left:auto !important;}'
     +'#controls{display:none !important;}'
+    /* logged-out landing tagline (Part 2): muted, one line, hidden once signed in */
+    +'#tagline{text-align:center;font-family:var(--font-sans);font-size:13px;line-height:1.45;color:rgba(231,196,166,.6);max-width:330px;margin:6px auto 0;padding:0 22px;letter-spacing:0;}'
+    +'body.qp-signedin #tagline{display:none;}'
+    +'body.bright #tagline{color:rgba(120,80,40,.7);}'
     +'body.home #homeCards{padding-bottom:120px;}#log{padding-bottom:120px;}'
     /* glass tab bar */
     /* dock = the 3-tab pill + the talk orb, centred together so the whole group is symmetric */
