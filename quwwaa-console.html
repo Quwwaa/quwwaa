@@ -1045,8 +1045,8 @@
       +'<button class="qpaygo" data-r="apple" style="background:#111;color:#fff;margin-top:9px">Continue with Apple</button>'
       +'<button class="qpaygo" data-r="email" style="background:none;color:#ffce9a;border:1px solid rgba(217,128,38,.5);margin-top:9px">Continue with email</button>'
       +'<button class="qpaylater">Maybe later</button>');
-    body.querySelector('[data-r="google"]').onclick=()=>{ trk('registration_started',{method:'google'}); try{ QP.signInWithOAuth && QP.signInWithOAuth('google'); }catch(e){} };
-    body.querySelector('[data-r="apple"]').onclick=()=>{ trk('registration_started',{method:'apple'}); try{ QP.signInWithOAuth && QP.signInWithOAuth('apple'); }catch(e){} };
+    body.querySelector('[data-r="google"]').onclick=()=>{ trk('registration_started',{method:'google'}); try{ QP.signInWithOAuth && QP.signInWithOAuth('google', true); }catch(e){} };
+    body.querySelector('[data-r="apple"]').onclick=()=>{ trk('registration_started',{method:'apple'}); try{ QP.signInWithOAuth && QP.signInWithOAuth('apple', true); }catch(e){} };
     body.querySelector('[data-r="email"]').onclick=()=>{ trk('registration_started',{method:'email'}); closeArticle(); try{ QP.openFreeSignup ? QP.openFreeSignup() : (QP.openAuth&&QP.openAuth()); }catch(e){} };
     body.querySelector('.qpaylater').onclick=closeArticle;
   }
@@ -1869,7 +1869,10 @@
     let ov=$('qpAuth'); if(ov) return ov;
     ov=document.createElement('div'); ov.id='qpAuth'; ov.className='qpOv';
     ov.innerHTML='<div class="qpCard" style="position:relative"><button class="qpX" data-x type="button">✕</button>'
-      +'<h2 id="qpAuthTitle">Welcome back</h2><p>Sign in to your QUWWAA membership.</p>'
+      +'<h2 id="qpAuthTitle">Welcome back</h2><p>Sign in to your QUWWAA account.</p>'
+      +'<button class="qpPrimary" id="qpAuthGoog" type="button" style="width:100%">Continue with Google</button>'
+      +'<button class="qpPrimary" id="qpAuthApple" type="button" style="width:100%;background:#111;color:#fff;margin-top:8px">Continue with Apple</button>'
+      +'<div style="text-align:center;color:#a06a3a;font-size:11px;margin:12px 0">or with email</div>'
       +'<form id="qpAuthForm"><label>Email</label><input id="qpEmail" type="email" autocomplete="email" required>'
       +'<label>Password</label><input id="qpPass" type="password" autocomplete="current-password" required>'
       +'<div class="qpBtnRow"><button class="qpPrimary" id="qpAuthGo" type="submit">Sign in</button></div>'
@@ -1878,6 +1881,8 @@
       +'<button class="qpLink" id="qpToTrial" type="button" style="display:block;margin-top:8px">New here? Start your 7-day free trial →</button></div>';
     document.body.appendChild(ov);
     ov.addEventListener('click',e=>{ if(e.target===ov||e.target.hasAttribute('data-x')) ov.classList.remove('open'); });
+    $('qpAuthGoog').onclick=()=>{ QP.signInWithOAuth('google', false); };
+    $('qpAuthApple').onclick=()=>{ QP.signInWithOAuth('apple', false); };
     $('qpToTrial').onclick=()=>{ ov.classList.remove('open'); QP.openOnboarding ? QP.openOnboarding() : null; };
     $('qpForgot').onclick=async ()=>{
       const email=$('qpEmail').value.trim(), msg=$('qpAuthMsg'); msg.className='qpMsg';
@@ -1902,9 +1907,11 @@
   QP.openAuth=()=>{ authModal().classList.add('open'); };
 
   // ---- free registration (one-tap OAuth + email) for the registration wall ----
-  QP.signInWithOAuth=function(provider){
+  QP.signInWithOAuth=function(provider, register){
     if(!(QP.sb && QP.sb.auth && QP.sb.auth.signInWithOAuth)) return;
-    try{ localStorage.setItem('qp_pending_register', provider); }catch(e){}
+    // only flag a NEW registration (fires registration_completed + brief-subscribe
+    // on return); a returning "Sign in with Google" passes register=false.
+    try{ if(register) localStorage.setItem('qp_pending_register', provider); }catch(e){}
     try{ QP.sb.auth.signInWithOAuth({ provider:provider, options:{ redirectTo: location.origin+'/' } }); }catch(e){}
   };
   QP.openFreeSignup=function(){
@@ -1923,8 +1930,8 @@
         +'<button class="qpLink" id="qpFreeSignin" type="button" style="display:block;margin-top:8px">Already have an account? Sign in →</button></div>';
       document.body.appendChild(ov);
       ov.addEventListener('click',e=>{ if(e.target===ov||e.target.hasAttribute('data-x')) ov.classList.remove('open'); });
-      $('qpFreeGoog').onclick=()=>{ try{window.QUWWAA_track&&window.QUWWAA_track('registration_started',{method:'google'});}catch(e){} QP.signInWithOAuth('google'); };
-      $('qpFreeApple').onclick=()=>{ try{window.QUWWAA_track&&window.QUWWAA_track('registration_started',{method:'apple'});}catch(e){} QP.signInWithOAuth('apple'); };
+      $('qpFreeGoog').onclick=()=>{ try{window.QUWWAA_track&&window.QUWWAA_track('registration_started',{method:'google'});}catch(e){} QP.signInWithOAuth('google', true); };
+      $('qpFreeApple').onclick=()=>{ try{window.QUWWAA_track&&window.QUWWAA_track('registration_started',{method:'apple'});}catch(e){} QP.signInWithOAuth('apple', true); };
       $('qpFreeSignin').onclick=()=>{ ov.classList.remove('open'); QP.openAuth&&QP.openAuth(); };
       $('qpFreeForm').onsubmit=async e=>{
         e.preventDefault(); const go=$('qpFreeGo'), msg=$('qpFreeMsg'); msg.className='qpMsg'; msg.textContent='';
