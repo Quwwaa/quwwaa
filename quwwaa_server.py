@@ -736,12 +736,30 @@ def _has_specifics(summary, title):
     for w in re.findall(r'\b([A-Z][a-zA-Z]{2,})', summary or ''):   # a proper noun not in the headline
         if w.lower() not in tl and w.lower() not in _COMMON_CAPS:
             return True
+    # substantial elaboration beyond the headline is itself informative (a good
+    # lede that adds context without a brand-new proper noun shouldn't be rejected)
+    if len(_sig_tokens(summary) - _sig_tokens(title)) >= 8:
+        return True
     return False
 
-def _ok_summary(s, title):
+def _ok_summary(s, title, require_specifics=True):
     s = (s or '').strip()
-    return bool(s) and len(s) >= 25 and not _banned_summary(s) \
-        and not _too_like_headline(s, title) and _has_specifics(s, title)
+    if not s or len(s) < 25 or _banned_summary(s) or _too_like_headline(s, title):
+        return False
+    # Body-grounded summaries (tiers 1-2) are factual by construction, so we only
+    # demand the specificity floor on the world-knowledge tier (hallucination guard).
+    return _has_specifics(s, title) if require_specifics else True
+
+def _card_summary_ok(p):
+    """A stored brief card whose summary is genuinely usable (not empty, not slop,
+    not a headline restatement). Cheap, no AI — used to flush stale cards."""
+    s = (p.get('summary') or '').strip(); t = p.get('title') or ''
+    return bool(s) and not _banned_summary(s) and not _too_like_headline(s, t)
+
+def _card_settled(p):
+    """Stop re-summarizing a card once it's good, or we've already tried enough
+    (a genuinely hard-to-fetch story settles to a clean headline-only card)."""
+    return _card_summary_ok(p) or (p.get('degrade_tries') or 0) >= 3
 
 def fetch_article_text(url, timeout=7):
     """Best-effort readable body text from an article page (summary tier 1)."""
@@ -813,19 +831,21 @@ def make_summary(title, source='', section='', url='', desc='', longer=False, bo
     the next tier runs; the safety net is the publisher snippet, never an apology."""
     title = (title or '').strip(); desc = (desc or '').strip()
     if not ANTHROPIC_API_KEY:
-        return (desc or title), False
+        # No model available (local/dev): use the publisher snippet if it's real,
+        # never the bare headline. Mark degraded so prod re-summarizes properly.
+        return ((desc if (desc and len(desc) >= 25 and not _too_like_headline(desc, title)) else ''), True)
     attempts = []
-    # Tier 1 — the source article body
+    # Tier 1 — the source article body (grounded: skip the specificity floor)
     if body is None:
         body = fetch_article_text(url, timeout=7) if url else ''
     if body and len(body) > 400:
         try:
             s = _lede('Section: %s\nSource: %s\nHeadline: %s\n\nArticle:\n%s\n\nWrite the summary.'
                       % (section, source, title, body), longer=longer)
-            if _ok_summary(s, title): return s, False
+            if _ok_summary(s, title, require_specifics=False): return s, False
             attempts.append(s)
         except Exception: pass
-    # Tier 2 — synthesize across related coverage (read the neighbours)
+    # Tier 2 — synthesize across related coverage (read the neighbours; also grounded)
     if neighbors is None:
         try: neighbors = _neighbors_with_bodies(title, source, url, budget=9) if (not body or len(body) < 400) else []
         except Exception: neighbors = []
@@ -837,7 +857,7 @@ def make_summary(title, source='', section='', url='', desc='', longer=False, bo
         for strict in (False, True):
             try:
                 s = _lede(ctx, strict=strict, longer=longer)
-                if _ok_summary(s, title): return s, False
+                if _ok_summary(s, title, require_specifics=False): return s, False
                 attempts.append(s)
             except Exception: pass
     # Tier 3 — confident summary from headline + context + world knowledge (degraded)
@@ -849,10 +869,14 @@ def make_summary(title, source='', section='', url='', desc='', longer=False, bo
         if _ok_summary(s, title): return s, True
         attempts.append(s)
     except Exception: pass
-    # Safety net — best non-banned attempt, else the publisher snippet (real text, never AI slop)
+    # Safety net — best attempt that is at least a real, non-restatement sentence;
+    # then the publisher snippet. NEVER echo the headline (that's pure duplication
+    # on the card) — return '' so the card shows a clean headline-only, retried later.
     for s in attempts:
-        if s and not _banned_summary(s): return s, True
-    return (desc or title), True
+        if s and not _banned_summary(s) and not _too_like_headline(s, title): return s, True
+    if desc and len(desc) >= 25 and not _banned_summary(desc) and not _too_like_headline(desc, title):
+        return desc, True
+    return '', True
 
 def quality_summary(title, source='', section='', url='', desc=''):
     """Short wire-lede for the brief cards — background prewarm path."""
@@ -867,20 +891,24 @@ def build_brief(full=False):
     out = []
     for cat in BRIEF_CATS:
         label = cat['label']
-        # keep good cards on a partial pass, but re-summarize any 'degraded' (tier-3)
-        # ones — the body or related coverage may be reachable now.
-        if not full and label in prev and not prev[label].get('degraded'):
-            out.append(prev[label])
-        elif not full and label in prev and prev[label].get('degraded'):
-            p = prev[label]; tries = (p.get('degrade_tries') or 0) + 1
+        p = prev.get(label)
+        # Re-validate each previously-built card. Keep it only if its summary is
+        # genuinely good or we've already retried it enough; otherwise re-summarize
+        # — this flushes stale headline-restatement slop even when it was stored as
+        # non-degraded, and a truly hard story settles to a clean headline-only card.
+        if not full and p and _card_settled(p):
+            out.append(p)
+        elif not full and p:
+            tries = (p.get('degrade_tries') or 0) + 1
+            np = dict(p)
             try:
                 desc = og_desc(p.get('url', '')) if str(p.get('url', '')).startswith('http') else ''
                 summ, deg = quality_summary(p.get('title', ''), p.get('source', ''), label, p.get('url', ''), desc)
-                p = dict(p); p['summary'] = summ
-                p['degraded'] = bool(deg and tries < 3)     # stop retrying after 3 cycles
-                p['degrade_tries'] = tries
+                np['summary'] = summ
+                np['degraded'] = bool(deg and tries < 3)    # stop retrying after 3 cycles
             except Exception: pass
-            out.append(p)
+            np['degrade_tries'] = tries
+            out.append(np)
         else:
             try:
                 # Use the FULL aggregate (more sources + image backfill) so each section
@@ -1033,8 +1061,8 @@ def prewarm():
                 build_brief(full=True)                              # periodic fresh rebuild
             elif len(BRIEF['sections']) < len(BRIEF_CATS):
                 build_brief(full=False)                             # fill only the missing sections
-            elif any(s.get('degraded') for s in BRIEF['sections']):
-                build_brief(full=False)                             # re-summarize tier-3 (degraded) cards
+            elif any(not _card_settled(s) for s in BRIEF['sections']):
+                build_brief(full=False)                             # re-summarize degraded/stale-slop cards
         except Exception:
             pass
         try: maybe_send_brief_push()        # once/day "your brief is ready" (no-op until push configured)
