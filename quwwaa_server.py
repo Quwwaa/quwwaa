@@ -687,6 +687,161 @@ def article_rate_check(ip):
         _article_hits[ip] = hits
         return True
 
+# --- News-lens summary quality: tiered, wire-lede, auto-rejected slop ----------
+# Phrases that reveal the AI, an apology, a fetch failure, or a headline restatement.
+BANNED_SUMMARY = [
+    "couldn't read", "could not read", "couldn't access", "could not access", "unable to access",
+    "unable to read", "not enough information", "insufficient information", "limited information",
+    "no details", "no specific", "the article doesn't", "the article does not", "article didn't",
+    "article did not", "doesn't say", "didn't say", "based on the headline", "from the headline",
+    "paraphrase of headline", "paraphrasing the headline", "as an ai", "i cannot", "i can't",
+    "i couldn't", "i could not", "i'm unable", "i am unable", "cannot summarize", "unable to summarize",
+    "without more information", "without additional", "does not provide", "not specified",
+    "appears to", "seems to discuss", "seems to be about", "this article is about",
+    "the headline suggests", "unclear from", "not clear from", "reportedly the article",
+]
+_SUMSTOP = set(("the a an and or but of to in on for with from by at as is are was were be been being this that "
+    "these those it its their his her our your my we you they he she over under after before into out up down new "
+    "news report reports says said amid will would can could has have had not no so if then than about more most "
+    "has been have been will be").split())
+
+def _sig_tokens(s):
+    return set(w for w in re.findall(r"[a-z0-9']+", (s or '').lower()) if w not in _SUMSTOP and len(w) > 2)
+
+def _banned_summary(s):
+    low = (s or '').lower()
+    return any(p in low for p in BANNED_SUMMARY)
+
+def _too_like_headline(summary, title):
+    st = _sig_tokens(summary); ht = _sig_tokens(title)
+    if not st:
+        return True
+    if len(st - ht) < 4:                                   # adds <4 new significant words → restatement
+        return True
+    return (len(st & ht) / float(len(st | ht) or 1)) > 0.62
+
+_COMMON_CAPS = set("the this that these those their they there then when what where while with after before "
+    "however meanwhile it he she but and a an his her".split())
+def _has_specifics(summary, title):
+    if re.search(r'\d', summary or ''):                    # a number is a concrete fact
+        return True
+    tl = (title or '').lower()
+    for w in re.findall(r'\b([A-Z][a-zA-Z]{2,})', summary or ''):   # a proper noun not in the headline
+        if w.lower() not in tl and w.lower() not in _COMMON_CAPS:
+            return True
+    return False
+
+def _ok_summary(s, title):
+    s = (s or '').strip()
+    return bool(s) and len(s) >= 25 and not _banned_summary(s) \
+        and not _too_like_headline(s, title) and _has_specifics(s, title)
+
+def fetch_article_text(url, timeout=7):
+    """Best-effort readable body text from an article page (summary tier 1)."""
+    if not (url and url.startswith('http')):
+        return ''
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=timeout) as r:
+            raw = r.read(400000)
+    except Exception:
+        return ''
+    try:
+        doc = raw.decode('utf-8', 'ignore')
+    except Exception:
+        return ''
+    doc = re.sub(r'(?is)<(script|style|noscript|head|nav|footer|aside)[^>]*>.*?</\1>', ' ', doc)
+    texts = []
+    for p in re.findall(r'(?is)<p[^>]*>(.*?)</p>', doc):
+        t = html.unescape(re.sub(r'\s+', ' ', re.sub(r'(?is)<[^>]+>', ' ', p))).strip()
+        if len(t) >= 60:                                   # skip nav/boilerplate fragments
+            texts.append(t)
+    return ' '.join(texts)[:3500]
+
+LEDE_SYS = ("You are QUWWAA, a wire-service editor. Write a tight, factual news lede — 2-3 sentences, about "
+    "30-55 words — in the neutral, specific style of AP or Reuters: lead with who, what, where, when, and why "
+    "it matters. Name the people, places, organizations and numbers; state plainly what happened. NEVER hedge, "
+    "apologize, mention sources/fetching/the AI, or restate the headline; NEVER say you lack information. Use only "
+    "facts you are confident are true (from the provided material or well-established public knowledge) and do not "
+    "invent specifics. Output only the summary, nothing else.")
+
+def _lede(user_content, strict=False):
+    sysmsg = LEDE_SYS + (" A generic restatement is unacceptable — include concrete, verifiable specifics "
+                         "(names, places, numbers, what happened)." if strict else "")
+    body = json.dumps({'model': ASK_MODEL, 'max_tokens': 170, 'system': sysmsg,
+                       'messages': [{'role': 'user', 'content': user_content}]}).encode()
+    req = urllib.request.Request('https://api.anthropic.com/v1/messages', data=body, headers={
+        'content-type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01'})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read())
+    return ' '.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text').strip()
+
+def _neighbors_with_bodies(title, source, exclude_url, budget=9):
+    """Related coverage (tier 2): fetch 2-4 neighbours' bodies in parallel under one budget."""
+    try:
+        rel = related_articles(title, source, exclude_url, n=4)
+    except Exception:
+        rel = []
+    if not rel:
+        return []
+    def grab(a):
+        b = fetch_article_text(a.get('url', ''), timeout=6) or og_desc(a.get('url', '')) or ''
+        a = dict(a); a['body'] = b; return a
+    out, deadline = [], time.time() + budget
+    try:
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futs = [ex.submit(grab, a) for a in rel]
+            for fu in as_completed(list(futs), timeout=max(0.5, budget)):
+                try: out.append(fu.result(timeout=max(0.1, deadline - time.time())))
+                except Exception: pass
+    except Exception:
+        pass
+    return [a for a in out if (a.get('body') or '').strip()]
+
+def quality_summary(title, source='', section='', url='', desc=''):
+    """Tiered, quality-checked wire-lede. Returns (summary, degraded). Never emits
+    meta/apology/headline-restatement slop. Runs on the background prewarm path."""
+    title = (title or '').strip(); desc = (desc or '').strip()
+    if not ANTHROPIC_API_KEY:
+        return (desc or title), False
+    attempts = []
+    # Tier 1 — the source article body
+    body = fetch_article_text(url, timeout=7) if url else ''
+    if body and len(body) > 400:
+        try:
+            s = _lede('Section: %s\nSource: %s\nHeadline: %s\n\nArticle:\n%s\n\nWrite the lede.'
+                      % (section, source, title, body))
+            if _ok_summary(s, title): return s, False
+            attempts.append(s)
+        except Exception: pass
+    # Tier 2 — synthesize across related coverage
+    try:
+        neighbors = _neighbors_with_bodies(title, source, url, budget=9)
+    except Exception:
+        neighbors = []
+    if neighbors:
+        ctx = ('Section: %s\nHeadline: %s\nSource: %s\n\nCoverage from multiple outlets:\n%s\n\n'
+               'Synthesize ONE factual lede across these reports.'
+               % (section, title, source, '\n'.join('— %s (%s): %s'
+                  % (n.get('title', ''), n.get('source', ''), (n.get('body') or '')[:600]) for n in neighbors)))
+        for strict in (False, True):
+            try:
+                s = _lede(ctx, strict=strict)
+                if _ok_summary(s, title): return s, False
+                attempts.append(s)
+            except Exception: pass
+    # Tier 3 — confident lede from headline + context (degraded: re-try next prewarm cycle)
+    try:
+        s = _lede('Section: %s\nSource: %s\nHeadline: %s\nSnippet: %s\n\nWrite a confident, factual lede about '
+                  'this event from the headline, snippet and your knowledge of it. Name who/what/where.'
+                  % (section, source, title, desc or '(none)'), strict=True)
+        if _ok_summary(s, title): return s, True
+        attempts.append(s)
+    except Exception: pass
+    # Safety net — best non-banned attempt, else the publisher snippet (real text, never AI slop)
+    for s in attempts:
+        if s and not _banned_summary(s): return s, True
+    return (desc or title), True
+
 def build_brief(full=False):
     """Assemble one summarized story per section. On a 'full' rebuild every
     section is re-summarized fresh; otherwise sections already present are kept
@@ -696,8 +851,20 @@ def build_brief(full=False):
     out = []
     for cat in BRIEF_CATS:
         label = cat['label']
-        if not full and label in prev:
-            out.append(prev[label])                     # partial pass: keep what we already have
+        # keep good cards on a partial pass, but re-summarize any 'degraded' (tier-3)
+        # ones — the body or related coverage may be reachable now.
+        if not full and label in prev and not prev[label].get('degraded'):
+            out.append(prev[label])
+        elif not full and label in prev and prev[label].get('degraded'):
+            p = prev[label]; tries = (p.get('degrade_tries') or 0) + 1
+            try:
+                desc = og_desc(p.get('url', '')) if str(p.get('url', '')).startswith('http') else ''
+                summ, deg = quality_summary(p.get('title', ''), p.get('source', ''), label, p.get('url', ''), desc)
+                p = dict(p); p['summary'] = summ
+                p['degraded'] = bool(deg and tries < 3)     # stop retrying after 3 cycles
+                p['degrade_tries'] = tries
+            except Exception: pass
+            out.append(p)
         else:
             try:
                 # Use the FULL aggregate (more sources + image backfill) so each section
@@ -709,9 +876,10 @@ def build_brief(full=False):
                 a = card['a']
                 url = a.get('url', '')
                 desc = og_desc(url) if url.startswith('http') else ''
+                summ, deg = quality_summary(a.get('title', ''), a.get('source', ''), label, url, desc)
                 out.append({'label': label, 'title': a.get('title', ''), 'url': url,
                             'source': a.get('source', ''), 'image': a.get('image', ''),
-                            'time': a.get('time', ''), 'summary': summarize_story(a.get('title', ''), desc)})
+                            'time': a.get('time', ''), 'summary': summ, 'degraded': deg})
             elif label in prev:
                 out.append(prev[label])                 # keep the previous good story rather than drop the section
         if out:
@@ -849,6 +1017,8 @@ def prewarm():
                 build_brief(full=True)                              # periodic fresh rebuild
             elif len(BRIEF['sections']) < len(BRIEF_CATS):
                 build_brief(full=False)                             # fill only the missing sections
+            elif any(s.get('degraded') for s in BRIEF['sections']):
+                build_brief(full=False)                             # re-summarize tier-3 (degraded) cards
         except Exception:
             pass
         try: maybe_send_brief_push()        # once/day "your brief is ready" (no-op until push configured)
