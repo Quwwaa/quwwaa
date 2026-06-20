@@ -1079,15 +1079,10 @@
     const sc=artEl.querySelector('.qartscroll'); if(sc) sc.scrollTop=0;
     artEl.classList.add('open');
 
-    // Tier gating. Gold = unlimited. Anonymous = 1 free taste then the
-    // registration wall. Free registered = server-enforced 1/day AND 5/month
-    // (handled by the /article response below).
-    if(!isMemberNow() && !isLoggedIn()){
-      const m=meterRead();
-      const already = x.url && m.urls.indexOf(x.url)>=0;            // re-reading the taste is free
-      if(!already && m.c>=FREE_PER_DAY){ trk('paywall_hit',{tier:'anon'}); showRegWall(); return; }
-      if(!already){ m.c++; if(x.url) m.urls.push(x.url); meterSave(m); }
-    }
+    // One server-authoritative gate decides every open. The /article response is
+    // {locked:true, reason:'register'|'day'|'month'} when the reader is over their
+    // tier's limit — anonymous (1 free taste), free registered (1/day AND 5/month),
+    // Gold (unlimited). No client-side meter — it can't be bypassed by clearing storage.
     trk('article_open', {item_category:(x.label||''), item_id:(x.url||''), title:(x.title||'')});
     try{ if(window.QUWWAA_pageview) window.QUWWAA_pageview('/article', 'Article — '+(x.title||'')); }catch(e){}
     setArtTab('summary');                                            // shows the "reading…" placeholder
@@ -1097,7 +1092,11 @@
     const headers={}; try{ if(window.QP && QP.token) headers['Authorization']='Bearer '+QP.token; }catch(e){}
     fetch('/article'+qs, {cache:'no-store', headers}).then(r=> r.ok ? r.json() : null).then(d=>{
       if(reqId!==artReq) return;                                    // a newer open (or close) superseded this
-      if(d && d.locked){ trk('paywall_hit',{tier:'free', reason:d.reason}); showGoldPaywall(d.reason); return; }
+      if(d && d.locked){
+        if(d.reason==='register'){ trk('paywall_hit',{tier:'anon'}); showRegWall(); }
+        else { trk('paywall_hit',{tier:'free', reason:d.reason}); showGoldPaywall(d.reason); }
+        return;
+      }
       curData = (d && !d.error) ? d : {summary:(x.summary||''), grounded:false, related:[]};
       renderArtBody();
     }).catch(()=>{ if(reqId!==artReq) return; curData={summary:(x.summary||''), grounded:false, related:[]}; renderArtBody(); });
@@ -2207,7 +2206,17 @@
     try{
       const { data, error } = await QP.sb.auth.signUp({ email:S.email, password:S.password,
         options:{ data:{ first_name:S.first_name, last_name:S.last_name } } });
-      if(error){ msg(error.message); btn.disabled=false; btn.textContent='Create account →'; return; }
+      if(error){
+        // "Email exists" must never dead-end — send them to sign in, then checkout.
+        if(/already\s*(registered|exists|in use)|user already/i.test(error.message||'')){
+          try{ localStorage.setItem('qp_after_signin_checkout', '1'); }catch(e){}
+          $('qpOnb').classList.remove('open');
+          try{ QP.openAuth && QP.openAuth(); }catch(e){}
+          const am=document.getElementById('qpAuthMsg'); if(am) am.textContent='You already have an account — sign in to continue.';
+          return;
+        }
+        msg(error.message); btn.disabled=false; btn.textContent='Create account →'; return;
+      }
       let user = data.user, session = data.session;
       // No session (email-confirmation flows): try to sign in so member state works
       // immediately on return; if that fails, we still persist server-side at checkout.
@@ -2229,7 +2238,27 @@
     }catch(err){ msg('Something went wrong. Please try again.'); btn.disabled=false; btn.textContent='Create account →'; }
   }
 
-  QP.openOnboarding=function(){ step=1; render(); $('qpOnb').classList.add('open'); };
+  QP.openOnboarding=function(){
+    // Already signed in? The account is the source of truth — go STRAIGHT to
+    // checkout for the existing user; never re-run signUp (the "user already
+    // exists" bug). Only anonymous visitors see the account-creation flow.
+    if(QP.user && QP.startCheckout){
+      try{ window.QUWWAA_track && window.QUWWAA_track('trial_started', {from:'member'}); }catch(e){}
+      QP.startCheckout({ userId:QP.user.id, email:QP.user.email });
+      return;
+    }
+    step=1; render(); $('qpOnb').classList.add('open');
+  };
+  // if they were sent to sign-in from the trial flow ("email exists"), continue to
+  // checkout once the session resolves.
+  document.addEventListener('qp:auth', function(){
+    try{
+      if(QP.user && localStorage.getItem('qp_after_signin_checkout')){
+        localStorage.removeItem('qp_after_signin_checkout');
+        if(QP.startCheckout) QP.startCheckout({ userId:QP.user.id, email:QP.user.email });
+      }
+    }catch(e){}
+  });
 
   // Sync any stashed onboarding selections once a real session exists (covers the
   // email-confirmation case where there was no session at signup time).
@@ -2532,10 +2561,12 @@
         h+='<div class="psub">Membership is coming soon.</div>';
       }
     }
-    // Daily Morning Brief email (Kit). Members are auto-subscribed at checkout
-    // (their verified email), so they only ever see the ✓ state — never a signup.
+    // Daily Morning Brief (Kit). Members are auto-subscribed; for a signed-in free
+    // user we reflect the real subscription state from the profile flag (reconciled
+    // against Kit), so the card is honest instead of always showing the signup CTA.
     h+='<div class="psec">Daily Morning Brief</div>';
-    if(member){ h+='<div class="prow pdone">✓ You’re on the daily brief</div>'; }
+    const briefSub = member || !!(p && p.brief_subscribed);
+    if(briefSub){ h+='<div class="prow pdone">✓ You’re getting the Morning Brief</div>'; }
     else { h+='<button class="prow" data-act="email">Get the free Morning Brief email</button>'; }
     // settings: theme + add-to-home + (logged-in) log out
     h+='<div class="psec">Settings</div>'
@@ -2548,6 +2579,34 @@
     prof.innerHTML=h;
     prof.querySelectorAll('[data-act]').forEach(b=> b.onclick=()=>act(b.getAttribute('data-act')) );
     renderNotif();
+    reconcileBrief();   // heal the brief flag from Kit for accounts created before it existed
+  }
+  // one-time reconcile: if a signed-in user's profile flag is unset, ask the
+  // server to check Kit by email and flip the card to subscribed if they're on it.
+  let _briefReconciled=false;
+  async function reconcileBrief(){
+    const QP=window.QP||{};
+    if(_briefReconciled || !QP.user || !QP.token) return;
+    if(QP.isMember && QP.isMember()) return;                 // members already show ✓
+    if(QP.profile && QP.profile.brief_subscribed) return;    // already known
+    _briefReconciled=true;
+    try{
+      const r=await fetch('/brief-status',{method:'POST',headers:{'Authorization':'Bearer '+QP.token}});
+      const d=await r.json().catch(()=>({}));
+      if(d && d.subscribed){ if(QP.profile) QP.profile.brief_subscribed=true; if(tab==='profile') renderProfile(); }
+    }catch(e){}
+  }
+  async function subscribeBriefNow(){
+    const QP=window.QP||{};
+    if(!(QP.user && QP.token)) return click('qsubBtn');
+    try{
+      const r=await fetch('/brief-subscribe',{method:'POST',headers:{'Authorization':'Bearer '+QP.token}});
+      if(r.ok){
+        if(QP.profile) QP.profile.brief_subscribed=true;
+        try{ window.QUWWAA_track && window.QUWWAA_track('brief_subscribed',{}); }catch(e){}
+        toast('You’re on the Morning Brief.'); if(tab==='profile') renderProfile();
+      }
+    }catch(e){}
   }
   function act(a){
     const QP=window.QP||{};
@@ -2556,7 +2615,7 @@
     if(a==='signin'  && QP.openAuth)       return QP.openAuth();
     if(a==='settings'&& QP.openSettings)   return QP.openSettings();
     if(a==='logout'  && QP.signOut)        return QP.signOut();
-    if(a==='email')  return click('qsubBtn');     // reuse the Kit subscribe modal
+    if(a==='email'){ if(QP.user) subscribeBriefNow(); else click('qsubBtn'); return; }   // idempotent for members
     if(a==='a2hs'){ if(window.QUWWAA_addToHome) window.QUWWAA_addToHome(); return; }
     if(a==='theme'){ click('briteBtn'); renderProfile(); return; }  // reuse the existing theme toggle
   }
@@ -2724,6 +2783,7 @@
 
   // keep Profile/Priority fresh as auth state changes
   document.addEventListener('qp:auth', function(){
+    _briefReconciled=false;                       // re-reconcile brief flag for the new session
     if(tab==='profile') renderProfile();
     fetchPriorities().then(()=>{ if(tab==='priority') openPriority(); });
   });

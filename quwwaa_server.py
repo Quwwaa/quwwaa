@@ -1264,6 +1264,23 @@ def kit_subscribe(email):
     if KIT_FORM_ID:
         _post('https://api.kit.com/v4/forms/%s/subscribers' % KIT_FORM_ID, {'email_address': email})
 
+def kit_lookup(email):
+    """Is this email an ACTIVE Kit subscriber? Used to reconcile brief_subscribed."""
+    email = (email or '').strip()
+    if not (KIT_API_KEY and email):
+        return False
+    try:
+        url = 'https://api.kit.com/v4/subscribers?' + urllib.parse.urlencode({'email_address': email})
+        req = urllib.request.Request(url, headers={'X-Kit-Api-Key': KIT_API_KEY, 'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            data = json.loads(r.read() or b'{}')
+        for s in (data.get('subscribers') or []):
+            if (s.get('state') or '').lower() == 'active':
+                return True
+    except Exception:
+        pass
+    return False
+
 def stripe_verify(payload_bytes, sig_header):
     """Verify a Stripe webhook signature (Stripe-Signature: t=...,v1=...)."""
     if not (STRIPE_WEBHOOK_SECRET and sig_header):
@@ -1418,6 +1435,29 @@ def free_meter(user_id, status, url, day, month):
     except Exception:
         pass
     return True, '', {'tier': 'free', 'used_month': cnt, 'limit_month': FREE_PER_MONTH}
+
+# Server-authoritative free taste for ANONYMOUS readers (per client IP per local
+# day). Can't be reset by clearing the browser; opening a 2nd distinct article
+# returns locked -> the client shows the registration wall.
+_ANON_READS = {}                 # ip -> {'day': 'YYYY-MM-DD', 'urls': [..]}
+FREE_ANON_TASTE = int(os.environ.get('FREE_ANON_TASTE', '1'))
+
+def anon_meter(ip, url, day):
+    """Returns (allowed, reason). reason='register' when the taste is used up."""
+    with _ask_lock:
+        if len(_ANON_READS) > 8000:                     # prune to bound memory
+            _ANON_READS.clear()
+        rec = _ANON_READS.get(ip)
+        if not rec or rec.get('day') != (day or ''):
+            rec = {'day': (day or ''), 'urls': []}
+            _ANON_READS[ip] = rec
+        if url and url in rec['urls']:                  # re-reading the taste is free
+            return True, ''
+        if len(rec['urls']) >= FREE_ANON_TASTE:
+            return False, 'register'
+        if url:
+            rec['urls'].append(url)
+        return True, ''
 
 
 # --- Priority tracker (Gold-only): one tracked subject, polled twice a day ---
@@ -1650,20 +1690,45 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_push(True)
         if self.path.startswith('/brief-subscribe'):
             return self._handle_brief_subscribe()
+        if self.path.startswith('/brief-status'):
+            return self._handle_brief_status()
         self.send_error(404)
 
     def _handle_brief_subscribe(self):
-        """Add a signed-in (free or paid) member's email to the Kit daily brief.
-        Used on free registration — extends the paid auto-subscribe to everyone."""
+        """Add a signed-in (free or paid) member's email to the Kit daily brief and
+        flag the profile. Idempotent — tapping it again is a harmless no-op."""
         u = auth_user(self)
-        email = (u or {}).get('email')
+        email = (u or {}).get('email'); uid = (u or {}).get('id')
         if not email:
             self._send_json({'error': 'unauthorized'}, 401); return
         try:
             kit_subscribe(email)
-            self._send_json({'ok': True})
+            if uid:
+                try: supabase_patch_profile(('id', uid), {'brief_subscribed': True})
+                except Exception: pass
+            self._send_json({'ok': True, 'subscribed': True})
         except Exception as e:
             self._send_json({'error': type(e).__name__}, 500)
+
+    def _handle_brief_status(self):
+        """Reconcile brief-subscription state onto the profile: trust the flag; if
+        unset, do a one-time Kit lookup by email and heal it. Keeps the Profile
+        card honest for accounts created before the flag existed."""
+        u = auth_user(self)
+        uid = (u or {}).get('id'); email = (u or {}).get('email')
+        if not uid:
+            self._send_json({'error': 'unauthorized'}, 401); return
+        sub = False
+        try:
+            prof = supabase_get_profile(uid, 'brief_subscribed') or {}
+            sub = bool(prof.get('brief_subscribed'))
+        except Exception:
+            pass
+        if not sub and email and kit_lookup(email):
+            sub = True
+            try: supabase_patch_profile(('id', uid), {'brief_subscribed': True})
+            except Exception: pass
+        self._send_json({'subscribed': sub})
 
     def _handle_push(self, unsub):
         """Store / update / remove a Web Push subscription. Open to everyone
@@ -1841,7 +1906,8 @@ class Handler(SimpleHTTPRequestHandler):
                'canceled': 'canceled', 'unpaid': 'canceled', 'incomplete_expired': 'canceled'}
         if typ == 'checkout.session.completed':
             uid = obj.get('client_reference_id')
-            fields = {'subscription_status': 'trialing', 'updated_at': now}
+            # paid members are auto-subscribed to the brief → flag the profile too
+            fields = {'subscription_status': 'trialing', 'brief_subscribed': True, 'updated_at': now}
             if obj.get('customer'): fields['stripe_customer_id'] = obj['customer']
             if obj.get('subscription'): fields['stripe_subscription_id'] = obj['subscription']
             if uid: supabase_patch_profile(('id', uid), fields)
@@ -2031,7 +2097,9 @@ class Handler(SimpleHTTPRequestHandler):
             month = (qs.get('month') or [''])[0].strip()
             if not (url or title):
                 self._send_json({'error': 'missing'}, 400); return
-            # registration-wall meter (logged-in users only; anon is gated client-side)
+            # ONE server-authoritative gate for every article open:
+            #   Gold -> unlimited; free registered -> 1/day AND 5/month;
+            #   anonymous -> 1 free taste (per IP), then the registration wall.
             uid = None; status = None
             u = auth_user(self)
             if u and u.get('id'):
@@ -2042,6 +2110,9 @@ class Handler(SimpleHTTPRequestHandler):
                 if not allowed:
                     self._send_json({'locked': True, 'reason': reason, 'meter': info}); return
             else:
+                allowed, reason = anon_meter(self._client_ip(), url, day)
+                if not allowed:
+                    self._send_json({'locked': True, 'reason': reason, 'meter': {'tier': 'anon'}}); return
                 info = {'tier': 'anon'}
             if not article_rate_check(self._client_ip()):
                 self._send_json({'error': 'rate'}, 429); return
