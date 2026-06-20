@@ -71,6 +71,11 @@ ADMIN_USER_ID = os.environ.get('ADMIN_USER_ID', '')                             
 PHOENIX_TZ = timezone(timedelta(hours=-7))                                          # MST, no DST
 GA_MEASUREMENT_ID = os.environ.get('GA_MEASUREMENT_ID', '')                         # GA4 (exposed via /config)
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')                           # Google One Tap (web client id; exposed via /config)
+# Jarvis cockpit (admin-only command center) — see JARVIS_COCKPIT_PHASE1.md.
+JARVIS_ADMIN_USER_IDS = set(x.strip() for x in os.environ.get('JARVIS_ADMIN_USER_IDS', '').split(',') if x.strip())
+JARVIS_ADMIN_TOKEN = os.environ.get('JARVIS_ADMIN_TOKEN', '')                       # optional shared-secret fallback
+GA_SERVICE_ACCOUNT_JSON = os.environ.get('GA_SERVICE_ACCOUNT_JSON', '')             # GA4 Data API service account (Traffic card; stubbed until set)
+GA_PROPERTY_ID = os.environ.get('GA_PROPERTY_ID', '542314942')
 # Registration-wall meter for FREE registered members (server-enforced per profile).
 FREE_PER_DAY = int(os.environ.get('FREE_PER_DAY', '1'))
 FREE_PER_MONTH = int(os.environ.get('FREE_PER_MONTH', '5'))
@@ -1800,6 +1805,217 @@ def maybe_send_brief_push():
         pass
 
 
+# ===========================================================================
+# Jarvis cockpit — GET /jarvis/stats (admin-only). Aggregates Members (Supabase),
+# Revenue (Stripe), Traffic (GA4 Data API), Newsletter (Kit) into one cached
+# object. Each source degrades independently so one failure never blanks the
+# board; GA stays a clean stub until GA_SERVICE_ACCOUNT_JSON is configured.
+# ===========================================================================
+def jarvis_authed(handler):
+    tok = handler.headers.get('X-Jarvis-Token', '')
+    if JARVIS_ADMIN_TOKEN and tok and tok == JARVIS_ADMIN_TOKEN:
+        return True
+    if JARVIS_ADMIN_USER_IDS:
+        try:
+            u = auth_user(handler)
+            if u and u.get('id') in JARVIS_ADMIN_USER_IDS:
+                return True
+        except Exception:
+            pass
+    return False
+
+def sb_count(path_q):
+    """Exact row count for a PostgREST query without pulling the rows."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
+        return None
+    headers = {'apikey': SUPABASE_SERVICE_ROLE_KEY, 'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY,
+               'Prefer': 'count=exact', 'Range-Unit': 'items', 'Range': '0-0'}
+    req = urllib.request.Request(SUPABASE_URL + '/rest/v1/' + path_q, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as r:
+        cr = r.headers.get('Content-Range', '')        # e.g. '0-0/1234' or '*/1234'
+    try:
+        return int(cr.split('/')[-1])
+    except Exception:
+        return None
+
+def jarvis_members():
+    out = {'total': None, 'free': None, 'trialing': None, 'active': None,
+           'brief_subscribed': None, 'new_today': None, 'new_24h': None}
+    try:
+        total = sb_count('profiles?select=id')
+        trialing = sb_count('profiles?select=id&subscription_status=eq.trialing')
+        active = sb_count('profiles?select=id&subscription_status=eq.active')
+        brief = sb_count('profiles?select=id&brief_subscribed=is.true')
+        now = datetime.now(timezone.utc)
+        day0 = now.astimezone(PHOENIX_TZ).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        new_today = sb_count('profiles?select=id&created_at=gte.' + urllib.parse.quote(day0.isoformat()))
+        new_24h = sb_count('profiles?select=id&created_at=gte.' + urllib.parse.quote((now - timedelta(hours=24)).isoformat()))
+        free = (total - (trialing or 0) - (active or 0)) if total is not None else None
+        out.update(total=total, free=free, trialing=trialing, active=active,
+                   brief_subscribed=brief, new_today=new_today, new_24h=new_24h)
+    except Exception:
+        pass
+    return out
+
+def _stripe_list(path, params, cap_pages=6):
+    """Paginated Stripe list (bounded) → flat list of objects."""
+    items, q = [], dict(params)
+    for _ in range(cap_pages):
+        data = stripe_get(path + '?' + urllib.parse.urlencode(q))
+        items += data.get('data', [])
+        if data.get('has_more') and data.get('data'):
+            q['starting_after'] = data['data'][-1]['id']
+        else:
+            break
+    return items
+
+def _sub_monthly_cents(sub):
+    total = 0.0
+    for it in (sub.get('items', {}) or {}).get('data', []):
+        price = it.get('price') or {}
+        amt = (price.get('unit_amount') or 0) * (it.get('quantity') or 1)
+        rec = price.get('recurring') or {}
+        interval = rec.get('interval', 'month'); n = rec.get('interval_count', 1) or 1
+        if interval == 'year':   amt = amt / 12.0 / n
+        elif interval == 'week': amt = amt * 52 / 12.0 / n
+        elif interval == 'day':  amt = amt * 365 / 12.0 / n
+        else:                    amt = amt / n
+        total += amt
+    return total
+
+def jarvis_revenue():
+    out = {'active': None, 'trialing': None, 'mrr': None, 'revenue_month': None,
+           'new_customers_week': None, 'currency': 'usd'}
+    if not STRIPE_SECRET_KEY:
+        return out
+    try:
+        active = _stripe_list('subscriptions', {'status': 'active', 'limit': 100})
+        trial = _stripe_list('subscriptions', {'status': 'trialing', 'limit': 100})
+        mrr = sum(_sub_monthly_cents(s) for s in active + trial) / 100.0
+        now = datetime.now(timezone.utc)
+        month0 = now.astimezone(PHOENIX_TZ).replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        charges = _stripe_list('charges', {'limit': 100, 'created[gte]': int(month0.timestamp())})
+        rev = sum(c.get('amount', 0) for c in charges if c.get('paid') and not c.get('refunded')) / 100.0
+        custs = _stripe_list('customers', {'limit': 100, 'created[gte]': int((now - timedelta(days=7)).timestamp())})
+        cur = (active or trial or [{}])[0].get('currency') or 'usd'
+        out.update(active=len(active), trialing=len(trial), mrr=round(mrr, 2),
+                   revenue_month=round(rev, 2), new_customers_week=len(custs), currency=cur)
+    except Exception:
+        pass
+    return out
+
+def _ga_access_token(sa):
+    import jwt                                              # PyJWT (RS256 via cryptography, already installed)
+    now = int(time.time())
+    assertion = jwt.encode({'iss': sa['client_email'],
+                            'scope': 'https://www.googleapis.com/auth/analytics.readonly',
+                            'aud': 'https://oauth2.googleapis.com/token',
+                            'iat': now, 'exp': now + 3600}, sa['private_key'], algorithm='RS256')
+    body = urllib.parse.urlencode({'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+                                   'assertion': assertion}).encode()
+    req = urllib.request.Request('https://oauth2.googleapis.com/token', data=body,
+                                 headers={'Content-Type': 'application/x-www-form-urlencoded'})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read())['access_token']
+
+def _ga_run(token, body):
+    req = urllib.request.Request('https://analyticsdata.googleapis.com/v1beta/properties/%s:runReport' % GA_PROPERTY_ID,
+                                 data=json.dumps(body).encode(),
+                                 headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read())
+
+def jarvis_traffic():
+    out = {'available': False, 'users_today': None, 'new_users_today': None, 'active_7d': None,
+           'avg_engagement_sec': None, 'trend': [], 'top_pages': [], 'top_countries': [], 'note': ''}
+    if not GA_SERVICE_ACCOUNT_JSON:
+        out['note'] = 'GA service account not configured'
+        return out
+    try:
+        sa = json.loads(GA_SERVICE_ACCOUNT_JSON)
+        tok = _ga_access_token(sa)
+        today = _ga_run(tok, {'dateRanges': [{'startDate': 'today', 'endDate': 'today'}],
+                              'metrics': [{'name': 'activeUsers'}, {'name': 'newUsers'}, {'name': 'userEngagementDuration'}]})
+        trend = _ga_run(tok, {'dateRanges': [{'startDate': '6daysAgo', 'endDate': 'today'}],
+                              'dimensions': [{'name': 'date'}], 'metrics': [{'name': 'activeUsers'}],
+                              'orderBys': [{'dimension': {'dimensionName': 'date'}}]})
+        pages = _ga_run(tok, {'dateRanges': [{'startDate': '7daysAgo', 'endDate': 'today'}],
+                              'dimensions': [{'name': 'pageTitle'}], 'metrics': [{'name': 'screenPageViews'}],
+                              'limit': 5, 'orderBys': [{'metric': {'metricName': 'screenPageViews'}, 'desc': True}]})
+        ctry = _ga_run(tok, {'dateRanges': [{'startDate': '7daysAgo', 'endDate': 'today'}],
+                             'dimensions': [{'name': 'country'}], 'metrics': [{'name': 'activeUsers'}],
+                             'limit': 5, 'orderBys': [{'metric': {'metricName': 'activeUsers'}, 'desc': True}]})
+        tr = today.get('rows', [])
+        ut = int(float(tr[0]['metricValues'][0]['value'])) if tr else 0
+        nu = int(float(tr[0]['metricValues'][1]['value'])) if tr else 0
+        eng = float(tr[0]['metricValues'][2]['value']) if tr else 0.0
+        tl = [{'date': r['dimensionValues'][0]['value'], 'users': int(float(r['metricValues'][0]['value']))}
+              for r in trend.get('rows', [])]
+        out.update(available=True, users_today=ut, new_users_today=nu, active_7d=sum(d['users'] for d in tl),
+                   avg_engagement_sec=(round(eng / ut) if ut else 0), trend=tl,
+                   top_pages=[{'title': r['dimensionValues'][0]['value'], 'views': int(float(r['metricValues'][0]['value']))}
+                              for r in pages.get('rows', [])],
+                   top_countries=[{'country': r['dimensionValues'][0]['value'], 'users': int(float(r['metricValues'][0]['value']))}
+                                  for r in ctry.get('rows', [])], note='')
+    except Exception as e:
+        out['note'] = 'GA error: ' + type(e).__name__
+    return out
+
+def _kit_get(path):
+    req = urllib.request.Request('https://api.kit.com/v4/' + path,
+                                 headers={'X-Kit-Api-Key': KIT_API_KEY, 'Accept': 'application/json'})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read() or b'{}')
+
+def jarvis_newsletter():
+    out = {'available': False, 'subscribers': None, 'new_this_week': None, 'last_broadcast': None, 'note': ''}
+    if not KIT_API_KEY:
+        out['note'] = 'Kit not configured'
+        return out
+    try:
+        subs = _kit_get('subscribers?status=active&per_page=1')
+        out['subscribers'] = (subs.get('pagination') or {}).get('total_count')
+        since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        recent = _kit_get('subscribers?status=active&created_after=' + urllib.parse.quote(since) + '&per_page=1')
+        out['new_this_week'] = (recent.get('pagination') or {}).get('total_count')
+        bl = _kit_get('broadcasts?per_page=1')
+        bcs = bl.get('broadcasts') or []
+        if bcs:
+            b = bcs[0]
+            try:
+                st = _kit_get('broadcasts/%s/stats' % b.get('id'))
+                s = (st.get('broadcast') or {}).get('stats') or st.get('stats') or {}
+            except Exception:
+                s = {}
+            out['last_broadcast'] = {'subject': b.get('subject'),
+                                     'sent_at': b.get('send_at') or b.get('published_at'),
+                                     'recipients': s.get('recipients'),
+                                     'open_rate': s.get('open_rate'), 'click_rate': s.get('click_rate')}
+        out['available'] = True
+    except Exception as e:
+        out['note'] = 'Kit error: ' + type(e).__name__
+    return out
+
+JARVIS_CACHE = {'t': 0, 'data': None}
+JARVIS_TTL = 60
+
+def jarvis_stats():
+    if JARVIS_CACHE['data'] and time.time() - JARVIS_CACHE['t'] < JARVIS_TTL:
+        return JARVIS_CACHE['data']
+
+    def _safe(fn):
+        try: return fn()
+        except Exception: return {}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        fm = ex.submit(_safe, jarvis_members); fr = ex.submit(_safe, jarvis_revenue)
+        ft = ex.submit(_safe, jarvis_traffic); fn = ex.submit(_safe, jarvis_newsletter)
+        data = {'members': fm.result(), 'revenue': fr.result(),
+                'traffic': ft.result(), 'newsletter': fn.result(),
+                'generated_at': datetime.now(timezone.utc).isoformat()}
+    JARVIS_CACHE['data'] = data; JARVIS_CACHE['t'] = time.time()
+    return data
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=os.path.dirname(os.path.abspath(__file__)), **kw)
@@ -2373,10 +2589,21 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers(); self.wfile.write(body); return
             self._send_json(run_brief_email(force=True))     # force a real compose+create (test)
+        elif self.path.startswith('/jarvis/stats'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            try:
+                self._send_json(jarvis_stats())
+            except Exception as e:
+                self._send_json({'error': type(e).__name__}, 500)
         else:
             base = urllib.parse.urlparse(self.path).path
+            host = (self.headers.get('Host') or '').split(':')[0].lower()
+            hq = host.startswith('hq.')                      # the admin cockpit subdomain
             if base in ('/', ''):
-                self.path = '/quwwaa-console.html'   # land visitors on the console (ignore ?query)
+                self.path = '/jarvis.html' if hq else '/quwwaa-console.html'
+            elif base in ('/jarvis', '/jarvis/'):            # also reachable by path for testing pre-DNS
+                self.path = '/jarvis.html'
             elif base in ('/terms', '/terms/'):
                 self.path = '/terms.html'
             elif base in ('/privacy', '/privacy/'):

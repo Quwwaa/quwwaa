@@ -2,3 +2,6 @@
 # (and its cryptography dependency) is needed to SEND Web Push notifications.
 # Render installs these via the build command (pip install -r requirements.txt).
 pywebpush>=1.14.0
+# PyJWT (RS256, via the cryptography lib pywebpush already pulls in) signs the
+# Google service-account assertion for the GA4 Data API on the Jarvis cockpit.
+PyJWT>=2.8.0
