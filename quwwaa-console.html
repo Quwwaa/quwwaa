@@ -1150,6 +1150,7 @@
       }
       curData = (d && !d.error) ? d : {summary:(x.summary||''), grounded:false, related:[]};
       renderArtBody();
+      try{ document.dispatchEvent(new CustomEvent('quwwaa:engaged')); }catch(e){}   // read an article → A2HS may prompt (engagement gate)
     }).catch(()=>{ if(reqId!==artReq) return; curData={summary:(x.summary||''), grounded:false, related:[]}; renderArtBody(); });
   }
   let pendingArticle=null;
@@ -1565,10 +1566,13 @@
   const isIOS = /iP(hone|ad|od)/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const iosInApp = isIOS && /(CriOS|FxiOS|EdgiOS|GSA|FBAN|FBAV|FB_IAB|Instagram|Line|MicroMessenger|Snapchat|Pinterest|Twitter)/i.test(UA);
   const iosSafari = isIOS && !iosInApp;
-  const DISMISS = 'quwwaa_pwa_dismissed', INSTALLED = 'quwwaa_pwa_installed', SNOOZE_DAYS = 6;
+  const DISMISS = 'quwwaa_pwa_dismissed', INSTALLED = 'quwwaa_pwa_installed', SNOOZE_DAYS = 45;
+  const SESSION_SHOWN = 'quwwaa_pwa_session';   // once per browser session
 
-  let deferred = null, banner = null, guide = null, autoTimer = null, cssDone = false;
-  addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); deferred = e; });
+  let deferred = null, banner = null, guide = null, cssDone = false, engaged = false;
+  // Android/desktop Chrome/Edge fire this only when the app is actually installable
+  // (and not already installed) — so it's our signal that a prompt is meaningful.
+  addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); deferred = e; tryPrompt(); });
   addEventListener('appinstalled', ()=>{ try{ localStorage.setItem(INSTALLED,'1'); }catch(e){} deferred=null; hideBanner(); hideGuide(); });
 
   const SHARE_SVG = '<svg viewBox="0 0 24 28" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14"/><path d="M7 8l5-5 5 5"/><path d="M5 12v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9"/></svg>';
@@ -1590,6 +1594,7 @@
       +'#a2hsAdd{flex:none;background:linear-gradient(135deg,#e89a4a,#c06a18);color:#1c1206;border:none;border-radius:10px;padding:9px 15px;font:inherit;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);}'
       +'#a2hsAdd:hover{filter:brightness(1.07);}'
       +'#a2hsX{flex:none;background:none;border:none;color:#c9a684;font-size:17px;line-height:1;cursor:pointer;padding:4px 2px;}'
+      +'#a2hs.hint{max-width:min(94vw,420px);padding:9px 13px;}#a2hs.hint .a2txt span{font-size:12px;line-height:1.4;color:#e7c4a6;}#a2hs.hint b{color:#ffd9c4;font-weight:600;}'
       +'#a2hsGuide{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:22px;'
       +'background:rgba(8,6,4,.72);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);opacity:0;transition:opacity .3s ease;}'
       +'#a2hsGuide.show{opacity:1;}'
@@ -1617,6 +1622,8 @@
       return !!(t && (Date.now()-t) < SNOOZE_DAYS*864e5);
     }catch(e){ return false; }
   }
+  function sessionShown(){ try{ return sessionStorage.getItem(SESSION_SHOWN)==='1'; }catch(e){ return false; } }
+  function markSessionShown(){ try{ sessionStorage.setItem(SESSION_SHOWN,'1'); }catch(e){} }
   function dismiss(){ try{ localStorage.setItem(DISMISS, Date.now()); }catch(e){} hideBanner(); }
   function hideBanner(){ if(banner){ banner.classList.remove('show'); const b=banner; banner=null; setTimeout(()=>{ try{b.remove();}catch(e){} }, 350); } }
   function hideGuide(){ if(guide){ guide.classList.remove('show'); const g=guide; guide=null; setTimeout(()=>{ try{g.remove();}catch(e){} }, 320); }
@@ -1662,9 +1669,15 @@
   function showBanner(force){
     if(banner || standalone) return;
     if(!force && snoozedRecently()) return;
+    // Android/desktop can only truly install once beforeinstallprompt has fired —
+    // don't render a manual prompt the browser can't fulfil.
+    if(!isIOS && !deferred && !force) return;
+    // iOS non-Safari (Chrome/Firefox/Edge on iOS — where email links often open)
+    // can't install a real PWA → show one subtle dismissible hint, never the modal.
+    if(iosInApp && !force){ showSafariHint(); return; }
     injectCSS();
     banner = document.createElement('div'); banner.id='a2hs';
-    const sub = isIOS ? (iosInApp ? 'Open in Safari to add it' : 'Two quick taps — instant access')
+    const sub = isIOS ? 'Two quick taps — instant access'
                       : (deferred ? 'One tap — no app store needed' : 'Keep it one tap away');
     banner.innerHTML = '<img src="/icon-192.png" alt="">'
       +'<div class="a2txt"><b>Add QUWWAA to your home screen</b><span>'+sub+'</span></div>'
@@ -1673,6 +1686,20 @@
     banner.querySelector('#a2hsAdd').onclick = onAdd;
     banner.querySelector('#a2hsX').onclick = dismiss;
     requestAnimationFrame(()=> banner.classList.add('show'));
+    markSessionShown();
+  }
+  // iOS non-Safari: a single slim line (no install button, no nag) — pointing at
+  // the only path that actually works, dismiss-remembered like the banner.
+  function showSafariHint(){
+    if(banner) return;
+    injectCSS();
+    banner = document.createElement('div'); banner.id='a2hs'; banner.classList.add('hint');
+    banner.innerHTML = '<div class="a2txt"><span>For the full app, open <b>quwwaa.com in Safari</b> → Share → Add to Home Screen.</span></div>'
+      +'<button id="a2hsX" aria-label="Dismiss">✕</button>';
+    document.body.appendChild(banner);
+    banner.querySelector('#a2hsX').onclick = dismiss;
+    requestAnimationFrame(()=> banner.classList.add('show'));
+    markSessionShown();
   }
 
   // expose for Profile -> Settings ("Add to home screen")
@@ -1683,12 +1710,16 @@
     showGuide(iosSafari ? 'safari' : iosInApp ? 'inapp' : 'generic');
   };
 
-  // auto-prompt: ~4.5s after load OR on first scroll, whichever comes first
+  // Engagement-gated: never on first load — prompt at most once per session, after
+  // the user has actually read an article, and only when it can be acted on.
+  function tryPrompt(){
+    if(standalone || banner || !engaged) return;
+    if(sessionShown() || snoozedRecently()) return;
+    if(!isIOS && !deferred) return;          // Android/desktop: wait for installability
+    showBanner(false);
+  }
   if(!standalone){
-    const fire = ()=>{ if(autoTimer){ clearTimeout(autoTimer); autoTimer=null; } window.removeEventListener('scroll', onScroll); showBanner(false); };
-    const onScroll = ()=> fire();
-    autoTimer = setTimeout(fire, 4500);
-    window.addEventListener('scroll', onScroll, {passive:true, once:true});
+    document.addEventListener('quwwaa:engaged', ()=>{ engaged = true; tryPrompt(); });
   }
 })();
 </script>
@@ -2121,8 +2152,45 @@
     try{ const { data:{ session } } = await QP.sb.auth.getSession(); await onSession(session); }
     catch(e){ render(); }
     QP.sb.auth.onAuthStateChange((_e,s)=>{ onSession(s); });
+    // Cross-browser bridge: Google One Tap, but ONLY for an anonymous session
+    // (a same-browser returning user is already signed in via getSession above).
+    if(!QP.user) initOneTap(cfg.googleClientId);
     // returning from Stripe Checkout: refresh status shortly (webhook may still be in flight)
     if(/[?&]welcome=1/.test(location.search)){ setTimeout(()=>loadProfile().then(render), 1500); setTimeout(()=>loadProfile().then(render), 6000); }
+  }
+
+  // Google One Tap ("Continue as <name>") — auto-detects the visitor's Google
+  // session and signs them in with one tap, the closest thing to auto-login across
+  // browsers. Shown only to anonymous visitors; a signed-in user never sees it.
+  let oneTapStarted = false;
+  function initOneTap(clientId){
+    if(oneTapStarted || !clientId || QP.user) return;
+    oneTapStarted = true;
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.defer = true;
+    s.onload = function(){
+      try{
+        if(!(window.google && google.accounts && google.accounts.id) || QP.user) return;
+        google.accounts.id.initialize({
+          client_id: clientId,
+          callback: onOneTapCredential,
+          auto_select: true,            // sign a returning Google user straight in
+          cancel_on_tap_outside: false,
+          context: 'signin',
+          use_fedcm_for_prompt: true
+        });
+        google.accounts.id.prompt();
+      }catch(e){}
+    };
+    document.head.appendChild(s);
+  }
+  async function onOneTapCredential(resp){
+    try{
+      if(QP.user || !resp || !resp.credential) return;           // already signed in / no token
+      const { error } = await QP.sb.auth.signInWithIdToken({ provider:'google', token: resp.credential });
+      if(!error){ try{ window.QUWWAA_track && window.QUWWAA_track('registration_completed',{method:'google_one_tap'}); }catch(e){} }
+      // onAuthStateChange → onSession refreshes the whole UI to the logged-in state.
+    }catch(e){}
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

@@ -70,6 +70,7 @@ BRIEF_EMAIL_TOKEN = os.environ.get('BRIEF_EMAIL_TOKEN', '')                     
 ADMIN_USER_ID = os.environ.get('ADMIN_USER_ID', '')                                # optional: who to ping for draft review
 PHOENIX_TZ = timezone(timedelta(hours=-7))                                          # MST, no DST
 GA_MEASUREMENT_ID = os.environ.get('GA_MEASUREMENT_ID', '')                         # GA4 (exposed via /config)
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')                           # Google One Tap (web client id; exposed via /config)
 # Registration-wall meter for FREE registered members (server-enforced per profile).
 FREE_PER_DAY = int(os.environ.get('FREE_PER_DAY', '1'))
 FREE_PER_MONTH = int(os.environ.get('FREE_PER_MONTH', '5'))
@@ -2151,7 +2152,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'supabaseUrl': SUPABASE_URL, 'supabaseAnonKey': SUPABASE_ANON_KEY,
                              'stripePublishableKey': STRIPE_PUBLISHABLE_KEY, 'priceId': STRIPE_PRICE_ID,
                              'premium': PREMIUM_ENABLED, 'vapidPublicKey': VAPID_PUBLIC_KEY,
-                             'gaMeasurementId': GA_MEASUREMENT_ID,
+                             'gaMeasurementId': GA_MEASUREMENT_ID, 'googleClientId': GOOGLE_CLIENT_ID,
                              'freePerDay': FREE_PER_DAY, 'freePerMonth': FREE_PER_MONTH})
         elif self.path.startswith('/home'):
             self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
