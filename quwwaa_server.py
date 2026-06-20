@@ -1692,7 +1692,30 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_brief_subscribe()
         if self.path.startswith('/brief-status'):
             return self._handle_brief_status()
+        if self.path.startswith('/sync-account'):
+            return self._handle_sync_account()
         self.send_error(404)
+
+    def _handle_sync_account(self):
+        """Keep downstream services on the account's current login email — used
+        after a confirmed email change so Stripe receipts and the Kit brief follow
+        the new address. Idempotent (no-op when already in sync)."""
+        u = auth_user(self)
+        uid = (u or {}).get('id'); email = (u or {}).get('email')
+        if not (uid and email):
+            self._send_json({'error': 'unauthorized'}, 401); return
+        try:
+            prof = supabase_get_profile(uid, 'stripe_customer_id,brief_subscribed') or {}
+        except Exception:
+            prof = {}
+        cust = prof.get('stripe_customer_id')
+        if cust and STRIPE_SECRET_KEY:                       # Stripe receipts follow the new email
+            try: stripe_post('customers/' + cust, [('email', email)])
+            except Exception: pass
+        if prof.get('brief_subscribed'):                     # the brief follows the new email
+            try: kit_subscribe(email)
+            except Exception: pass
+        self._send_json({'ok': True})
 
     def _handle_brief_subscribe(self):
         """Add a signed-in (free or paid) member's email to the Kit daily brief and

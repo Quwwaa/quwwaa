@@ -2335,7 +2335,9 @@
     let ov=$('qpSet'); if(ov) return ov;
     ov=document.createElement('div'); ov.id='qpSet'; ov.className='qpOv';
     ov.innerHTML='<div class="qpCard" style="position:relative"><button class="qpX" data-x type="button">✕</button>'
-      +'<h2>Your membership</h2><div class="qpStatus" id="qpSetStatus"></div>'
+      +'<h2>Your account</h2>'
+      +'<div id="qpSetBilling"></div>'           // plan state + manage/upgrade (conditional)
+      +'<div id="qpSetEmail"></div>'             // account email + change
       +'<label>What should I call you?</label><input id="qpSetName" type="text">'
       +'<label>Address style</label><div class="qpSeg" id="qpSetStyle">'
       +'<button data-as="sir">Sir</button><button data-as="madam">Madam</button><button data-as="name">By name</button></div>'
@@ -2343,14 +2345,12 @@
       +'<label>City</label><input id="qpSetCity" type="text">'
       +'<label>State / Province</label><input id="qpSetState" type="text">'
       +'<label>Country</label><input id="qpSetCountry" type="text">'
-      +'<div class="qpRow2"><button class="qpPrimary" id="qpSetSave" type="button">Save</button>'
-      +'<button class="qpGhost" id="qpSetPortal" type="button">Manage subscription</button></div>'
+      +'<div class="qpRow2"><button class="qpPrimary" id="qpSetSave" type="button">Save</button></div>'
       +'<div class="qpMsg" id="qpSetMsg"></div>'
       +'<button class="qpSO" id="qpSetOut" type="button">Sign out</button>'
       +'<div class="qpLegal"><a href="/terms" target="_blank">Terms</a> · <a href="/privacy" target="_blank">Privacy</a></div></div>';
     document.body.appendChild(ov);
     ov.addEventListener('click',e=>{ if(e.target===ov||e.target.hasAttribute('data-x')) ov.classList.remove('open'); });
-    $('qpSetPortal').onclick=QP.openPortal;
     $('qpSetOut').onclick=()=>{ ov.classList.remove('open'); QP.signOut(); };
     $('qpSetSave').onclick=save;
     return ov;
@@ -2358,16 +2358,66 @@
 
   const sel = { interests:[], address_style:'name' };
   function fill(){
-    const p=QP.profile||{};
+    const p=QP.profile||{}, u=QP.user||{};
     sel.interests = QP.migrateInterests(p.interests);
     sel.address_style = p.address_style||'name';
-    $('qpSetStatus').textContent = (p.subscription_status||'').toUpperCase()
-      + (p.trial_ends_at ? ' · trial ends '+new Date(p.trial_ends_at).toLocaleDateString() : '');
+    // --- Subscription state (conditional — never show the portal to free users) ---
+    const status=(p.subscription_status||'').toLowerCase();
+    const hasCust=!!p.stripe_customer_id;
+    const planStyle='font-size:14px;color:#e7c4a6;margin:0 0 10px;line-height:1.4;';
+    let bh='';
+    if(status==='trialing'){
+      bh='<div style="'+planStyle+'"><b>Gold — free trial</b>'+(p.trial_ends_at?' · ends '+new Date(p.trial_ends_at).toLocaleDateString():'')+'</div>'
+        +'<button class="qpGhost" id="qpSetPortal" type="button">Manage subscription</button>';
+    } else if(status==='active'){
+      bh='<div style="'+planStyle+'"><b>Gold member</b></div>'
+        +'<button class="qpGhost" id="qpSetPortal" type="button">Manage subscription</button>';
+    } else if(status==='past_due'||status==='unpaid'){
+      bh='<div style="'+planStyle+'"><b>Payment '+esc(status.replace('_',' '))+'</b> — update your card to keep Gold.</div>'
+        +'<button class="qpGhost" id="qpSetPortal" type="button">Update payment</button>';
+    } else if(status==='canceled'){
+      bh='<div style="'+planStyle+'"><b>Subscription canceled.</b></div>'
+        +'<button class="qpPrimary" id="qpSetTrial" type="button">Re-start your trial</button>'
+        +(hasCust?'<button class="qpGhost" id="qpSetPortal" type="button" style="margin-top:8px">Billing history</button>':'');
+    } else {
+      bh='<div style="'+planStyle+'">You’re on the <b>free plan</b>.</div>'
+        +'<button class="qpPrimary" id="qpSetTrial" type="button">Start your 7-day free trial</button>';
+    }
+    $('qpSetBilling').innerHTML=bh;
+    const pBtn=$('qpSetPortal'); if(pBtn) pBtn.onclick=()=>{ if(p.stripe_customer_id) QP.openPortal(); };
+    const tBtn=$('qpSetTrial'); if(tBtn) tBtn.onclick=()=>{ $('qpSet').classList.remove('open'); if(QP.openOnboarding) QP.openOnboarding(); };
+    // --- Account email (changeable for email/pw; read-only for OAuth identities) ---
+    const provider=(u.app_metadata&&u.app_metadata.provider)||'email';
+    const isOAuth = provider && provider!=='email';
+    const provName = provider.charAt(0).toUpperCase()+provider.slice(1);
+    $('qpSetEmail').innerHTML='<label>Account email</label>'
+      +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
+      +'<span style="font-size:14px;color:#ffe2d1;word-break:break-all;flex:1 1 auto;min-width:0;">'+esc(u.email||'')+'</span>'
+      +(isOAuth
+          ? '<span style="font-size:11px;color:#b07a4a;white-space:nowrap;">managed by your '+esc(provName)+' account</span>'
+          : '<button class="qpGhost" id="qpChangeEmail" type="button" style="flex:0 0 auto;">Change</button>')
+      +'</div>';
+    const ce=$('qpChangeEmail'); if(ce) ce.onclick=changeEmail;
     $('qpSetName').value = p.display_name||p.first_name||'';
     $('qpSetCity').value = p.city||''; $('qpSetState').value = p.state||''; $('qpSetCountry').value = p.country||'';
     const seg=$('qpSetStyle'); seg.querySelectorAll('button').forEach(b=>{ b.classList.toggle('sel', b.getAttribute('data-as')===sel.address_style);
       b.onclick=()=>{ sel.address_style=b.getAttribute('data-as'); seg.querySelectorAll('button').forEach(x=>x.classList.toggle('sel',x===b)); }; });
     QP.renderTopicPicker($('qpSetChips'), sel.interests);
+  }
+  async function changeEmail(){
+    const msg=$('qpSetMsg'); msg.className='qpMsg'; msg.textContent='';
+    const cur=(QP.user&&QP.user.email)||'';
+    const ne=window.prompt('New account email:', cur); if(ne===null) return;
+    const e=ne.trim();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)){ msg.textContent='Please enter a valid email address.'; return; }
+    if(e.toLowerCase()===cur.toLowerCase()) return;
+    if(!(QP.sb&&QP.sb.auth&&QP.sb.auth.updateUser)) return;
+    try{
+      const { error } = await QP.sb.auth.updateUser({ email: e });
+      if(error){ msg.textContent=error.message||'Could not start the email change.'; return; }
+      msg.className='qpMsg ok';
+      msg.textContent='Confirmation sent to '+e+'. Your email changes once you confirm via that link.';
+    }catch(err){ msg.textContent='Could not start the email change. Try again.'; }
   }
   async function save(){
     const btn=$('qpSetSave'), msg=$('qpSetMsg'); msg.className='qpMsg'; msg.textContent='';
@@ -2385,6 +2435,20 @@
   }
 
   QP.openSettings=function(){ css(); modal(); fill(); $('qpSet').classList.add('open'); };
+
+  // When the login email changes (after the user confirms a Supabase email-change
+  // link) keep Stripe + Kit on the new address. Idempotent server-side; fires once
+  // per distinct email (also harmless on first login).
+  document.addEventListener('qp:auth', function(){
+    try{
+      const e=((QP.user&&QP.user.email)||'').toLowerCase();
+      if(!(e && QP.token)) return;
+      let last=''; try{ last=(localStorage.getItem('qp_synced_email')||'').toLowerCase(); }catch(_){}
+      if(e===last) return;
+      fetch('/sync-account',{method:'POST',headers:{'Authorization':'Bearer '+QP.token}}).catch(function(){});
+      try{ localStorage.setItem('qp_synced_email', e); }catch(_){}
+    }catch(_){}
+  });
 })();
 </script>
 <script>
