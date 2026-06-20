@@ -512,8 +512,9 @@ def aggregate(q, days=7, fast=False):
     arts = arts[:60]
     if not fast:  # fast mode skips the slow enrichment passes
         fix_gnews_urls(arts)
-        upgrade_gnews(arts)
+        upgrade_gnews(arts)          # may REWRITE a['url'] from a Bing match…
         fill_images(arts)
+        arts = [a for a in arts if _is_article_url(a.get('url', ''))]   # …so re-validate after enrichment
     return {'query': q, 'days': days, 'articles': arts, 'diag': diag,
             'sources': len({a['source'] for a in arts})}
 
