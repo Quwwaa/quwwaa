@@ -19,7 +19,8 @@ HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 # (e.g. the local Mac sandbox), /ask reports 'no_server_key' and the console
 # falls back to a key pasted into its own settings panel.
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-ASK_MODEL = os.environ.get('ASK_MODEL', 'claude-haiku-4-5-20251001')
+ASK_MODEL = os.environ.get('ASK_MODEL', 'claude-haiku-4-5-20251001')      # high-volume news summaries — keep cheap/fast
+BUTLER_MODEL = os.environ.get('BUTLER_MODEL', 'claude-sonnet-4-6')        # the voice the user hears — richer delivery
 ASK_RATE_PER_MIN = int(os.environ.get('ASK_RATE_PER_MIN', '6'))    # per visitor IP
 ASK_DAILY_CAP = int(os.environ.get('ASK_DAILY_CAP', '2000'))       # global messages/day
 
@@ -1138,8 +1139,10 @@ def prewarm():
 # --- Butler persona + Anthropic call ----------------------------------------
 PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS from Iron Man. "
     "Reply in that voice: impeccably polite British butler, dry wit, understated, efficient. "
-    "Refer to yourself as QUWWAA. Address the user as 'sir'. Keep replies brief (1-3 sentences) and "
-    "conversational since they will be spoken aloud. Never use markdown, lists, or emoji. Context: Mike "
+    "Refer to yourself as QUWWAA. Address the user as 'sir'. Keep replies conversational and spoken-word - "
+    "usually 2 to 4 sentences. When the user asks about a news story or current event, deliver a vivid, "
+    "substantive reporter's brief: what happened, who is involved, and why it matters, the way a sharp "
+    "broadcast anchor would say it aloud. Never use markdown, lists, or emoji. Context: Mike "
     "runs Daily Rumble, a Substack by Quwwaa LLC covering US politics and the Iran/Israel/Lebanon/Palestine "
     "region, sponsored by Zaytuna Mobile. You do not answer news questions from memory and you have no general "
     "web-search tool; your live, authoritative source for any current event, story, or coverage is the on-screen "
@@ -1159,11 +1162,11 @@ PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS
     "returned nothing, or that you cannot look something up. Give your brief spoken take, say you are bringing "
     "coverage onto the screen, and always include the tag.")
 
-ASK_MAX_TOKENS = int(os.environ.get('ASK_MAX_TOKENS', '400'))   # punchy butler — shorter = faster + cheaper
+ASK_MAX_TOKENS = int(os.environ.get('ASK_MAX_TOKENS', '700'))   # butler — room for a richer spoken brief
 
 def _anthropic_body(messages, extra_system, stream=False):
     return json.dumps({
-        'model': ASK_MODEL, 'max_tokens': ASK_MAX_TOKENS, 'system': PERSONA + (extra_system or ''),
+        'model': BUTLER_MODEL, 'max_tokens': ASK_MAX_TOKENS, 'system': PERSONA + (extra_system or ''),
         'messages': messages, 'stream': bool(stream),
     }).encode()
 

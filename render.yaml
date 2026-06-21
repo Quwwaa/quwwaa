@@ -12,6 +12,10 @@ services:
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false        # you paste this secret in the Render dashboard, never in code
+      - key: BUTLER_MODEL
+        value: "claude-sonnet-4-6"   # the butler's spoken voice (summaries stay on Haiku via ASK_MODEL); flip here to revert
+      - key: ASK_MAX_TOKENS
+        value: "700"       # butler reply length — tunable without a code change
       - key: ASK_RATE_PER_MIN
         value: "6"
       - key: ASK_DAILY_CAP
