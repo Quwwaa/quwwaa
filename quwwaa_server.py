@@ -1115,6 +1115,91 @@ def brief_email_loop():
             pass
         time.sleep(int(os.environ.get('BRIEF_EMAIL_POLL_SEC', '900')))
 
+# --- Daily Rumble Substack card (house cross-promo on the board) -------------
+# Cached server-side parse of Mike's Substack RSS, folded into /brief so the
+# board still loads in one request. Newest-first; the client rotates per visitor.
+RUMBLE_FEED_URL = os.environ.get('RUMBLE_FEED_URL', 'https://dailyrumble.substack.com/feed')
+RUMBLE = {'t': 0, 'items': []}
+RUMBLE_TTL = int(os.environ.get('RUMBLE_TTL', '1200'))   # ~20 min
+
+def _cdata(s):
+    s = (s or '').strip()
+    m = re.match(r'(?is)^\s*<!\[CDATA\[(.*?)\]\]>\s*$', s)
+    return (m.group(1) if m else s).strip()
+
+def _strip_html(s):
+    s = re.sub(r'(?is)<(script|style)[^>]*>.*?</\1>', ' ', s or '')
+    s = re.sub(r'(?is)<[^>]+>', ' ', s)
+    return re.sub(r'\s+', ' ', html.unescape(s)).strip()
+
+def _rumble_excerpt(content_html, desc):
+    # content:encoded is the real text; description is just a "By Daily Rumble | date"
+    # byline. Strip tags, drop that leading byline, cap length at a word boundary.
+    txt = _strip_html(content_html) or _strip_html(desc)
+    txt = re.sub(r'^\s*By Daily Rumble\s*\|[^A-Za-z]*[A-Za-z]+ \d{1,2},? \d{4}\s*', '', txt).strip()
+    if len(txt) > 180:
+        txt = txt[:180].rsplit(' ', 1)[0].rstrip(' ,.;:') + '…'
+    return txt
+
+def _fetch_rumble():
+    try:
+        with urllib.request.urlopen(urllib.request.Request(RUMBLE_FEED_URL, headers=HEADERS), timeout=10) as r:
+            xml = r.read().decode('utf-8', 'ignore')
+    except Exception:
+        return []
+    out = []
+    for block in re.findall(r'(?is)<item>(.*?)</item>', xml)[:25]:
+        def tag(name):
+            mm = re.search(r'(?is)<' + name + r'[^>]*>(.*?)</' + name + r'>', block)
+            return mm.group(1) if mm else ''
+        title = _cdata(tag('title'))
+        link = _cdata(tag('link'))
+        if not (title and link.startswith('http')):
+            continue
+        pub = _cdata(tag('pubDate'))
+        try:
+            ts = email.utils.parsedate_to_datetime(pub).timestamp() if pub else 0
+        except Exception:
+            ts = 0
+        img = ''
+        em = re.search(r'(?is)<enclosure[^>]+url="([^"]+)"', block)        # Substack cover lives here
+        if em:
+            img = html.unescape(em.group(1))
+        content = _cdata(tag('content:encoded'))
+        if not img:                                                        # fallback: first content image
+            im = re.search(r'(?is)<img[^>]+src="([^"]+)"', content)
+            if im:
+                img = html.unescape(im.group(1))
+        out.append({'title': title, 'link': link, 'image': img,
+                    'excerpt': _rumble_excerpt(content, tag('description')),
+                    'pubDate': pub, 'ts': ts})
+    out.sort(key=lambda x: x.get('ts') or 0, reverse=True)
+    return out
+
+def get_rumble():
+    """Cached Daily Rumble items (newest-first). Keeps last-good on a failed fetch
+    so a transient feed outage doesn't blank the card."""
+    if RUMBLE['t'] == 0 or time.time() - RUMBLE['t'] > RUMBLE_TTL:
+        try:
+            its = _fetch_rumble()
+            if its:
+                RUMBLE['items'] = its
+        except Exception:
+            pass
+        RUMBLE['t'] = time.time()
+    return RUMBLE['items']
+
+def rumble_bump(url, title, kind):
+    """One impression/click for a Daily Rumble post (aggregate, via RPC)."""
+    if not url:
+        return
+    try:
+        sb_rest('POST', 'rpc/rumble_bump',
+                {'p_url': url[:500], 'p_title': (title or '')[:300], 'p_kind': (kind or 'impression')},
+                prefer='return=minimal')
+    except Exception:
+        pass
+
 def prewarm():
     """Keep the home snapshot fresh, and rebuild the morning brief every few hours."""
     while True:
@@ -1131,6 +1216,8 @@ def prewarm():
                 build_brief(full=False)                             # re-summarize degraded/stale-slop cards
         except Exception:
             pass
+        try: get_rumble()                   # warm the Daily Rumble feed so /brief never blocks on RSS
+        except Exception: pass
         try: maybe_send_brief_push()        # once/day "your brief is ready" (no-op until push configured)
         except Exception: pass
         full = len(HOME_SNAPSHOT['items']) >= len(HOME_CATS)
@@ -2338,6 +2425,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_sync_account()
         if self.path.startswith('/sponsor-event'):
             return self._handle_sponsor_event()
+        if self.path.startswith('/rumble-event'):
+            return self._handle_rumble_event()
         if self.path.startswith('/jarvis/calendar/create'):
             return self._handle_cal_write('create')
         if self.path.startswith('/jarvis/calendar/move'):
@@ -2365,6 +2454,16 @@ class Handler(SimpleHTTPRequestHandler):
         surface = d.get('surface') if d.get('surface') in ('app', 'email') else 'app'
         if sid:
             try: sponsor_bump(sid, surface, kind)
+            except Exception: pass
+        self._send_json({'ok': True})
+
+    def _handle_rumble_event(self):
+        """Impression/click tracking for the Daily Rumble board card (aggregate-only)."""
+        d = self._read_json()
+        url = (d.get('url') or '').strip()
+        kind = d.get('kind') if d.get('kind') in ('impression', 'click') else 'impression'
+        if url.startswith('http'):
+            try: rumble_bump(url, d.get('title') or '', kind)
             except Exception: pass
         self._send_json({'ok': True})
 
@@ -2769,7 +2868,7 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path.startswith('/home'):
             self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
         elif self.path.startswith('/brief'):
-            self._send_json({'sections': BRIEF['sections'], 't': BRIEF['t']})
+            self._send_json({'sections': BRIEF['sections'], 't': BRIEF['t'], 'rumble': RUMBLE['items']})
         elif self.path.startswith('/sponsors'):
             try: items = get_sponsors()
             except Exception: items = []

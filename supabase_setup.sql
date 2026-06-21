@@ -162,3 +162,38 @@ grant execute on function public.sponsor_bump(uuid, text, text) to service_role;
 --   select s.name, sum(st.impressions) imps, sum(st.clicks) clicks
 --   from public.sponsors s left join public.sponsor_stats st on st.sponsor_id = s.id
 --   where st.day >= date_trunc('month', current_date) group by s.name order by imps desc;
+
+-- ========================================================================
+-- 5) Daily Rumble board card — impression/click tracking (house cross-promo).
+--    Same pattern as sponsor_stats: aggregate counts, service-role writes via
+--    rumble_bump(), RLS on with no public policies.
+-- ========================================================================
+create table if not exists public.rumble_stats (
+  post_url text not null,
+  post_title text,
+  day date not null default current_date,
+  impressions bigint default 0,
+  clicks bigint default 0,
+  primary key (post_url, day)
+);
+alter table public.rumble_stats enable row level security;   -- service-role only (no policies)
+
+create or replace function public.rumble_bump(p_url text, p_title text, p_kind text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.rumble_stats(post_url, post_title, day, impressions, clicks)
+  values (p_url, nullif(p_title, ''), current_date,
+          case when p_kind = 'click' then 0 else 1 end,
+          case when p_kind = 'click' then 1 else 0 end)
+  on conflict (post_url, day) do update
+    set impressions = public.rumble_stats.impressions + (case when p_kind = 'click' then 0 else 1 end),
+        clicks      = public.rumble_stats.clicks      + (case when p_kind = 'click' then 1 else 0 end),
+        post_title  = coalesce(public.rumble_stats.post_title, excluded.post_title);
+end; $$;
+revoke all on function public.rumble_bump(text, text, text) from public, anon, authenticated;
+grant execute on function public.rumble_bump(text, text, text) to service_role;
+
+-- Report (which Daily Rumble posts QUWWAA drove traffic to, this month):
+--   select post_title, sum(impressions) imps, sum(clicks) clicks
+--   from public.rumble_stats where day >= date_trunc('month', current_date)
+--   group by post_title order by clicks desc;
