@@ -861,6 +861,19 @@ BANNED_SUMMARY = [
     "without more information", "without additional", "does not provide", "not specified",
     "appears to", "seems to discuss", "seems to be about", "this article is about",
     "the headline suggests", "unclear from", "not clear from", "reportedly the article",
+    # Non-English refusal/apology slop — same anti-slop bar applies to in-language summaries.
+    # es
+    "no puedo", "no se puede", "sin información", "sin más información", "información insuficiente",
+    "no hay suficiente información", "no se proporciona", "no especificado", "como ia", "como una ia",
+    # fr
+    "je ne peux pas", "impossible de", "pas assez d'informations", "informations insuffisantes",
+    "en tant qu'ia", "sans plus d'informations", "l'article ne fournit",
+    # ru
+    "я не могу", "недостаточно информации", "невозможно", "как ии",
+    # ar
+    "لا أستطيع", "لا يمكنني", "لا توجد معلومات كافية", "معلومات غير كافية",
+    # ms / id
+    "tidak dapat", "tidak cukup maklumat", "tidak cukup informasi", "sebagai ai", "maaf, saya",
 ]
 _SUMSTOP = set(("the a an and or but of to in on for with from by at as is are was were be been being this that "
     "these those it its their his her our your my we you they he she over under after before into out up down new "
