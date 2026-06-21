@@ -154,6 +154,32 @@
     .cluster.left .node::after,.cluster.left .node::before,.cluster.right .node::after,.cluster.right .node::before{display:none}
     .brandtop h1{font-size:28px}
   }
+
+  /* ===== voice overlay ===== */
+  .reactor{cursor:pointer;transition:filter .25s}
+  .reactor:hover{filter:brightness(1.18)}
+  body.jv-listening .reactor svg circle{stroke:#39ff7a !important}
+  body.jv-listening .reactor{filter:drop-shadow(0 0 22px rgba(57,255,122,.9))}
+  body.jv-thinking .reactor{filter:drop-shadow(0 0 18px rgba(255,179,64,.7)) brightness(1.1)}
+  body.jv-speaking .reactor{filter:drop-shadow(0 0 22px rgba(57,255,122,.8)) brightness(1.15)}
+  #jvOverlay{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:90;
+    background:rgba(4,7,11,.88);border:1px solid var(--line2);border-radius:14px;
+    padding:12px 20px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    display:flex;align-items:center;gap:14px;min-width:260px;max-width:90vw;
+    transition:opacity .2s,transform .2s;pointer-events:none;opacity:0;transform:translateX(-50%) translateY(10px)}
+  #jvOverlay.vis{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
+  #jvStatus{font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:var(--green2);flex:1}
+  #jvClose{background:none;border:1px solid rgba(57,255,122,.3);border-radius:7px;color:var(--dim2);
+    font:inherit;font-size:10px;padding:4px 9px;cursor:pointer;letter-spacing:.08em;white-space:nowrap}
+  #jvClose:hover{border-color:var(--green2);color:var(--white)}
+  #jvCaption{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);z-index:89;
+    background:rgba(4,7,11,.82);border:1px solid var(--line);border-radius:10px;
+    padding:10px 16px;max-width:min(560px,90vw);font-size:12.5px;line-height:1.6;
+    color:var(--white);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    opacity:0;transition:opacity .2s;pointer-events:none}
+  #jvCaption.vis{opacity:1}
+  @keyframes jvPulse{0%,100%{opacity:.7}50%{opacity:1}}
+  body.jv-listening #jvStatus{animation:jvPulse .8s ease-in-out infinite}
 </style>
 </head>
 <body>
@@ -419,6 +445,141 @@
     }).catch(function(){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Offline.</p></div></div>'; }); }
   if('serviceWorker' in navigator && location.hostname.indexOf('hq.')===0){ window.addEventListener('load', function(){ navigator.serviceWorker.register('/jarvis-sw.js').catch(function(){}); }); }
   boot();
+
+  // ===== REACTOR VOICE =====
+  var jvMsgs=[], jvAudio=null, jvMediaRec=null, jvChunks=[], jvRecording=false, jvBusy=false;
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition, jvRec=null, jvListening=false;
+  if(SR){ jvRec=new SR(); jvRec.lang='en-US'; jvRec.interimResults=false; jvRec.maxAlternatives=1;
+    jvRec.onstart=function(){ jvListening=true; jvSetState('listening'); };
+    jvRec.onend=function(){ jvListening=false; if(document.body.classList.contains('jv-listening')){ jvSetState(''); } };
+    jvRec.onerror=function(e){ jvListening=false; jvSetState(''); jvStatus(e.error==='not-allowed'?'Mic denied':'Mic error'); };
+    jvRec.onresult=function(e){ jvHandleText(e.results[0][0].transcript); };
+  }
+
+  function jvStatus(txt){ var el=document.getElementById('jvStatus'); if(el) el.textContent=txt; }
+  function jvSetState(s){
+    document.body.classList.remove('jv-listening','jv-thinking','jv-speaking');
+    if(s) document.body.classList.add('jv-'+s);
+    var states={listening:'Listening…',thinking:'Thinking…',speaking:'Speaking…','':'Standing by'};
+    jvStatus(states[s]||s);
+  }
+  function jvShowOverlay(){ var o=document.getElementById('jvOverlay'); if(o) o.classList.add('vis'); }
+  function jvHideOverlay(){ var o=document.getElementById('jvOverlay'); if(o) o.classList.remove('vis'); jvHideCaption(); jvSetState(''); }
+  function jvShowCaption(txt){ var c=document.getElementById('jvCaption'); if(!c) return; c.textContent=txt; c.classList.add('vis'); }
+  function jvHideCaption(){ var c=document.getElementById('jvCaption'); if(c) c.classList.remove('vis'); }
+
+  function jvStopAudio(){ if(jvAudio){ try{ jvAudio.pause(); }catch(e){} jvAudio.src=''; } }
+
+  function jvBuildContext(){
+    var lines=[]; var now=new Date();
+    lines.push('Current time: '+now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+', '+now.toLocaleDateString([],{weekday:'long',month:'long',day:'numeric',year:'numeric'})+'.');
+    if(stats){
+      var m=stats.members||{}, r=stats.revenue||{}, n=stats.newsletter||{};
+      if(r.mrr!=null) lines.push('MRR: $'+r.mrr+'. Active subscriptions: '+r.active+'. Trialing: '+r.trialing+'. New customers (7d): '+r.new_customers_week+'.');
+      if(m.total!=null) lines.push('Total members: '+m.total+'. New today: '+m.new_today+'.');
+      if(n.subscribers!=null) lines.push('Newsletter subscribers: '+n.subscribers+'.');
+    }
+    if(costs){
+      var ca=costs.anthropic||{}, co=costs.openai||{};
+      if(co.mtd!=null) lines.push('OpenAI spend MTD: $'+co.mtd+'. Voice: $'+(co.voice||0)+'.');
+      if(ca.mtd!=null) lines.push('Anthropic spend MTD: $'+ca.mtd+'.');
+    }
+    if(agenda&&agenda.available&&(agenda.events||[]).length){
+      lines.push('Upcoming calendar events: '+agenda.events.slice(0,3).map(function(e){ return e.summary+' ('+new Date(e.start).toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})+')'; }).join('; ')+'.');
+    }
+    return lines.join(' ');
+  }
+
+  var JARVIS_PERSONA='You are JARVIS, Mike\'s AI command center — the Iron Man HUD. Be extremely concise, sharp, and useful. British butler tone: impeccably polite, dry wit, efficient. Address the user as "sir". Never use markdown, lists, or emoji. Keep replies to 2-3 sentences unless a detailed answer is clearly needed. You have access to live business data provided in context.';
+
+  async function jvHandleText(text){
+    if(jvBusy) return;
+    jvBusy=true; jvSetState('thinking');
+    jvMsgs.push({role:'user', content:text});
+    var sysContent=JARVIS_PERSONA+'\n\nLive dashboard context:\n'+jvBuildContext();
+    var body={messages:jvMsgs, stream:false};
+    try{
+      var r=await fetch('/ask',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify(Object.assign({},{messages:[{role:'system',content:sysContent}].concat(jvMsgs),stream:false}))});
+      var reply='';
+      if(r.ok){
+        var d=await r.json();
+        reply=(d.reply||d.text||d.message||'').trim();
+        if(!reply&&d.choices) reply=(d.choices[0].message&&d.choices[0].message.content)||'';
+      } else { reply='I\'m having trouble reaching the server, sir.'; }
+      jvMsgs.push({role:'assistant',content:reply});
+      jvShowCaption(reply);
+      jvSetState('speaking');
+      var sr=await fetch('/speak',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:reply})});
+      if(sr.ok){
+        var blob=await sr.blob();
+        if(!jvAudio) jvAudio=new Audio();
+        var url=URL.createObjectURL(blob);
+        jvAudio.src=url;
+        jvAudio.onended=function(){ URL.revokeObjectURL(url); jvBusy=false; jvSetState(''); };
+        jvAudio.onerror=function(){ jvBusy=false; jvSetState(''); };
+        jvAudio.play();
+      } else { jvBusy=false; jvSetState(''); try{ speechSynthesis.speak(new SpeechSynthesisUtterance(reply)); }catch(e){} }
+    } catch(e){ jvBusy=false; jvSetState(''); jvStatus('Error — try again'); }
+  }
+
+  function jvPickMime(){ var c=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/aac'];
+    for(var i=0;i<c.length;i++){ if(window.MediaRecorder&&MediaRecorder.isTypeSupported(c[i])) return c[i]; } return ''; }
+
+  async function jvStartRecording(){
+    if(jvRecording||jvBusy) return;
+    jvStopAudio();
+    var stream; try{ stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
+    catch(e){ jvStatus('Mic denied — allow in browser settings'); return; }
+    jvChunks=[];
+    var mime=jvPickMime();
+    try{ jvMediaRec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream); }
+    catch(e){ jvMediaRec=new MediaRecorder(stream); }
+    jvMediaRec.ondataavailable=function(e){ if(e.data&&e.data.size) jvChunks.push(e.data); };
+    jvMediaRec.onstop=async function(){
+      stream.getTracks().forEach(function(t){ t.stop(); });
+      jvRecording=false;
+      var type=(jvMediaRec&&jvMediaRec.mimeType)||mime||'audio/webm';
+      var blob=new Blob(jvChunks,{type:type});
+      if(!blob.size){ jvSetState(''); return; }
+      jvSetState('thinking'); jvStatus('Transcribing…');
+      try{
+        var r=await fetch('/transcribe',{method:'POST',headers:{'X-Audio-Type':type.split(';')[0]},body:blob});
+        if(r.ok){ var d=await r.json(); var t=(d.text||'').trim(); if(t){ jvHandleText(t); } else { jvBusy=false; jvSetState(''); jvStatus('Didn\'t catch that — tap to try again'); } }
+        else { jvBusy=false; jvSetState(''); jvStatus('Transcribe error'); }
+      } catch(e){ jvBusy=false; jvSetState(''); jvStatus('Transcribe failed'); }
+    };
+    jvMediaRec.start();
+    jvRecording=true; jvSetState('listening');
+  }
+  function jvStopRecording(){ if(jvMediaRec&&jvRecording){ try{ jvMediaRec.stop(); }catch(e){} } }
+
+  function jvToggleMic(){
+    if(jvBusy&&document.body.classList.contains('jv-speaking')){ jvStopAudio(); jvBusy=false; jvSetState(''); return; }
+    if(jvBusy) return;
+    jvStopAudio();
+    if(jvRec){ jvListening?(jvRec.stop()):(function(){ jvRec.start(); }()); }
+    else{ jvRecording?jvStopRecording():jvStartRecording(); }
+  }
+
+  // Inject the overlay DOM once
+  (function(){
+    var ov=document.createElement('div'); ov.id='jvOverlay';
+    ov.innerHTML='<span id="jvStatus">Standing by</span><button id="jvClose">End</button>';
+    document.body.appendChild(ov);
+    var cap=document.createElement('div'); cap.id='jvCaption'; document.body.appendChild(cap);
+    document.getElementById('jvClose').onclick=function(){ jvStopRecording(); jvStopAudio(); if(jvRec&&jvListening) jvRec.stop(); jvBusy=false; jvSetState(''); jvHideOverlay(); jvMsgs=[]; };
+  }());
+
+  // Wire reactor click after render() sets up the DOM; re-wire on each render
+  var _jvOrigRender=window._jvRenderHooked;
+  function jvWireReactor(){
+    var reactor=document.querySelector('.reactor');
+    if(!reactor) return;
+    reactor.onclick=function(e){ e.stopPropagation(); jvShowOverlay(); jvToggleMic(); };
+  }
+  // Patch render to also wire reactor
+  var _origRender=render;
+  render=function(){ _origRender(); jvWireReactor(); };
 })();
 </script>
 </body>
