@@ -123,7 +123,10 @@
   .bthumb img { display:block; width:100%; height:100%; object-fit:cover; }
   .bhead { display:block; color:#fff3e9; font-size:23px; line-height:1.18; font-weight:500; text-decoration:none; margin-bottom:8px; }
   .bhead:hover { color:#fff; text-shadow:0 0 8px rgba(255,170,90,.6); }
-  .bsum { color:#d9b49a; font-size:14px; line-height:1.55; margin-bottom:7px; }
+  .bsum { color:#d9b49a; font-size:14px; line-height:1.55; margin-bottom:7px;
+          display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+          -webkit-mask-image:linear-gradient(180deg,#000 55%,rgba(0,0,0,.25) 100%);
+                  mask-image:linear-gradient(180deg,#000 55%,rgba(0,0,0,.25) 100%); }
   .bmeta { font-size:11px; color:#a06a3a;  letter-spacing:0; }
   body.bright .blabel { color:#b35f10; }
   body.bright .bhead { color:#2a1c0e; }
@@ -918,7 +921,11 @@
   }, {passive:true});
   lens.addEventListener('touchend', ()=>{ lensTY = null; }, {passive:true});
   function renderLens(d, days, animate){
-    const arts = (d.articles || []).slice();
+    // Map the feed snippet into summary, then drop genuinely textless items —
+    // every card must carry a teaser (Mike: "a summary, or it's not on the board").
+    const arts = (d.articles || [])
+      .map(a => Object.assign({}, a, {summary: a.summary || a.snippet || a.desc || ''}))
+      .filter(a => !!teaser(a.summary));
     const diag = d.diag ? ' · ' + Object.entries(d.diag).map(([k,v])=>k+' '+v).join(' / ') : '';
     $('lensCount').textContent = (arts.length
       ? arts.length + ' reports · ' + d.sources + ' sources · last ' + days + ' days'
@@ -975,13 +982,33 @@
   // One card component shared by the home board, the brief, and the search Lens —
   // so format + behaviour can't drift. Tapping always opens the in-app article
   // view (Summary + Sources) through the single metered openArticle().
+  // Card teaser — Interval/Ground-News style: ~1 sentence, cut mid-thought with a
+  // trailing "…" so there's a reason to tap (taps drive the metered read). Returns
+  // already-escaped HTML; never truncates the stored x.summary (the article view
+  // still shows the full text on tap).
+  function teaser(s){
+    s = (s||'').replace(/\s+/g,' ').trim();
+    if(!s) return '';
+    var cut = s.length;
+    var m = s.search(/[.!?]\s/);            // cap at first sentence OR ~130 chars
+    if(m > -1) cut = Math.min(cut, m + 1);
+    cut = Math.min(cut, 130);
+    var t = s.slice(0, cut);
+    if(t.length < s.length){                // truncated → end mid-thought
+      t = t.replace(/[\s,;:.!?]+$/, '');     // trim trailing space/punct
+      t = t.replace(/\s+\S*$/, '');          // drop the last (partial) word
+      return esc(t) + '…';                   // the ellipsis is the hook
+    }
+    return esc(t);                           // already short — show as-is
+  }
   function storyCard(x, label, meta){
     const sec = document.createElement('div'); sec.className = 'bsec';
+    const tz = teaser(x.summary);
     sec.innerHTML =
       (label ? '<div class="blabel">◈ ' + esc(label) + '</div>' : '') +
       (x.image ? '<div class="bthumb"><img src="'+esc(x.image)+'" loading="lazy" onerror="var p=this.closest(\'.bthumb\'); if(p) p.style.display=\'none\';"></div>' : '') +
       '<div class="bhead">'+esc(x.title||'')+'</div>' +
-      (x.summary ? '<div class="bsum">'+esc(x.summary)+'</div>' : '') +
+      (tz ? '<div class="bsum">'+tz+'</div>' : '') +
       '<div class="bmeta">'+esc(meta||'')+'</div>';
     sec.style.cursor = 'pointer';
     // The Daily Rumble house card is a normal-looking news card but taps out to
@@ -1003,6 +1030,10 @@
   // animation can't replay (the "jitter"). Only genuinely new cards animate in.
   function renderBoardSections(sections, sound){
     const wrap = $('homeCards'); if(!wrap) return;
+    // No textless cards on the board — every card needs a teaser (Mike: "a summary,
+    // or it's not on the board"). Brief cards carry a full AI summary; Local/National
+    // and the Rumble card fall back to their feed snippet/excerpt upstream.
+    sections = (sections || []).filter(x => !!teaser(x.summary));
     const have = new Map();
     Array.from(wrap.children).forEach(n=>{ const k=n.getAttribute('data-key'); if(k!=null) have.set(k, n); });
     let prev = null, animIdx = 0;
@@ -1278,7 +1309,8 @@
       try{
         const d = await fetch('/news?q='+encodeURIComponent(w.q)+'&days=3&fast=1', {cache:'no-store'}).then(r=>r.json());
         const a = (d.articles||[]).find(x=>x.image) || (d.articles||[])[0];
-        return a ? {label:w.label, title:a.title, url:a.url, image:a.image, source:a.source, time:a.time, summary:''} : null;
+        return a ? {label:w.label, title:a.title, url:a.url, image:a.image, source:a.source, time:a.time,
+                    summary:a.summary||a.snippet||a.desc||''} : null;
       }catch(e){ return null; }
     }))).filter(Boolean);
     if(got.length){ renderBoardSections(withRumble(got.concat(personalizeSections(lastBrief))), false); }

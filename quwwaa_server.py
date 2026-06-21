@@ -195,6 +195,17 @@ FEEDS = [
 STOPWORDS = {'news', 'today', 'latest', 'update', 'updates', 'breaking', 'report',
              'reports', 'story', 'situation', 'about', 'what', 'happening', 'recent'}
 
+def _clean_snippet(s, limit=220):
+    """Cheap teaser text from an RSS <description>: strip tags/entities, collapse
+    whitespace, clamp. No page fetch, no AI — the full summary is still only built
+    on tap. Gives board/Lens cards a one-line teaser instead of an empty block."""
+    if not s:
+        return ''
+    s = re.sub(r'<[^>]+>', ' ', s)
+    s = html.unescape(s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s[:limit]
+
 def _feed_items(name, url):
     out = []
     root = ET.fromstring(fetch(url, timeout=8))
@@ -214,7 +225,8 @@ def _feed_items(name, url):
             if tag == 'enclosure' and el.get('type', '').startswith('image') and el.get('url'):
                 img = el.get('url'); break
         out.append({'title': title, 'url': link, 'source': name, 'time': ago(dt),
-                    'image': img, 'ts': dt.timestamp() if dt else 0, 'via': 'RSS'})
+                    'image': img, 'snippet': _clean_snippet(item.findtext('description') or ''),
+                    'ts': dt.timestamp() if dt else 0, 'via': 'RSS'})
     return out
 
 def src_rsspack(q, days=7):
@@ -261,7 +273,8 @@ def src_yahoo(q, days=7):
                 break
         src = urllib.parse.urlparse(link).netloc.replace('www.', '')
         out.append({'title': title, 'url': link, 'source': src, 'time': ago(dt),
-                    'image': img, 'ts': dt.timestamp() if dt else 0, 'via': 'Yahoo'})
+                    'image': img, 'snippet': _clean_snippet(item.findtext('description') or ''),
+                    'ts': dt.timestamp() if dt else 0, 'via': 'Yahoo'})
     return out[:30]
 
 def src_bsky(q, days=7):
@@ -318,7 +331,8 @@ def src_bing(q, days=7):
         if not src:
             src = urllib.parse.urlparse(link).netloc.replace('www.', '')
         out.append({'title': title, 'url': link, 'source': src, 'time': ago(dt),
-                    'image': hd_bing(img), 'ts': dt.timestamp() if dt else 0, 'via': 'Bing'})
+                    'image': hd_bing(img), 'snippet': _clean_snippet(item.findtext('description') or ''),
+                    'ts': dt.timestamp() if dt else 0, 'via': 'Bing'})
     return out[:40]
 
 def src_reddit(q, days=7):
