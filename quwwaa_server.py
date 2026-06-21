@@ -77,6 +77,8 @@ JARVIS_ADMIN_TOKEN = os.environ.get('JARVIS_ADMIN_TOKEN', '')                   
 GA_SERVICE_ACCOUNT_JSON = os.environ.get('GA_SERVICE_ACCOUNT_JSON', '')             # GA4 Data API service account (Traffic card; stubbed until set)
 GA_PROPERTY_ID = os.environ.get('GA_PROPERTY_ID', '542314942')
 JARVIS_CALENDAR_ID = os.environ.get('JARVIS_CALENDAR_ID', '')                       # Google Calendar shared with the SA — agenda + gated writes (Phase 2)
+ANTHROPIC_ADMIN_KEY = os.environ.get('ANTHROPIC_ADMIN_KEY', '')                     # sk-ant-admin… — read-only cost/usage reports (Cost Watch)
+OPENAI_ADMIN_KEY = os.environ.get('OPENAI_ADMIN_KEY', '')                           # OpenAI admin key — read-only org costs (Cost Watch)
 # Registration-wall meter for FREE registered members (server-enforced per profile).
 FREE_PER_DAY = int(os.environ.get('FREE_PER_DAY', '1'))
 FREE_PER_MONTH = int(os.environ.get('FREE_PER_MONTH', '5'))
@@ -2174,6 +2176,109 @@ def jarvis_diag():
         out['cal_list'] = 'ERR ' + _err_detail(e)
     return out
 
+# --- Jarvis API Cost Watch: live spend from Anthropic + OpenAI ---------------
+def _cost_month_start():
+    return datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+def _summarize_days(days):
+    """days: {'YYYY-MM-DD'(UTC): amount} -> {today, mtd, last7[]}."""
+    now = datetime.now(timezone.utc)
+    keys = [(now - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(6, -1, -1)]
+    return {'today': round(days.get(now.strftime('%Y-%m-%d'), 0.0), 2),
+            'mtd': round(sum(days.values()), 2),
+            'last7': [{'date': k, 'amount': round(days.get(k, 0.0), 2)} for k in keys]}
+
+def _round_map(m):
+    return dict(sorted(((k, round(v, 2)) for k, v in m.items()), key=lambda kv: -kv[1]))
+
+def jarvis_cost_anthropic():
+    out = {'available': False, 'today': None, 'mtd': None, 'last7': [], 'by_model': {}, 'note': ''}
+    if not ANTHROPIC_ADMIN_KEY:
+        out['note'] = 'ANTHROPIC_ADMIN_KEY not set'; return out
+    try:
+        days, by_model, page = {}, {}, None
+        for _ in range(6):
+            ps = [('starting_at', _cost_month_start().strftime('%Y-%m-%dT00:00:00Z')),
+                  ('bucket_width', '1d'), ('limit', '31'), ('group_by[]', 'model')]
+            if page: ps.append(('page', page))
+            req = urllib.request.Request('https://api.anthropic.com/v1/organizations/cost_report?' + urllib.parse.urlencode(ps),
+                                         headers={'x-api-key': ANTHROPIC_ADMIN_KEY, 'anthropic-version': '2023-06-01'})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                d = json.loads(r.read())
+            for b in d.get('data', []):
+                dk = (b.get('starting_at') or '')[:10]
+                for res in b.get('results', []):
+                    amt = float(res.get('amount') or 0)
+                    days[dk] = days.get(dk, 0.0) + amt
+                    mdl = res.get('model') or 'other'
+                    by_model[mdl] = by_model.get(mdl, 0.0) + amt
+            page = d.get('next_page') if d.get('has_more') else None
+            if not page: break
+        out.update(_summarize_days(days)); out['by_model'] = _round_map(by_model); out['available'] = True
+    except Exception as e:
+        out['note'] = _err_detail(e)
+    return out
+
+def jarvis_cost_openai():
+    out = {'available': False, 'today': None, 'mtd': None, 'last7': [], 'by_line_item': {}, 'voice': None, 'note': ''}
+    if not OPENAI_ADMIN_KEY:
+        out['note'] = 'OPENAI_ADMIN_KEY not set'; return out
+    try:
+        days, by_item, page = {}, {}, None
+        for _ in range(6):
+            ps = [('start_time', int(_cost_month_start().timestamp())), ('bucket_width', '1d'),
+                  ('limit', '31'), ('group_by[]', 'line_item')]
+            if page: ps.append(('page', page))
+            req = urllib.request.Request('https://api.openai.com/v1/organization/costs?' + urllib.parse.urlencode(ps),
+                                         headers={'Authorization': 'Bearer ' + OPENAI_ADMIN_KEY})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                d = json.loads(r.read())
+            for b in d.get('data', []):
+                st = b.get('start_time')
+                dk = datetime.fromtimestamp(st, timezone.utc).strftime('%Y-%m-%d') if st else ''
+                for res in b.get('results', []):
+                    amt = float((res.get('amount') or {}).get('value') or 0)
+                    days[dk] = days.get(dk, 0.0) + amt
+                    li = res.get('line_item') or 'other'
+                    by_item[li] = by_item.get(li, 0.0) + amt
+            page = d.get('next_page') if d.get('has_more') else None
+            if not page: break
+        voice = sum(v for k, v in by_item.items() if re.search(r'audio|speech|transcri|whisper|tts', k or '', re.I))
+        out.update(_summarize_days(days)); out['by_line_item'] = _round_map(by_item)
+        out['voice'] = round(voice, 2); out['available'] = True
+    except Exception as e:
+        out['note'] = _err_detail(e)
+    return out
+
+def _spend_status(p):
+    """green ok · amber spike · red likely-out-of-credits (spend flatlined to 0) · gray unknown."""
+    if not p.get('available'):
+        return 'gray'
+    last7 = [d['amount'] for d in p.get('last7', [])]
+    today = p.get('today') or 0
+    prior = last7[:-1]
+    avg = (sum(prior) / len(prior)) if prior else 0
+    if avg > 0.5 and today == 0:
+        return 'red'
+    if avg > 0.1 and today > avg * 2.5:
+        return 'amber'
+    return 'green'
+
+JARVIS_COSTS = {'t': 0, 'data': None}
+def jarvis_costs():
+    if JARVIS_COSTS['data'] and time.time() - JARVIS_COSTS['t'] < 300:   # ~5 min cache
+        return JARVIS_COSTS['data']
+    def _safe(fn):
+        try: return fn()
+        except Exception as e: return {'available': False, 'note': _err_detail(e)}
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fa = ex.submit(_safe, jarvis_cost_anthropic); fo = ex.submit(_safe, jarvis_cost_openai)
+        a, o = fa.result(), fo.result()
+    a['status'] = _spend_status(a); o['status'] = _spend_status(o)
+    data = {'anthropic': a, 'openai': o, 'generated_at': datetime.now(timezone.utc).isoformat()}
+    JARVIS_COSTS['data'] = data; JARVIS_COSTS['t'] = time.time()
+    return data
+
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
@@ -2776,6 +2881,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json({'error': 'unauthorized'}, 401); return
             try:
                 self._send_json(jarvis_agenda())
+            except Exception as e:
+                self._send_json({'error': type(e).__name__}, 500)
+        elif self.path.startswith('/jarvis/costs'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            try:
+                self._send_json(jarvis_costs())
             except Exception as e:
                 self._send_json({'error': type(e).__name__}, 500)
         elif self.path.startswith('/jarvis/diag'):
