@@ -15,7 +15,7 @@
   :root{
     --bg:#04070b; --panel:#0a0f16; --panel2:#0c1119; --line:rgba(57,255,122,.16);
     --line2:rgba(57,255,122,.32); --green:#39ff7a; --green2:#27d36a; --gdim:#1f9e54;
-    --dim:#566372; --dim2:#8497a6; --white:#eaf6ef; --amber:#ffb340; --gray:#3a4654;
+    --dim:#566372; --dim2:#8497a6; --white:#eaf6ef; --amber:#ffb340; --gray:#3a4654; --red:#ff5a5a;
   }
   *{box-sizing:border-box}
   body{margin:0;background:
@@ -28,8 +28,11 @@
   .lbl .ln{flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent)}
   .dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
   .ok{background:var(--green);box-shadow:0 0 8px var(--green)} .warn{background:var(--amber);box-shadow:0 0 8px rgba(255,179,64,.6)} .off{background:var(--gray)}
-  .tag{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
-  .tag.ok{color:var(--green)} .tag.warn{color:var(--amber)} .tag.off{color:var(--dim)}
+  /* status word — Operational / Offline (infra), Connected / Offline (social) */
+  .st{font-size:9px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .st .sd{width:6px;height:6px;border-radius:50%;flex:none}
+  .st.on{color:var(--green2)} .st.on .sd{background:var(--green);box-shadow:0 0 5px rgba(57,255,122,.7)}
+  .st.down{color:#ff6a6a} .st.down .sd{background:var(--red);box-shadow:0 0 5px rgba(255,90,90,.6)}
   .row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px;color:var(--dim2);gap:8px}
   .row b{color:var(--white);font-weight:600}
   .ph{color:var(--dim);font-size:10.5px;padding:5px 0;line-height:1.5}
@@ -76,15 +79,22 @@
   .node .nx{min-width:0;flex:1} .node .nn{font-size:12.5px;color:var(--white);font-weight:700;line-height:1.1}
   .node .nr{font-size:9px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .node.tap{cursor:pointer}
-  /* connector stub toward the reactor */
-  .cluster.left .node::after,.cluster.right .node::after{content:"";position:absolute;top:50%;width:16px;height:1px;background:linear-gradient(90deg,var(--line2),var(--green));box-shadow:0 0 5px rgba(57,255,122,.5)}
-  .cluster.left .node::after{right:-17px} .cluster.right .node::after{left:-17px;background:linear-gradient(270deg,var(--line2),var(--green))}
-  .cluster.left .node::before,.cluster.right .node::before{content:"";position:absolute;top:calc(50% - 2.5px);width:5px;height:5px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);z-index:3}
-  .cluster.left .node::before{right:-19px} .cluster.right .node::before{left:-19px}
+  /* live energy lines drawn from the reactor to each connector box */
+  #conlines{position:absolute;inset:0;z-index:1;pointer-events:none}
+  #conlines .cbase{fill:none;stroke:rgba(57,255,122,.28);stroke-width:1.2;filter:url(#cg)}
+  #conlines .cflow{fill:none;stroke:#bdffd6;stroke-width:1.5;stroke-dasharray:2 12;filter:url(#cg);animation:flow .9s linear infinite}
+  #conlines .cflow.down{stroke:#ff7a7a;animation:none;opacity:.35}
+  #conlines .cend{filter:url(#cg)}
+  @keyframes flow{to{stroke-dashoffset:-15}}
   .reactor{justify-self:center;width:300px;height:300px;position:relative;z-index:1;display:grid;place-items:center}
   .reactor svg{position:absolute;inset:0;width:100%;height:100%}
   .reactor .ringspin{animation:spin 26s linear infinite;transform-origin:50% 50%}
   .reactor .ringspin.rev{animation:spin 38s linear infinite reverse}
+  .reactor .pulse{animation:rpulse 1.7s ease-in-out infinite;transform-origin:50% 50%}
+  .reactor .pulse.p2{animation-duration:2.3s;animation-delay:-.6s}
+  @keyframes rpulse{0%,100%{opacity:.55} 50%{opacity:1}}
+  .reactor .flick{animation:flick 3.4s steps(1) infinite}
+  @keyframes flick{0%,7%,9%,55%,57%,100%{opacity:1}8%,56%{opacity:.45}}
   .rcore{width:118px;height:118px;border-radius:50%;display:grid;place-items:center;text-align:center;z-index:2;
     background:radial-gradient(circle at 50% 45%, #0a1f13 0%, #061009 70%, #03070a 100%);
     border:1px solid rgba(57,255,122,.55);box-shadow:0 0 26px rgba(57,255,122,.35), inset 0 0 22px rgba(57,255,122,.18)}
@@ -174,11 +184,11 @@
     var style = bg==='ig' ? 'background:radial-gradient(circle at 30% 110%,#fdf497 0,#fd5949 45%,#d6249f 60%,#285aeb 90%)' : ('background:'+bg);
     return '<span class="ico" style="'+style+'">'+svg+'</span>'; }
 
-  function tagFor(state){ var map={ok:['ok','Operational'],connected:['ok','Connected'],warn:['warn','Reconnect'],off:['off','Connect']}; var x=map[state]||map.off;
-    return '<span class="tag '+x[0]+'"><span class="dot '+x[0]+'"></span>'+x[1]+'</span>'; }
-  function nodeCard(icon,name,role,state,id){
-    return '<div class="node'+(id?' tap':'')+'"'+(id?' data-ev="'+esc(id)+'"':'')+'>'+ico(icon)
-      +'<div class="nx"><div class="nn">'+name+'</div><div class="nr">'+role+'</div></div>'+tagFor(state)+'</div>'; }
+  // Plain word: Operational / Offline for infra, Connected / Offline for social.
+  function statusTag(ok, kind){ var label=ok?(kind==='social'?'Connected':'Operational'):'Offline';
+    return '<span class="st '+(ok?'on':'down')+'"><span class="sd"></span>'+label+'</span>'; }
+  function nodeCard(icon,name,role,ok){
+    return '<div class="node">'+ico(icon)+'<div class="nx"><div class="nn">'+name+'</div><div class="nr">'+role+'</div></div>'+statusTag(ok,'infra')+'</div>'; }
   function chart(vals,area){ if(!vals||vals.length<2){ vals=[3,5,4,7,6,9,8,11,10,13]; }
     var mx=Math.max.apply(null,vals),mn=Math.min.apply(null,vals),w=120,h=42,n=vals.length;
     var pts=vals.map(function(v,i){return ((i/(n-1))*w).toFixed(1)+','+(h-3-((v-mn)/((mx-mn)||1))*(h-7)).toFixed(1);});
@@ -195,11 +205,11 @@
       +'<g fill="none" stroke="#39ff7a">'
       +'<circle cx="150" cy="150" r="138" stroke-width="1" opacity=".18"/>'
       +'<g class="ringspin"><circle cx="150" cy="150" r="128" stroke-width="1" stroke-dasharray="2 7" opacity=".55"/></g>'
-      +'<circle cx="150" cy="150" r="108" stroke-width="2.5" opacity=".55" filter="url(#g1)"/>'
-      +'<circle cx="150" cy="150" r="108" stroke-width="1" opacity=".9"/>'
+      +'<circle class="pulse" cx="150" cy="150" r="108" stroke-width="2.5" opacity=".55" filter="url(#g1)"/>'
+      +'<circle class="flick" cx="150" cy="150" r="108" stroke-width="1" opacity=".9"/>'
       +'<g class="ringspin rev"><circle cx="150" cy="150" r="92" stroke-width="1" stroke-dasharray="1 5" opacity=".5"/></g>'
-      +'<circle cx="150" cy="150" r="78" stroke-width="3" opacity=".7" filter="url(#g1)"/>'
-      +'<circle cx="150" cy="150" r="78" stroke-width="1.2" opacity="1"/>'
+      +'<circle class="pulse p2" cx="150" cy="150" r="78" stroke-width="3" opacity=".7" filter="url(#g1)"/>'
+      +'<circle class="flick" cx="150" cy="150" r="78" stroke-width="1.2" opacity="1"/>'
       +'<circle cx="150" cy="150" r="62" stroke-width="1" opacity=".4"/>'
       +'</g><g>'+ticks+'</g></svg>'; }
   function spokesSVG(){ var s=''; for(var a=0;a<360;a+=15){ var rad=a*Math.PI/180; s+='<line x1="50%" y1="50%" x2="'+(50+60*Math.cos(rad))+'%" y2="'+(50+60*Math.sin(rad))+'%" stroke="#39ff7a" stroke-width="1" opacity=".06"/>'; }
@@ -208,8 +218,7 @@
   function render(){
     var r=(stats&&stats.revenue)||{}, m=(stats&&stats.members)||{}, t=(stats&&stats.traffic)||{}, n=(stats&&stats.newsletter)||{};
     var ca=(costs&&costs.anthropic)||{}, co=(costs&&costs.openai)||{};
-    var sStripe=r.mrr!=null?'ok':'off', sOpenAI=co.available?'ok':'off', sAnthropic=ca.available?'ok':'warn',
-        sGA=t.available?'ok':'off', sCal=(agenda&&agenda.available)?'connected':'off';
+    var okStripe=r.mrr!=null, okGA=!!t.available, okOpenAI=!!co.available, okAnthropic=!!ca.available, okCal=!!(agenda&&agenda.available);
     var bul=[]; if(n.subscribers!=null) bul.push('Brief reaching '+num(n.subscribers)+' inboxes');
     if(co.voice!=null) bul.push('OpenAI voice spend '+cm(co.voice)+' MTD');
     if(m.total!=null) bul.push(num(m.total)+' members · '+num(m.new_today)+' new today');
@@ -256,17 +265,17 @@
     // center reactor
     H+='<div class="panel center">'+spokesSVG()
       +'<div class="cluster left"><p class="lbl" style="margin:0 0 2px">Business operations<span class="ln"></span></p>'
-        +nodeCard('stripe','Stripe','Payments · live',sStripe)+nodeCard('render','Render','Cloud hosting','ok')+nodeCard('github','GitHub','Source control','off')
-        +'<p class="lbl" style="margin:6px 0 2px">Analytics<span class="ln"></span></p>'+nodeCard('ga','Google Analytics','Site traffic',sGA)+'</div>'
+        +nodeCard('stripe','Stripe','Payments · live',okStripe)+nodeCard('render','Render','Cloud hosting',true)+nodeCard('github','GitHub','Source control',false)
+        +'<p class="lbl" style="margin:6px 0 2px">Analytics<span class="ln"></span></p>'+nodeCard('ga','Google Analytics','Site traffic',okGA)+'</div>'
       +'<div class="reactor">'+reactorSVG()+'<div class="rcore"><div><b>JARVIS</b><div class="c">CORE</div><div class="a"><span class="dot ok" style="width:5px;height:5px"></span>ACTIVE</div></div></div></div>'
       +'<div class="cluster right"><p class="lbl" style="margin:0 0 2px">AI infrastructure<span class="ln"></span></p>'
-        +nodeCard('openai','OpenAI','Voice · STT/TTS',sOpenAI)+nodeCard('anthropic','Anthropic','Butler · summaries',sAnthropic)
-        +'<p class="lbl" style="margin:6px 0 2px">Productivity<span class="ln"></span></p>'+nodeCard('calendar','Calendar','Agenda · events',sCal)+nodeCard('gmail','Gmail','Inbox triage','off')+'</div>'
+        +nodeCard('openai','OpenAI','Voice · STT/TTS',okOpenAI)+nodeCard('anthropic','Anthropic','Butler · summaries',okAnthropic)
+        +'<p class="lbl" style="margin:6px 0 2px">Productivity<span class="ln"></span></p>'+nodeCard('calendar','Calendar','Agenda · events',okCal)+nodeCard('gmail','Gmail','Inbox triage',false)+'</div>'
       +'</div>';
     // social column
-    var soc=[['instagram','Instagram','Visual content','off'],['facebook','Facebook','Community','off'],['tiktok','TikTok','Short-form','off'],['youtube','YouTube','Long-form','off'],['x','X','Real-time','off'],['substack','Substack','Newsletter · live','connected']];
+    var soc=[['instagram','Instagram','Visual content',false],['facebook','Facebook','Community',false],['tiktok','TikTok','Short-form',false],['youtube','YouTube','Long-form',false],['x','X','Real-time',false],['substack','Substack','Newsletter · live',true]];
     H+='<div class="panel social"><p class="lbl">Social publishing<span class="ln"></span></p>'
-      +soc.map(function(s){return '<div class="scard">'+ico(s[0])+'<div class="nx"><div class="nn">'+s[1]+'</div><div class="nr">'+s[2]+'</div></div>'+tagFor(s[3])+'</div>';}).join('')+'</div>';
+      +soc.map(function(s){return '<div class="scard">'+ico(s[0])+'<div class="nx"><div class="nn">'+s[1]+'</div><div class="nr">'+s[2]+'</div></div>'+statusTag(s[3],'social')+'</div>';}).join('')+'</div>';
     // content rail
     var pipe=[['Ideation','—'],['Creation','—'],['Review','—'],['Scheduled','—'],['Published','—']];
     H+='<div class="rail crail"><div class="panel"><p class="lbl">Content<span class="ln"></span></p>'
@@ -279,12 +288,12 @@
     H+='<div class="bottom">'
       +'<div class="panel"><p class="lbl">Task queue<span class="ln"></span></p><div class="ph">Connect Cowork tasks to populate the queue.</div></div>'
       +'<div class="panel"><p class="lbl">Inbox triage<span class="ln"></span></p><div class="triage"><div style="text-align:center"><div class="num">—</div><div style="font-size:9px;color:var(--dim)">NEW · 7d</div></div>'
-        +'<div><div class="row"><span>Needs reply</span><b>—</b></div><div class="row"><span>Resolved / FYI</span><b>—</b></div><div class="row"><span>Promotions</span><b>—</b></div><div class="row"><span>Gmail connector</span>'+tagFor('off')+'</div></div></div></div>'
+        +'<div><div class="row"><span>Needs reply</span><b>—</b></div><div class="row"><span>Resolved / FYI</span><b>—</b></div><div class="row"><span>Promotions</span><b>—</b></div><div class="row"><span>Gmail connector</span>'+statusTag(false,'infra')+'</div></div></div></div>'
       +'<div class="panel"><p class="lbl">Calendar agenda · 7d<button class="addbtn" id="addEvent">+ New</button></p>'+agendaHTML()+'</div>'
       +'<div class="panel footbrand"><h2>QUWWAA OS</h2><span class="j">v2.5</span><span class="s">Built for Purpose · Designed for Scale</span></div>'
       +'</div>';
 
-    H+='<div class="legend"><span><span class="dot ok"></span>live data now</span><span><span class="dot warn"></span>needs key fix</span><span><span class="dot off"></span>placeholder · connect later</span></div>';
+    H+='<div class="legend"><span><span class="dot ok"></span>operational · connected</span><span><span class="dot" style="background:var(--red);box-shadow:0 0 5px rgba(255,90,90,.5)"></span>offline · needs attention</span></div>';
     H+='</div>';
     app.innerHTML=H;
     $('#reload').onclick=function(){ refresh(true); };
@@ -293,7 +302,33 @@
     Array.prototype.forEach.call(document.querySelectorAll('.tq button[data-id]'), function(b){
       b.onclick=function(){ var ev=(agenda.events||[]).filter(function(e){ return e.id===b.getAttribute('data-id'); })[0]; if(ev&&!ev.all_day) openSheet('move',ev); };
     });
+    requestAnimationFrame(function(){ try{ drawConnections(); }catch(e){} });   // energy lines after layout settles
   }
+
+  // Glowing energy lines from the reactor to each connector box (live ones pulse,
+  // offline ones are a dim red static line). Measured from real positions; skipped
+  // on narrow/stacked layouts.
+  function drawConnections(){
+    var center=document.querySelector('.center'); if(!center) return;
+    var old=document.getElementById('conlines'); if(old) old.remove();
+    var reactor=center.querySelector('.reactor'); if(!reactor) return;
+    var cr=center.getBoundingClientRect(); if(cr.width<700) return;
+    var rr=reactor.getBoundingClientRect();
+    var cx=rr.left-cr.left+rr.width/2, cy=rr.top-cr.top+rr.height/2, R=rr.width*0.40;
+    var NS='http://www.w3.org/2000/svg', svg=document.createElementNS(NS,'svg'); svg.id='conlines';
+    svg.setAttribute('viewBox','0 0 '+cr.width+' '+cr.height); svg.setAttribute('width',cr.width); svg.setAttribute('height',cr.height);
+    var parts='<defs><filter id="cg" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="1.7"/></filter></defs>';
+    Array.prototype.forEach.call(center.querySelectorAll('.node'), function(nd){
+      var b=nd.getBoundingClientRect(), down=/Offline/.test(nd.textContent), leftSide=(b.left-cr.left)<cx;
+      var ax=leftSide?(b.right-cr.left+1):(b.left-cr.left-1), ay=b.top-cr.top+b.height/2;
+      var ang=Math.atan2(ay-cy, ax-cx), sx=cx+R*Math.cos(ang), sy=cy+R*Math.sin(ang);
+      var bx=leftSide?(ax-22):(ax+22);   // elbow → circuit-board feel
+      var d='M'+sx.toFixed(1)+','+sy.toFixed(1)+' L'+bx.toFixed(1)+','+ay.toFixed(1)+' L'+ax.toFixed(1)+','+ay.toFixed(1);
+      parts+='<path class="cbase" d="'+d+'"/><path class="cflow'+(down?' down':'')+'" d="'+d+'"/><circle class="cend" cx="'+ax.toFixed(1)+'" cy="'+ay.toFixed(1)+'" r="2.6" fill="'+(down?'#ff5a5a':'#39ff7a')+'"/>';
+    });
+    svg.innerHTML=parts; center.insertBefore(svg, center.firstChild);
+  }
+  var _rt; window.addEventListener('resize', function(){ clearTimeout(_rt); _rt=setTimeout(function(){ try{ drawConnections(); }catch(e){} }, 180); });
 
   function relDay(iso){var d=new Date(iso),x=new Date(),tm=new Date(x.getTime()+864e5),s=function(a,b){return a.toDateString()===b.toDateString();};
     return s(d,x)?'Today':s(d,tm)?'Tomorrow':d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});}
