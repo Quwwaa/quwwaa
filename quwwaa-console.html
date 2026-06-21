@@ -440,8 +440,76 @@
 </div>
 
 <script>
+/* ---- Global i18n (shared across every script module via window.QI18N) -------
+   English is the base; a language is only OFFERED once its UI dictionary exists,
+   so the chrome is never half-translated. t(key) falls back en -> key. The board
+   content (headlines + summaries) is localized server-side via ?lang=. */
+window.QI18N = (function(){
+  var DICT = {
+    en: {
+      'tagline': 'your AI news butler — a personalized brief and assistant for the stories you care about',
+      'placeholder': 'Speak or type a command, sir...',
+      'send': 'Send', 'greet': 'Good day, sir. QUWWAA online. The board is live — speak or type a command.',
+      'status.standby': 'Standing by', 'status.listening': 'Listening',
+      'status.listening_tap': 'Listening — tap to stop', 'status.thinking': 'Thinking',
+      'status.assembling': 'Assembling today’s brief…',
+      'brain': 'Brain', 'voice': 'Voice', 'lang.title': 'Language',
+      'lens.title': 'News Lens', 'lens.close': 'CLOSE', 'lens.scanning': 'Scanning global sources…',
+      'lens.reports': 'reports', 'lens.sources': 'sources', 'lens.last_days': 'last %d days',
+      'lens.none': 'No reports in the last %d days', 'lens.notfound': 'No reports found — try different terms or check your connection',
+      'nav.brief': 'News Brief', 'nav.priority': 'Priority', 'nav.profile': 'Profile',
+      'art.back': 'Back', 'art.summary': 'Summary', 'art.sources': 'Sources', 'art.track': 'Track as Priority',
+      'cat.US Politics': 'US Politics', 'cat.World': 'World', 'cat.Middle East': 'Middle East',
+      'cat.Sports': 'Sports', 'cat.Finance': 'Finance', 'cat.Markets': 'Markets', 'cat.Tech': 'Tech',
+      'cat.AI': 'AI', 'cat.Culture & Entertainment': 'Culture & Entertainment', 'cat.Science': 'Science',
+      'cat.Nature & Disasters': 'Nature & Disasters', 'cat.Crime & Justice': 'Crime & Justice',
+      'cat.Worth Knowing': 'Worth Knowing', 'cat.National': 'National', 'cat.Local': 'Local',
+    },
+    es: {
+      'tagline': 'tu mayordomo de noticias con IA — un resumen personalizado y un asistente para las historias que te importan',
+      'placeholder': 'Habla o escribe un comando, señor...',
+      'send': 'Enviar', 'greet': 'Buenas, señor. QUWWAA en línea. El tablero está activo — habla o escribe un comando.',
+      'status.standby': 'En espera', 'status.listening': 'Escuchando',
+      'status.listening_tap': 'Escuchando — toca para detener', 'status.thinking': 'Pensando',
+      'status.assembling': 'Preparando el resumen de hoy…',
+      'brain': 'Cerebro', 'voice': 'Voz', 'lang.title': 'Idioma',
+      'lens.title': 'Lente de Noticias', 'lens.close': 'CERRAR', 'lens.scanning': 'Explorando fuentes globales…',
+      'lens.reports': 'reportes', 'lens.sources': 'fuentes', 'lens.last_days': 'últimos %d días',
+      'lens.none': 'Sin reportes en los últimos %d días', 'lens.notfound': 'No se encontraron reportes — prueba otros términos o revisa tu conexión',
+      'nav.brief': 'Noticias', 'nav.priority': 'Prioridad', 'nav.profile': 'Perfil',
+      'art.back': 'Atrás', 'art.summary': 'Resumen', 'art.sources': 'Fuentes', 'art.track': 'Seguir como Prioridad',
+      'cat.US Politics': 'Política de EE. UU.', 'cat.World': 'Mundo', 'cat.Middle East': 'Oriente Medio',
+      'cat.Sports': 'Deportes', 'cat.Finance': 'Finanzas', 'cat.Markets': 'Mercados', 'cat.Tech': 'Tecnología',
+      'cat.AI': 'IA', 'cat.Culture & Entertainment': 'Cultura y Entretenimiento', 'cat.Science': 'Ciencia',
+      'cat.Nature & Disasters': 'Naturaleza y Desastres', 'cat.Crime & Justice': 'Crimen y Justicia',
+      'cat.Worth Knowing': 'Vale la Pena Saber', 'cat.National': 'Nacional', 'cat.Local': 'Local',
+    },
+  };
+  var NATIVE = {en:'English', es:'Español', fr:'Français', ar:'العربية', ru:'Русский', ms:'Bahasa Melayu', id:'Bahasa Indonesia'};
+  var SUPPORTED = ['en', 'es'];               // languages with a UI dictionary (grows each chunk)
+  var lang = 'en';
+  try { var s = localStorage.getItem('q_lang'); if (s && SUPPORTED.indexOf(s) >= 0) lang = s; } catch(e){}
+  function t(key){ var d = DICT[lang] || {}; if (key in d) return d[key]; return (DICT.en[key] != null) ? DICT.en[key] : key; }
+  function applyDir(l){ try{ document.documentElement.lang = l; document.documentElement.dir = (l === 'ar') ? 'rtl' : 'ltr'; }catch(e){} }
+  function set(l){
+    if (SUPPORTED.indexOf(l) < 0) l = 'en';
+    if (l === lang) return;
+    lang = l; try { localStorage.setItem('q_lang', l); } catch(e){}
+    applyDir(l);
+    // persist to the signed-in profile so the choice follows across devices
+    try { if (window.QP && QP.user && QP.sb) QP.sb.from('profiles').upsert({ id: QP.user.id, language: l }); } catch(e){}
+    document.dispatchEvent(new CustomEvent('q:lang', { detail: { lang: l } }));
+  }
+  applyDir(lang);
+  return { t: t, get: function(){ return lang; }, set: set,
+           supported: function(){ return SUPPORTED.slice(); }, native: function(l){ return NATIVE[l] || l; } };
+})();
+</script>
+
+<script>
 (function(){
   const $ = id => document.getElementById(id);
+  const T = (k)=> window.QI18N.t(k);
   const log=$('log'), statusEl=$('status'), micBtn=$('micBtn'), textIn=$('textIn');
 
   function tick(){ const d=new Date(); $('clock').innerHTML = '<span class="cdate">' + d.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short',year:'numeric'}).toUpperCase() + '  ·  </span>' + d.toLocaleTimeString('en-GB'); }
@@ -462,7 +530,7 @@
     const b = (serverBrain || cfg.anthropic) ? 'Online' : 'Offline — add key ⚙';
     const v = cfg.eleven ? 'ElevenLabs' + elevenInfo
             : (serverVoice ? 'British' : (britishVoice ? britishVoice.name : 'System'));
-    $('brainState').textContent = 'Brain: ' + b + ' · Voice: ' + v;
+    $('brainState').textContent = T('brain') + ': ' + b + ' · ' + T('voice') + ': ' + v;
   }
   // Probe the server-side brain so the public site reads ONLINE without a local key.
   function showLocalSettings(){           // local sandbox only: expose the gear + key fields
@@ -544,7 +612,7 @@
       try{ localStorage.setItem('q_history', JSON.stringify(history)); }catch(e){}
     }
   }
-  function greet(){ addMsg('jarvis','Good day, sir. QUWWAA online. The board is live — speak or type a command.', false); }
+  function greet(){ addMsg('jarvis', T('greet'), false); }
   // always start fresh — no restored history
   history = [];
   try{ localStorage.removeItem('q_history'); }catch(e){}
@@ -653,7 +721,7 @@
     if(ttsAudio){ try{ ttsAudio.pause(); }catch(e){} }
     try{ Caption.stop(); }catch(e){}
   }
-  function speakDone(){ mode(''); setStatus('Standing by'); if(cfg.handsFree && !busy) startListening(); }
+  function speakDone(){ mode(''); setStatus(T('status.standby')); if(cfg.handsFree && !busy) startListening(); }
 
   async function speak(text, onAudioStart){
     // onAudioStart (optional) fires the instant playback actually begins — used to
@@ -817,8 +885,8 @@
   if(useSR){
     rec = new SR();
     rec.lang='en-US'; rec.interimResults=false; rec.maxAlternatives=1;
-    rec.onstart = ()=>{ listening=true; mode('listening'); setStatus('Listening'); };
-    rec.onend   = ()=>{ listening=false; if(document.body.classList.contains('listening')){ mode(''); setStatus('Standing by'); } };
+    rec.onstart = ()=>{ listening=true; mode('listening'); setStatus(T('status.listening')); };
+    rec.onend   = ()=>{ listening=false; if(document.body.classList.contains('listening')){ mode(''); setStatus(T('status.standby')); } };
     rec.onerror = e=>{
       listening=false; mode('');
       setStatus(e.error==='not-allowed' ? 'Mic denied — allow in browser settings' :
@@ -851,7 +919,7 @@
       recording = false;
       const type = (mediaRec && mediaRec.mimeType) || mime || 'audio/webm';
       const blob = new Blob(audioChunks, {type});
-      if(!blob.size){ mode(''); setStatus('Standing by'); return; }
+      if(!blob.size){ mode(''); setStatus(T('status.standby')); return; }
       mode('thinking'); setStatus('Transcribing');
       try {
         const r = await fetch('/transcribe', {method:'POST', headers:{'X-Audio-Type': type.split(';')[0]}, body: blob});
@@ -866,7 +934,7 @@
       } catch(e){ mode(''); setStatus('Transcribe failed — check connection'); }
     };
     mediaRec.start();
-    recording = true; mode('listening'); setStatus('Listening — tap to stop');
+    recording = true; mode('listening'); setStatus(T('status.listening_tap'));
   }
   function stopRecording(){ if(mediaRec && recording){ try{ mediaRec.stop(); }catch(e){} } }
 
@@ -928,8 +996,8 @@
       .filter(a => !!teaser(a.summary));
     const diag = d.diag ? ' · ' + Object.entries(d.diag).map(([k,v])=>k+' '+v).join(' / ') : '';
     $('lensCount').textContent = (arts.length
-      ? arts.length + ' reports · ' + d.sources + ' sources · last ' + days + ' days'
-      : 'No reports in the last ' + days + ' days') + diag;
+      ? arts.length + ' ' + T('lens.reports') + ' · ' + d.sources + ' ' + T('lens.sources') + ' · ' + T('lens.last_days').replace('%d', days)
+      : T('lens.none').replace('%d', days)) + diag;
     // illustrated reports first, text-only dispatches below — newest first within each
     arts.sort((a, b)=> ((b.image?1:0) - (a.image?1:0)) || ((b.ts||0) - (a.ts||0)));
     const body = $('lensBody');
@@ -952,8 +1020,8 @@
     days = Math.max(1, Math.min(365, parseInt(days,10) || 7));
     try{ if(window.QUWWAA_track) window.QUWWAA_track('search_performed', {search_term:q}); }catch(e){}
     const reqId = ++lensReq;
-    $('lensTitle').textContent = 'News Lens — ' + q;
-    $('lensCount').textContent = 'Scanning global sources…';
+    $('lensTitle').textContent = T('lens.title') + ' — ' + q;
+    $('lensCount').textContent = T('lens.scanning');
     $('lensBody').innerHTML = '';
     lens.classList.add('open');
     let shown = false, best = -1;
@@ -967,13 +1035,14 @@
     const enc = encodeURIComponent(q);
     // Two passes at once: the fast pass paints almost immediately; the full pass
     // (more sources, resolved links, images) quietly upgrades the board when ready.
-    const fastP = getJson('/news?q=' + enc + '&days=' + days + '&fast=1');
-    const fullP = getJson('/news?q=' + enc + '&days=' + days);
+    const lg = '&lang=' + window.QI18N.get();
+    const fastP = getJson('/news?q=' + enc + '&days=' + days + '&fast=1' + lg);
+    const fullP = getJson('/news?q=' + enc + '&days=' + days + lg);
     fastP.then(d=> consider(d, true));
     consider(await fullP, false);
     if(!shown) consider(await fastP, true);          // full failed/empty — fall back to fast
     if(reqId === lensReq && !shown){
-      $('lensCount').textContent = 'No reports found — try different terms or check your connection';
+      $('lensCount').textContent = T('lens.notfound');
     }
   }
 
@@ -1001,11 +1070,13 @@
     }
     return esc(t);                           // already short — show as-is
   }
+  // Translate a board category label (sources/unknown labels fall through to raw).
+  function catLabel(l){ if(!l) return l; var k='cat.'+l, v=window.QI18N.t(k); return v===k ? l : v; }
   function storyCard(x, label, meta){
     const sec = document.createElement('div'); sec.className = 'bsec';
     const tz = teaser(x.summary);
     sec.innerHTML =
-      (label ? '<div class="blabel">◈ ' + esc(label) + '</div>' : '') +
+      (label ? '<div class="blabel">◈ ' + esc(catLabel(label)) + '</div>' : '') +
       (x.image ? '<div class="bthumb"><img src="'+esc(x.image)+'" loading="lazy" onerror="var p=this.closest(\'.bthumb\'); if(p) p.style.display=\'none\';"></div>' : '') +
       '<div class="bhead">'+esc(x.title||'')+'</div>' +
       (tz ? '<div class="bsum">'+tz+'</div>' : '') +
@@ -1086,13 +1157,13 @@
     if(artEl) return artEl;
     artEl=document.createElement('div'); artEl.id='qart';
     artEl.innerHTML =
-      '<div class="qartbar"><button class="qartback" aria-label="Back">‹ Back</button>'
-      +'<button class="qarttrack" style="display:none">★ Track as Priority</button></div>'
+      '<div class="qartbar"><button class="qartback" aria-label="Back">‹ '+T('art.back')+'</button>'
+      +'<button class="qarttrack" style="display:none">★ '+T('art.track')+'</button></div>'
       +'<div class="qartscroll"><div class="qartinner">'
       +'<div class="qarthero"></div><div class="qartlabel"></div><h1 class="qarttitle"></h1>'
       +'<div class="qartmeta"></div>'
-      +'<div class="qarttabs"><button class="qtab active" data-t="summary">Summary</button>'
-      +'<button class="qtab" data-t="sources">Sources</button></div>'
+      +'<div class="qarttabs"><button class="qtab active" data-t="summary">'+T('art.summary')+'</button>'
+      +'<button class="qtab" data-t="sources">'+T('art.sources')+'</button></div>'
       +'<div class="qartbody"></div></div></div>';
     document.body.appendChild(artEl);
     artEl.querySelector('.qartback').onclick=closeArticle;
@@ -1278,7 +1349,7 @@
     const ordered = withRumble(personalizeSections(lastBrief));
     renderBoardSections(ordered, homeRendered < 0);   // animate only on the very first paint
     homeRendered = ordered.length;
-    setStatus('Standing by');
+    setStatus(T('status.standby'));
     try{ if(window.QP && QP.isMember && QP.isMember() && QP.profile){ addMemberLocal(); } }catch(e){}
   }
   async function loadHome(force){
@@ -1287,12 +1358,12 @@
     if(lastBrief.length && !force){ paintBrief(); return; }
     // Coalesce concurrent callers onto one in-flight /brief request (no triple fetch).
     if(briefInFlight){ try{ await briefInFlight; }catch(e){} if(lastBrief.length) paintBrief(); return; }
-    briefInFlight = fetch('/brief', {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+    briefInFlight = fetch('/brief?lang='+window.QI18N.get(), {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
     let d=null; try{ d = await briefInFlight; }catch(e){} finally { briefInFlight = null; }
     if(d && Array.isArray(d.rumble)) lastRumble = d.rumble;   // folded into the board on paint (varying top-5 slot)
     const sections = (d && d.sections) || [];
     if(!sections.length){
-      if(homeRendered < 0) setStatus('Assembling today’s brief…');
+      if(homeRendered < 0) setStatus(T('status.assembling'));
       if(boardRetries < 8){ boardRetries++; setTimeout(()=>loadHome(true), 4000); }
       return;
     }
@@ -1302,12 +1373,12 @@
   async function addMemberLocal(){
     const p = (window.QP && QP.profile) || {};
     const want = [];
-    if(p.city) want.push({label:'Local · '+p.city, q:p.city});
-    if(p.country) want.push({label:'National', q:p.country+' national news'});
+    if(p.city) want.push({label:T('cat.Local')+' · '+p.city, q:p.city});
+    if(p.country) want.push({label:T('cat.National'), q:p.country+' national news'});
     if(!want.length) return;
     const got = (await Promise.all(want.map(async w=>{
       try{
-        const d = await fetch('/news?q='+encodeURIComponent(w.q)+'&days=3&fast=1', {cache:'no-store'}).then(r=>r.json());
+        const d = await fetch('/news?q='+encodeURIComponent(w.q)+'&days=3&fast=1&lang='+window.QI18N.get(), {cache:'no-store'}).then(r=>r.json());
         const a = (d.articles||[]).find(x=>x.image) || (d.articles||[])[0];
         return a ? {label:w.label, title:a.title, url:a.url, image:a.image, source:a.source, time:a.time,
                     summary:a.summary||a.snippet||a.desc||''} : null;
@@ -1452,6 +1523,48 @@
   }
   $('sendBtn').onclick = ()=>{ handleInput(textIn.value); textIn.value=''; };
   textIn.addEventListener('keydown', e=>{ if(e.key==='Enter'){ handleInput(textIn.value); textIn.value=''; }});
+
+  // ---------- i18n: static chrome + language switcher ----------
+  function applyChrome(){
+    const tg=$('tagline'); if(tg) tg.textContent = T('tagline');
+    if(textIn) textIn.placeholder = T('placeholder');
+    const sb=$('sendBtn'); if(sb) sb.textContent = T('send');
+    const lt=$('lensTitle'); if(lt && !/—/.test(lt.textContent)) lt.textContent = T('lens.title');
+    const lc=$('lensClose'); if(lc) lc.textContent = '✕ ' + T('lens.close');
+    if(statusEl && !document.body.classList.contains('listening') && !busy) setStatus(T('status.standby'));
+    try{ brainState(); }catch(e){}
+  }
+  function buildLangSwitcher(){
+    const host = $('brainState') && $('brainState').parentNode; if(!host || $('langBtn')) return;
+    const btn=document.createElement('button'); btn.id='langBtn'; btn.title=T('lang.title');
+    btn.textContent='🌐 '+window.QI18N.get().toUpperCase();
+    const menu=document.createElement('div'); menu.id='langMenu';
+    menu.style.cssText='position:absolute;display:none;z-index:70;background:rgba(20,15,10,.97);border:1px solid rgba(217,128,38,.45);border-radius:10px;padding:6px;min-width:150px;box-shadow:0 8px 24px rgba(0,0,0,.5);';
+    function paint(){
+      menu.innerHTML='';
+      window.QI18N.supported().forEach(function(l){
+        const it=document.createElement('button');
+        it.textContent=window.QI18N.native(l); it.setAttribute('data-l', l);
+        const cur = l===window.QI18N.get();
+        it.style.cssText='display:block;width:100%;text-align:start;background:none;border:0;color:'+(cur?'#ffce9a':'#e7d3c0')+';font:'+(cur?'600 ':'')+'14px Arial,sans-serif;padding:8px 10px;border-radius:7px;cursor:pointer;';
+        it.onclick=function(){ menu.style.display='none'; window.QI18N.set(l); };
+        menu.appendChild(it);
+      });
+    }
+    btn.onclick=function(e){ e.stopPropagation(); paint();
+      const open = menu.style.display==='block'; menu.style.display = open?'none':'block';
+      if(!open){ const r=btn.getBoundingClientRect(); menu.style.top=(r.bottom+6)+'px'; menu.style.right=(window.innerWidth-r.right)+'px'; } };
+    document.addEventListener('click', function(){ menu.style.display='none'; });
+    host.insertBefore(btn, $('briteBtn'));
+    document.body.appendChild(menu);
+  }
+  document.addEventListener('q:lang', function(){
+    const lb=$('langBtn'); if(lb) lb.textContent='🌐 '+window.QI18N.get().toUpperCase();
+    applyChrome();
+    try{ loadHome(true); }catch(e){}     // re-fetch the board in the new language
+  });
+  applyChrome();
+  buildLangSwitcher();
 
   syncUI();
   checkEleven();
@@ -2214,6 +2327,14 @@
       QP.profile = data || null;
       // normalise any legacy interest labels (e.g. "Pop Culture") to the new taxonomy
       if(QP.profile && QP.profile.interests && QP.migrateInterests) QP.profile.interests = QP.migrateInterests(QP.profile.interests);
+      // Apply the saved profile language only if the user hasn't made a local choice
+      // (a manual switch always wins and is remembered in localStorage).
+      try{
+        if(QP.profile && QP.profile.language && !localStorage.getItem('q_lang')
+           && window.QI18N && window.QI18N.supported().indexOf(QP.profile.language) >= 0){
+          window.QI18N.set(QP.profile.language);
+        }
+      }catch(e){}
     }catch(e){ QP.profile=null; }
   }
   QP.loadProfile=loadProfile;
@@ -2808,10 +2929,17 @@
   // ---- tab bar ----
   let tab='brief';
   const bar=document.createElement('div'); bar.id='tabbar';
-  bar.innerHTML=
-    '<button class="tab" data-tab="brief">'+I.brief+'<span>News Brief</span></button>'
-    +'<button class="tab" data-tab="priority">'+I.priority+'<span>Priority</span><i class="tabdot"></i></button>'
-    +'<button class="tab" data-tab="profile">'+I.profile+'<span>Profile</span></button>';
+  function navBar(){
+    return '<button class="tab" data-tab="brief">'+I.brief+'<span>'+window.QI18N.t('nav.brief')+'</span></button>'
+      +'<button class="tab" data-tab="priority">'+I.priority+'<span>'+window.QI18N.t('nav.priority')+'</span><i class="tabdot"></i></button>'
+      +'<button class="tab" data-tab="profile">'+I.profile+'<span>'+window.QI18N.t('nav.profile')+'</span></button>';
+  }
+  bar.innerHTML = navBar();
+  document.addEventListener('q:lang', function(){
+    bar.innerHTML = navBar();
+    bar.querySelectorAll('.tab').forEach(b=> b.onclick=()=>setTab(b.getAttribute('data-tab')) );
+    setActive(tab);
+  });
   // dock the pill + orb together so the whole assembly is centred (pill sits just
   // left of true centre, orb to its right) — symmetric rather than shifted right.
   const dock=document.createElement('div'); dock.id='navdock';
