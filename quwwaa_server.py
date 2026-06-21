@@ -1229,9 +1229,17 @@ PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS
     "Refer to yourself as QUWWAA. Address the user as 'sir'. Keep replies conversational and spoken-word - "
     "usually 2 to 4 sentences. When the user asks about a news story or current event, deliver a vivid, "
     "substantive reporter's brief: what happened, who is involved, and why it matters, the way a sharp "
-    "broadcast anchor would say it aloud. Never use markdown, lists, or emoji. Context: Mike "
-    "runs Daily Rumble, a Substack by Quwwaa LLC covering US politics and the Iran/Israel/Lebanon/Palestine "
-    "region, sponsored by Zaytuna Mobile. You do not answer news questions from memory and you have no general "
+    "broadcast anchor would say it aloud. Never use markdown, lists, or emoji. "
+    "You are equally knowledgeable and articulate across EVERY category and subcategory a QUWWAA user can follow - "
+    "US and world politics, the Middle East, business and markets, technology, AI, science, health and medicine, "
+    "sports, culture and entertainment, climate, nature and disasters, and more. You are never 'only' for any one "
+    "subject. Never tell the user a topic is outside your scope, that you are 'programmed only' for certain "
+    "subjects, or that you cannot help with a category; for ANY topic - science, sports, tech, markets, health, "
+    "culture, anything - give your brief spoken take and route it to the News Lens. Only state the time of day "
+    "using the CURRENT LOCAL TIME provided in context; if none is provided, do not guess - greet neutrally "
+    "(e.g. 'Hello, sir'). (Background: Mike also publishes Daily Rumble, a Substack by Quwwaa LLC on US politics "
+    "and the Middle East, sponsored by Zaytuna Mobile - this is his own publication, NOT a limit on the topics "
+    "you cover.) You do not answer news questions from memory and you have no general "
     "web-search tool; your live, authoritative source for any current event, story, or coverage is the on-screen "
     "News Lens described below - always route news there. "
     "For private accounts (Instagram analytics, email, documents) you have no access; advise the user to ask "
@@ -2803,14 +2811,21 @@ class Handler(SimpleHTTPRequestHandler):
             if not msgs:
                 self._send_json({'error': 'empty', 'reply': 'I received an empty transmission, sir.'}, 400); return
             extra = ''
+            ct = (data.get('clientTime') or '').strip()[:80]
+            tz = (data.get('tz') or '').strip()[:60]
+            if ct:
+                extra += (" CURRENT LOCAL TIME for the user: %s%s. Use this for any greeting or time reference - "
+                          "choose good morning/afternoon/evening from it. Never assume the time of day from anything else."
+                          % (ct, (' (%s)' % tz) if tz else ''))
             if member:
                 name = member.get('display_name') or ''
                 style = member.get('address_style') or 'name'
                 ints = ', '.join(member.get('interests') or [])
                 addr = name if (style == 'name' and name) else ('madam' if style == 'madam' else 'sir')
-                extra = (" MEMBER CONTEXT: You are speaking with a QUWWAA member. Address them as '%s'." % addr)
+                extra += (" MEMBER CONTEXT: You are speaking with a QUWWAA member. Address them as '%s'." % addr)
                 if ints:
-                    extra += " They follow these interests: %s. Weight your awareness and suggestions toward them when relevant." % ints
+                    extra += (" They follow these interests: %s. Let these WEIGHT your suggestions, but never narrow what "
+                              "you will discuss - help with any topic they raise." % ints)
             if data.get('stream'):                       # stream tokens for a snappy butler
                 # HTTP/1.1 chunked so the proxy forwards each token immediately
                 # (a plain HTTP/1.0 body gets buffered until close → no streaming).
