@@ -333,7 +333,6 @@
     H+='</div>';
     app.innerHTML=H;
     $('#reload').onclick=function(){ refresh(true); };
-    $('#brief').onclick=briefMe;
     var add=$('#addEvent'); if(add) add.onclick=function(){ openSheet('create'); };
     Array.prototype.forEach.call(document.querySelectorAll('.tq button[data-id]'), function(b){
       b.onclick=function(){ var ev=(agenda.events||[]).filter(function(e){ return e.id===b.getAttribute('data-id'); })[0]; if(ev&&!ev.all_day) openSheet('move',ev); };
