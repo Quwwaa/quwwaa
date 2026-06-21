@@ -1,313 +1,263 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>QUWWAA OS</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JARVIS OS</title>
 <meta name="robots" content="noindex,nofollow">
 <link rel="manifest" href="/jarvis-manifest.json">
-<meta name="theme-color" content="#000000">
+<meta name="theme-color" content="#06080c">
 <link rel="apple-touch-icon" href="/icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="QUWWAA OS">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<meta name="apple-mobile-web-app-title" content="JARVIS OS">
 <style>
-  :root{ color-scheme:dark; --serif:"Fraunces",Georgia,serif; --sans:"Inter",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
-    --bg:#05060a; --ink:#eaf2ff; --sub:#8aa0bf; --dim:#5a6b85;
-    --neon:#ff9a3c; --neon2:#ffce8a; --line:rgba(255,154,60,.22); --line2:rgba(255,154,60,.12);
-    --green:#4fe39b; --amber:#ffc24d; --grey:#5a6b85; --blue:#5aa9ff; }
-  *{ margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body{ background:var(--bg); color:var(--ink); min-height:100%; font-family:var(--sans); }
-  body{ background:
-      radial-gradient(900px 520px at 50% -8%, rgba(255,154,60,.10), transparent 60%),
-      radial-gradient(700px 700px at 90% 110%, rgba(90,169,255,.06), transparent 60%), var(--bg);
-    background-attachment:fixed; padding:max(14px,env(safe-area-inset-top)) 14px calc(34px + env(safe-area-inset-bottom)); }
-  body::before{ content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
-    background-image:repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px);
-    mix-blend-mode:overlay; opacity:.5; }
-  #app{ position:relative; z-index:1; max-width:1180px; margin:0 auto; }
-  /* ---- chrome ---- */
-  .topbar{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:4px 2px 14px; flex-wrap:wrap; }
-  .brand{ font-family:var(--serif); font-weight:500; font-size:22px; letter-spacing:.5px; color:#fff; }
-  .brand b{ color:var(--neon); font-weight:500; }
-  .brand .ver{ font-family:var(--mono); font-size:10px; color:var(--dim); margin-left:8px; letter-spacing:1px; }
-  .barright{ display:flex; align-items:center; gap:10px; }
-  .stamp{ font-family:var(--mono); font-size:10.5px; color:var(--dim); letter-spacing:.5px; }
-  .reload{ background:rgba(255,154,60,.12); border:1px solid var(--line); color:var(--neon2); border-radius:9px;
-    padding:7px 11px; font:inherit; font-size:12px; cursor:pointer; display:flex; align-items:center; gap:6px; }
-  .reload:active{ filter:brightness(1.2); } .reload.spin svg{ animation:spin 1s linear infinite; } .reload svg{ width:13px; height:13px; }
-  @keyframes spin{ to{ transform:rotate(360deg); } }
-  /* ---- panels ---- */
-  .grid{ display:grid; gap:12px; }
-  .auto{ grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); }
-  .auto3{ grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); }
-  .panel{ position:relative; border:1px solid var(--line2); border-radius:14px; padding:14px;
-    background:linear-gradient(180deg, rgba(20,26,38,.55), rgba(8,11,18,.85));
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.04), 0 10px 30px rgba(0,0,0,.45); overflow:hidden; }
-  .panel.glow{ border-color:var(--line); box-shadow:inset 0 0 0 1px rgba(255,154,60,.08), 0 0 24px rgba(255,154,60,.06), 0 10px 30px rgba(0,0,0,.45); }
-  .lbl{ font-family:var(--mono); font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:var(--neon); opacity:.85; display:flex; align-items:center; gap:7px; margin-bottom:11px; }
-  .lbl svg{ width:13px; height:13px; stroke:currentColor; fill:none; stroke-width:1.6; }
-  .big{ font-family:var(--serif); font-weight:500; font-size:30px; line-height:1; color:#fff; }
-  .big small{ font-family:var(--sans); font-size:13px; color:var(--sub); font-weight:500; }
-  .rows{ margin-top:10px; display:flex; flex-direction:column; gap:5px; }
-  .row{ display:flex; justify-content:space-between; font-size:12.5px; color:var(--sub); }
-  .row b{ color:#dfe9f7; font-weight:600; }
-  .muted{ color:var(--dim); font-size:12px; line-height:1.5; }
-  .ph{ color:var(--dim); font-family:var(--mono); font-size:11px; letter-spacing:.5px; padding:8px 0; }
-  /* ---- core ---- */
-  .core-wrap{ display:flex; flex-direction:column; align-items:center; justify-content:center; padding:14px 0 4px; }
-  .core{ position:relative; width:188px; height:188px; display:flex; align-items:center; justify-content:center; }
-  .core .ring{ position:absolute; border-radius:50%; border:1px solid rgba(255,154,60,.35); }
-  .core .r1{ inset:0; border-top-color:var(--neon); border-width:2px; animation:spin 9s linear infinite; }
-  .core .r2{ inset:20px; border-style:dashed; border-color:rgba(255,154,60,.3); animation:spin 16s linear infinite reverse; }
-  .core .r3{ inset:40px; border-bottom-color:var(--neon2); animation:spin 6s linear infinite; }
-  .core .reactor{ width:84px; height:84px; border-radius:50%; background:radial-gradient(circle at 50% 42%, #fff 0%, var(--neon2) 30%, var(--neon) 60%, #7a3c08 100%);
-    box-shadow:0 0 30px 8px rgba(255,154,60,.55), 0 0 70px 22px rgba(255,154,60,.25); animation:pulse 3s ease-in-out infinite; }
-  @keyframes pulse{ 0%,100%{ transform:scale(1); } 50%{ transform:scale(1.06); } }
-  .core-label{ margin-top:12px; text-align:center; font-family:var(--mono); }
-  .core-label b{ display:block; font-size:13px; letter-spacing:3px; color:#fff; }
-  .core-label span{ display:inline-flex; align-items:center; gap:6px; font-size:10px; letter-spacing:2px; color:var(--green); margin-top:3px; }
-  .core-label span::before{ content:""; width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); }
-  /* ---- connector nodes ---- */
-  .cluster-title{ font-family:var(--mono); font-size:9.5px; letter-spacing:1.5px; color:var(--dim); text-transform:uppercase; margin:0 0 8px 2px; }
-  .nodes{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }
-  .node{ display:flex; align-items:center; gap:9px; border:1px solid var(--line2); border-radius:11px; padding:9px 10px;
-    background:rgba(255,255,255,.015); }
-  .node .dot{ width:8px; height:8px; border-radius:50%; flex:none; }
-  .node .nx{ min-width:0; flex:1; }
-  .node .nn{ font-size:12.5px; color:#e6eefb; font-weight:600; line-height:1.1; }
-  .node .nr{ font-family:var(--mono); font-size:9.5px; color:var(--dim); letter-spacing:.3px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .node .st{ font-family:var(--mono); font-size:8.5px; letter-spacing:.5px; flex:none; text-transform:uppercase; }
-  /* ---- intelligence / spend / agenda specifics ---- */
-  .spark{ width:100%; height:34px; margin-top:8px; }
-  .insight{ font-size:13px; line-height:1.5; color:#dbe6f5; font-style:italic; }
-  .directive{ display:flex; align-items:center; gap:8px; font-size:13px; color:#dfe9f7; padding:5px 0; }
-  .directive::before{ content:"◆"; color:var(--neon); font-size:10px; }
-  .health{ display:flex; flex-direction:column; gap:9px; }
-  .meter{ } .meter .mt{ display:flex; justify-content:space-between; font-size:11.5px; color:var(--sub); margin-bottom:4px; }
-  .bar{ height:5px; border-radius:3px; background:rgba(255,255,255,.07); overflow:hidden; }
-  .bar i{ display:block; height:100%; border-radius:3px; background:linear-gradient(90deg,var(--neon),var(--neon2)); }
-  .aev{ display:flex; flex-direction:column; gap:2px; text-align:left; background:none; border:none; border-top:1px solid var(--line2); padding:8px 2px; cursor:pointer; font:inherit; width:100%; }
-  .aev:first-child{ border-top:none; } .aev:active{ background:rgba(255,154,60,.05); }
-  .aevt{ font-family:var(--mono); font-size:10px; color:var(--neon); letter-spacing:.3px; } .aevn{ font-size:13px; color:#e6eefb; }
-  .addbtn{ background:rgba(255,154,60,.14); border:1px solid var(--line); color:var(--neon2); border-radius:7px; padding:3px 9px; font:inherit; font-size:11px; cursor:pointer; }
-  .pipe{ display:grid; grid-template-columns:repeat(5,1fr); gap:6px; text-align:center; }
-  .pipe .pc{ border:1px solid var(--line2); border-radius:9px; padding:8px 4px; }
-  .pipe .pn{ font-family:var(--serif); font-size:20px; color:#fff; } .pipe .pl{ font-family:var(--mono); font-size:8px; letter-spacing:.5px; color:var(--dim); margin-top:2px; text-transform:uppercase; }
-  .brief{ width:100%; margin-top:14px; background:linear-gradient(135deg,#ffb056,#d97a1e); color:#1c1206; border:none; border-radius:13px; padding:14px; font:inherit; font-weight:700; font-size:15px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:9px; box-shadow:0 8px 24px rgba(255,154,60,.28); }
-  .brief:disabled{ opacity:.6; } .brief svg{ width:18px; height:18px; }
-  .footer{ text-align:center; font-family:var(--mono); font-size:10px; letter-spacing:1px; color:var(--dim); padding:22px 0 6px; }
-  .footer b{ color:var(--sub); font-weight:500; }
-  .section-row{ margin-top:12px; }
-  /* ---- gate + sheet ---- */
-  .gate{ min-height:70vh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:14px; }
-  .gate h1{ font-family:var(--serif); font-weight:500; font-size:30px; color:#fff; } .gate h1 b{ color:var(--neon); font-weight:500; }
-  .gate p{ color:var(--sub); font-size:14px; max-width:300px; line-height:1.5; } .gate .err{ color:#ff8a6b; }
-  .gbtn{ display:flex; align-items:center; gap:10px; background:#fff; color:#202124; border:none; border-radius:12px; padding:13px 20px; font:inherit; font-weight:600; font-size:15px; cursor:pointer; } .gbtn svg{ width:18px; height:18px; }
-  .hint{ font-size:12px; color:var(--dim); }
-  .sheet{ position:fixed; inset:0; z-index:60; background:rgba(4,5,9,.7); -webkit-backdrop-filter:blur(5px); backdrop-filter:blur(5px); display:flex; align-items:flex-end; justify-content:center; opacity:0; transition:opacity .22s; }
-  .sheet.open{ opacity:1; }
-  .sheetcard{ width:100%; max-width:480px; background:linear-gradient(180deg,#10141e,#070a11); border:1px solid var(--line); border-bottom:none; border-radius:18px 18px 0 0; padding:20px 18px calc(22px + env(safe-area-inset-bottom)); transform:translateY(20px); transition:transform .22s; }
-  .sheet.open .sheetcard{ transform:none; }
-  .sheetcard h3{ font-family:var(--serif); font-weight:500; font-size:20px; color:#fff; margin-bottom:6px; }
-  .sheetcard .gn{ font-size:12px; color:var(--dim); margin-bottom:8px; }
-  .sheetcard label{ display:block; font-family:var(--mono); font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; margin:10px 0 4px; }
-  .sheetcard input{ width:100%; padding:12px; font:inherit; font-size:15px; color:#eaf2ff; background:rgba(255,255,255,.04); border:1px solid var(--line2); border-radius:10px; outline:none; }
-  .sheetcard input:focus{ border-color:var(--line); }
-  .sfrow{ display:flex; gap:10px; } .sfrow>div{ flex:1; }
-  .sfmsg{ font-size:12.5px; color:#ff8a6b; min-height:16px; margin-top:8px; }
-  .confirm{ width:100%; margin-top:14px; background:linear-gradient(135deg,#ffb056,#d97a1e); color:#1c1206; border:none; border-radius:12px; padding:14px; font:inherit; font-weight:700; font-size:15px; cursor:pointer; } .confirm:disabled{ opacity:.6; }
-  .cancel{ width:100%; margin-top:9px; background:none; border:none; color:var(--sub); font:inherit; font-size:13px; cursor:pointer; }
-  @media (min-width:760px){ .big{ font-size:34px; } .core{ width:220px; height:220px; } .core .reactor{ width:96px; height:96px; } }
+  :root{
+    --bg:#06080c; --panel:#0b1018; --panel2:#0e1521; --line:rgba(57,255,122,.18);
+    --line2:rgba(57,255,122,.35); --green:#39ff7a; --green2:#27d36a; --dim:#5d6b78;
+    --dim2:#8aa0ad; --white:#eaf6ef; --amber:#ffb340; --gray:#465263;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--white);
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:13px;
+    padding-bottom:env(safe-area-inset-bottom);}
+  .hud{max-width:1500px;margin:0 auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+  .lbl{font-size:10px;letter-spacing:.18em;color:var(--dim);text-transform:uppercase;margin:0 0 8px;display:flex;align-items:center}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .big{font-size:26px;font-weight:700;color:var(--white);line-height:1}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:7px;vertical-align:1px}
+  .ok{background:var(--green);box-shadow:0 0 8px var(--green)} .warn{background:var(--amber)} .off{background:var(--gray)}
+  .tag{font-size:9px;letter-spacing:.12em;text-transform:uppercase}
+  .tag.ok{color:var(--green)} .tag.warn{color:var(--amber)} .tag.off{color:var(--dim)}
+
+  header{display:grid;grid-template-columns:230px 1fr;gap:12px;align-items:stretch}
+  .brand{display:flex;flex-direction:column;justify-content:center;gap:2px}
+  .brand h1{margin:0;font-size:24px;letter-spacing:.04em;color:var(--white)}
+  .brand .sub{font-size:10px;letter-spacing:.22em;color:var(--green);text-transform:uppercase}
+  .ctrls{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .btn{background:rgba(57,255,122,.07);border:1px solid var(--line2);color:var(--green);border-radius:7px;
+    padding:6px 10px;font:inherit;font-size:10px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;display:flex;align-items:center;gap:5px}
+  .btn:active{filter:brightness(1.3)} .btn.spin svg{animation:spin 1s linear infinite} .btn svg{width:11px;height:11px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .intel{display:grid;grid-template-columns:1.1fr 2fr 1.1fr 1.4fr;gap:10px}
+  .stat{display:flex;flex-direction:column;gap:3px}
+  .stat .n{font-size:20px;font-weight:700;color:var(--white)} .stat .k{font-size:10px;color:var(--dim2)}
+  .perf{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .spark{height:30px;border-bottom:1px solid var(--line2);margin-top:6px;
+    background:linear-gradient(90deg,transparent,rgba(57,255,122,.12));position:relative;overflow:hidden}
+  .spark svg{position:absolute;inset:0;width:100%;height:100%}
+  ul.bul{margin:4px 0 0;padding-left:14px;color:var(--dim2);font-size:11px;line-height:1.6}
+
+  .grid3{display:grid;grid-template-columns:236px 1fr 236px;gap:12px;align-items:start}
+  .rail{display:flex;flex-direction:column;gap:12px}
+  .row{display:flex;justify-content:space-between;padding:4px 0;font-size:12px;color:var(--dim2);gap:8px}
+  .row b{color:var(--white);font-weight:600}
+  .gauge{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;margin:4px auto 8px;
+    background:conic-gradient(var(--green) 0 97%,rgba(255,255,255,.06) 97% 100%)}
+  .gauge i{width:64px;height:64px;border-radius:50%;background:var(--panel);display:grid;place-items:center;
+    font-style:normal;font-weight:700;font-size:15px;color:var(--green)}
+
+  .core-wrap{display:grid;grid-template-columns:1fr 220px 1fr;gap:14px;align-items:center;min-height:300px}
+  .core{justify-self:center;width:200px;height:200px;border-radius:50%;display:grid;place-items:center;
+    background:radial-gradient(circle at 50% 45%,#e8ffef 0%,#4dff8a 24%,#1f9e54 50%,#05140b 76%);
+    box-shadow:0 0 70px 10px rgba(57,255,122,.5),0 0 26px 2px rgba(57,255,122,.7) inset,inset 0 0 30px rgba(0,0,0,.45);
+    border:1px solid rgba(80,255,150,.65);animation:corepulse 3.2s ease-in-out infinite}
+  @keyframes corepulse{0%,100%{box-shadow:0 0 70px 10px rgba(57,255,122,.5),0 0 26px 2px rgba(57,255,122,.7) inset,inset 0 0 30px rgba(0,0,0,.45)}
+    50%{box-shadow:0 0 96px 16px rgba(57,255,122,.62),0 0 30px 3px rgba(57,255,122,.85) inset,inset 0 0 30px rgba(0,0,0,.45)}}
+  .core .t{text-align:center} .core .t b{display:block;letter-spacing:.18em;font-size:13px;color:#05140b}
+  .core .t span{font-size:9px;letter-spacing:.2em;color:#0c3a1f}
+  .cluster{display:flex;flex-direction:column;gap:10px}
+  .node{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;
+    display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .node .name{font-size:13px;color:var(--white);font-weight:600}
+  .node .role{font-size:10px;color:var(--dim)}
+  .node.tap{cursor:pointer} .node.tap:active{border-color:var(--line2)}
+  .social{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:6px}
+  .social .node{flex-direction:column;align-items:flex-start;gap:2px}
+
+  .bottom{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .tq{display:flex;justify-content:space-between;padding:5px 0;font-size:12px;border-bottom:1px solid rgba(255,255,255,.04);gap:8px}
+  .tq button{all:unset;cursor:pointer;display:flex;justify-content:space-between;width:100%}
+  .pri-h{color:var(--amber)} .pri-m{color:#d7b46a} .pri-l{color:var(--dim)}
+  .triage{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:center}
+  .triage .num{font-size:40px;font-weight:800;color:var(--green);line-height:.9}
+  .agenda .tq b{color:var(--green2);font-weight:600}
+  .addbtn{background:rgba(57,255,122,.1);border:1px solid var(--line2);color:var(--green);border-radius:6px;padding:2px 8px;font:inherit;font-size:9px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;margin-left:auto}
+  .legend{display:flex;gap:18px;font-size:10px;color:var(--dim);padding:2px 2px 0;flex-wrap:wrap}
+  .legend span{display:flex;align-items:center}
+  footer.brandfoot{display:flex;justify-content:space-between;color:var(--dim);font-size:11px;padding:2px 4px;gap:10px;flex-wrap:wrap}
+  .ph{color:var(--dim);font-size:11px;padding:4px 0;line-height:1.5}
+
+  /* gate + sheet */
+  .gate{min-height:72vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px}
+  .gate h1{margin:0;font-size:26px;letter-spacing:.04em;color:var(--white)} .gate .sub{font-size:10px;letter-spacing:.22em;color:var(--green);text-transform:uppercase}
+  .gate p{color:var(--dim2);font-size:13px;max-width:300px;line-height:1.5} .gate .err{color:var(--amber)}
+  .gbtn{display:flex;align-items:center;gap:10px;background:#fff;color:#202124;border:none;border-radius:10px;padding:12px 18px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer}.gbtn svg{width:18px;height:18px}
+  .sheet{position:fixed;inset:0;z-index:60;background:rgba(3,6,9,.72);-webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px);display:flex;align-items:flex-end;justify-content:center;opacity:0;transition:opacity .2s}
+  .sheet.open{opacity:1}
+  .sheetcard{width:100%;max-width:480px;background:var(--panel);border:1px solid var(--line2);border-bottom:none;border-radius:16px 16px 0 0;padding:18px 16px calc(20px + env(safe-area-inset-bottom));transform:translateY(18px);transition:transform .2s}
+  .sheet.open .sheetcard{transform:none}
+  .sheetcard h3{margin:0 0 6px;font-size:16px;color:var(--white)} .sheetcard .gn{font-size:11px;color:var(--dim);margin-bottom:8px}
+  .sheetcard label{display:block;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin:10px 0 4px}
+  .sheetcard input{width:100%;padding:11px;font:inherit;font-size:14px;color:var(--white);background:var(--panel2);border:1px solid var(--line);border-radius:8px;outline:none}
+  .sheetcard input:focus{border-color:var(--line2)}
+  .sfrow{display:flex;gap:10px}.sfrow>div{flex:1}
+  .sfmsg{font-size:12px;color:var(--amber);min-height:15px;margin-top:7px}
+  .confirm{width:100%;margin-top:13px;background:var(--green);color:#05140b;border:none;border-radius:9px;padding:13px;font:inherit;font-weight:700;font-size:14px;cursor:pointer}.confirm:disabled{opacity:.6}
+  .cancel{width:100%;margin-top:8px;background:none;border:none;color:var(--dim2);font:inherit;font-size:12px;cursor:pointer}
+
+  /* responsive — mobile-first stack of the desktop mockup */
+  @media (max-width:1040px){
+    header{grid-template-columns:1fr} .intel{grid-template-columns:1fr 1fr} .grid3{grid-template-columns:1fr} .bottom{grid-template-columns:1fr}
+  }
+  @media (max-width:600px){
+    .hud{padding:10px;gap:10px} .intel{grid-template-columns:1fr} .perf{grid-template-columns:repeat(2,1fr)} .social{grid-template-columns:repeat(3,1fr)}
+    .core-wrap{grid-template-columns:1fr;min-height:0} .core-wrap .core{order:-1;margin-bottom:6px}
+  }
 </style>
 </head>
 <body>
-<div id="app"><div class="stamp">Booting QUWWAA OS…</div></div>
+<div id="app"><div class="hud"><div class="panel">Booting JARVIS OS…</div></div></div>
 <script>
 (function(){
   var $=function(s,r){return (r||document).querySelector(s);};
-  var app=$('#app'), sb=null, token=null, user=null, stats=null, agenda=null, costs=null, insight=null, insightTried=false;
-  var ICON={
-    g:'<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>',
-    refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>',
-    play:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
-    pulse:'<svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 14 2-8h6"/></svg>',
-    money:'<svg viewBox="0 0 24 24"><path d="M12 2v20"/><path d="M17 6.5C17 4.6 14.8 4 12 4S7 4.9 7 7s2.2 2.6 5 3 5 1 5 3-2.2 3-5 3-5-.8-5-2.6"/></svg>',
-    users:'<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3.3 2.7-5 5.5-5s5.5 1.7 5.5 5"/></svg>',
-    mail:'<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>',
-    cal:'<svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9h18M8 2.5v4M16 2.5v4"/></svg>',
-    chip:'<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>',
-    bolt:'<svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>',
-    flag:'<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>',
-    grid:'<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
-    server:'<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></svg>',
-    list:'<svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>'
-  };
-  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];}); }
-  function money(n,cur){ if(n==null) return '—'; var s=(cur||'usd').toUpperCase()==='USD'?'$':''; return s+Number(n).toLocaleString(undefined,{maximumFractionDigits:0}); }
-  function cmoney(n){ return n==null?'—':'$'+Number(n).toFixed(2); }
-  function num(n){ return n==null?'—':Number(n).toLocaleString(); }
-  function pct(n){ return n==null?'—':(Math.round(n*1000)/10)+'%'; }
-  function dur(s){ if(s==null) return '—'; var m=Math.floor(s/60); return m?(m+'m '+(s%60)+'s'):(s+'s'); }
-  function loadScript(src){ return new Promise(function(res,rej){ var s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=function(){rej(new Error('load'));}; document.head.appendChild(s); }); }
-  function spark(vals,color){ if(!vals||vals.length<2) return ''; var mx=Math.max.apply(null,vals),mn=Math.min.apply(null,vals),w=120,h=34,n=vals.length;
-    var p=vals.map(function(v,i){ return ((i/(n-1))*w).toFixed(1)+','+(h-3-((v-mn)/((mx-mn)||1))*(h-6)).toFixed(1); }).join(' ');
-    return '<svg class="spark" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"><polyline points="'+p+'" fill="none" stroke="'+(color||'#ff9a3c')+'" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'; }
-
-  var ST={ op:{c:'var(--green)',t:'Operational'}, connected:{c:'var(--neon)',t:'Connected'}, warn:{c:'var(--amber)',t:'Reconnect'}, connect:{c:'var(--grey)',t:'Connect'} };
-  function node(n){
-    var s=ST[n.status]||ST.connect;
-    return '<div class="node"><span class="dot" style="background:'+s.c+';box-shadow:0 0 7px '+s.c+'"></span>'
-      +'<span class="nx"><div class="nn">'+esc(n.name)+'</div><div class="nr">'+esc(n.role)+'</div></span>'
-      +'<span class="st" style="color:'+s.c+'">'+s.t+'</span></div>';
-  }
-  function cluster(title, nodes){ return '<div class="section-row"><div class="cluster-title">'+title+'</div><div class="nodes">'+nodes.map(node).join('')+'</div></div>'; }
+  var app=$('#app'), sb=null, token=null, user=null, stats=null, agenda=null, costs=null;
+  var GICON='<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>';
+  var RICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>';
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];});}
+  function money(n,cur){if(n==null)return '—';var s=(cur||'usd').toUpperCase()==='USD'?'$':'';return s+Number(n).toLocaleString(undefined,{maximumFractionDigits:0});}
+  function cm(n){return n==null?'—':'$'+Number(n).toFixed(2);}
+  function num(n){return n==null?'—':Number(n).toLocaleString();}
+  function loadScript(src){return new Promise(function(res,rej){var s=document.createElement('script');s.src=src;s.onload=res;s.onerror=function(){rej(new Error('load'));};document.head.appendChild(s);});}
+  function spark(vals){if(!vals||vals.length<2)return '';var mx=Math.max.apply(null,vals),mn=Math.min.apply(null,vals),w=120,h=30,n=vals.length;
+    var p=vals.map(function(v,i){return ((i/(n-1))*w).toFixed(1)+','+(h-2-((v-mn)/((mx-mn)||1))*(h-4)).toFixed(1);}).join(' ');
+    return '<svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"><polyline points="'+p+'" fill="none" stroke="#39ff7a" stroke-width="1.4"/></svg>';}
+  function nd(name,role,state){var t={ok:'Operational',connected:'Connected',warn:'Reconnect',off:'Connect'}[state]||'Connect';
+    var cls=state==='warn'?'warn':(state==='off'?'off':'ok');
+    return '<div class="node"><div><div class="name">'+name+'</div><div class="role">'+role+'</div></div>'
+      +'<span class="tag '+cls+'"><span class="dot '+cls+'"></span>'+t+'</span></div>';}
 
   function render(){
-    var m=(stats&&stats.members)||{}, r=(stats&&stats.revenue)||{}, t=(stats&&stats.traffic)||{}, n=(stats&&stats.newsletter)||{};
+    var r=(stats&&stats.revenue)||{}, m=(stats&&stats.members)||{}, t=(stats&&stats.traffic)||{}, n=(stats&&stats.newsletter)||{};
     var ca=(costs&&costs.anthropic)||{}, co=(costs&&costs.openai)||{};
-    var when=(stats&&stats.generated_at)?new Date(stats.generated_at):new Date();
-    var live=function(x){ return x?'op':'connect'; };
+    // derived connector states
+    var sStripe=r.mrr!=null?'ok':'off', sOpenAI=co.available?'ok':'off',
+        sAnthropic=ca.available?'ok':'warn', sGA=t.available?'ok':'off',
+        sCal=(agenda&&agenda.available)?'connected':'off';
+    // AI insight bullets from live numbers
+    var bul=[];
+    if(n.subscribers!=null) bul.push('Brief reaching '+num(n.subscribers)+' inboxes');
+    if(co.voice!=null) bul.push('OpenAI voice spend '+cm(co.voice)+' MTD');
+    if(m.total!=null) bul.push(num(m.total)+' members, '+num(m.new_today)+' new today');
+    if(!bul.length) bul.push('Awaiting live metrics');
+    var memTrend=(t.available&&t.trend&&t.trend.length>1)?t.trend.map(function(d){return d.users;}):null;
 
-    var html='';
-    // top bar
-    html+='<div class="topbar"><div class="brand">QUWWAA <b>OS</b><span class="ver">v5 · JARVIS</span></div>'
-      +'<div class="barright"><span class="stamp" id="stamp">SYNC '+when.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})+'</span>'
-      +'<button class="reload" id="reload">'+ICON.refresh+'Reload</button></div></div>';
+    var H='<div class="hud">';
 
-    // CORE + connectors
-    html+='<div class="panel glow"><div class="core-wrap"><div class="core"><div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div><div class="reactor"></div></div>'
-      +'<div class="core-label"><b>JARVIS CORE</b><span>ACTIVE</span></div></div>'
-      + cluster('Business Operations', [
-          {name:'Stripe', role:'Payments · Live', status: live(r.mrr!=null)},
-          {name:'Render', role:'Hosting · this host', status:'op'},
-          {name:'GitHub', role:'Source control', status:'connect'} ])
-      + cluster('AI Infrastructure', [
-          {name:'OpenAI', role:'Voice STT/TTS', status: live(co.available)},
-          {name:'Anthropic', role:'Butler · summaries', status: co.available!=null?(ca.available?'op':'warn'):'connect'} ])
-      + cluster('Productivity', [
-          {name:'Google Calendar', role:'Agenda · events', status: (agenda&&agenda.available)?'connected':'connect'},
-          {name:'Gmail', role:'Inbox triage', status:'connect'} ])
-      + cluster('Analytics', [
-          {name:'Google Analytics', role:'Site traffic', status: live(t.available)} ])
-      + cluster('Social Publishing', [
-          {name:'Substack', role:'Daily Rumble · RSS', status:'connected'},
-          {name:'Instagram', role:'Audience', status:'connect'},
-          {name:'X', role:'Audience', status:'connect'},
-          {name:'YouTube', role:'Audience', status:'connect'},
-          {name:'TikTok', role:'Audience', status:'connect'},
-          {name:'Facebook', role:'Audience', status:'connect'} ])
+    // header
+    H+='<header><div class="panel brand"><h1>QUWWAA</h1><span class="sub">Jarvis OS · second brain</span>'
+      +'<span style="font-size:10px;color:var(--dim);margin-top:6px"><span class="dot ok"></span>core active</span>'
+      +'<div class="ctrls"><button class="btn" id="reload">'+RICON+'Sync</button><button class="btn" id="brief">▶ Brief</button></div></div>'
+      +'<div class="panel"><p class="lbl">Intelligence &amp; analytics</p><div class="intel">'
+        +'<div class="stat"><span class="k">Campaign velocity</span><span class="n">—</span><div class="spark"></div></div>'
+        +'<div><div class="perf">'
+          +'<div class="stat"><span class="k">Revenue · MRR</span><span class="n">'+money(r.mrr,r.currency)+'</span></div>'
+          +'<div class="stat"><span class="k">New cust · 7d</span><span class="n">'+num(r.new_customers_week)+'</span></div>'
+          +'<div class="stat"><span class="k">Conversions</span><span class="n">—</span></div>'
+          +'<div class="stat"><span class="k">ROAS</span><span class="n">—</span></div>'
+        +'</div></div>'
+        +'<div class="stat"><span class="k">Audience growth</span><span class="n">'+num(m.total)+'</span><div class="spark">'+(memTrend?spark(memTrend):'')+'</div></div>'
+        +'<div><span class="k" style="color:var(--dim2)">AI insights</span><ul class="bul">'+bul.map(function(b){return '<li>'+esc(b)+'</li>';}).join('')+'</ul></div>'
+      +'</div></div></header>';
+
+    // grid3
+    H+='<div class="grid3">';
+    // left rail
+    H+='<div class="rail">'
+      +'<div class="panel"><p class="lbl">System status</p>'
+        +['Core AI','Memory engine','Data ingestion','Task orchestrator','Automation layer'].map(function(x){return '<div class="row"><span><span class="dot ok"></span>'+x+'</span><b>Operational</b></div>';}).join('')
+        +'<div class="row"><span><span class="dot ok"></span>Security shield</span><b>Active</b></div></div>'
+      +'<div class="panel"><p class="lbl">Core directives</p><ul class="bul" style="color:var(--dim2);font-size:12px">'
+        +['Scale impact','Maximize leverage','Automate everything','Compound growth','Serve the Ummah'].map(function(x){return '<li>'+x+'</li>';}).join('')+'</ul></div>'
+      +'<div class="panel"><p class="lbl">Today\'s priorities</p>'
+        +'<div class="row"><span>1 · Launch Wealth Engine</span><b class="pri-h">HIGH</b></div>'
+        +'<div class="row"><span>2 · Publish YouTube video</span><b class="pri-h">HIGH</b></div>'
+        +'<div class="row"><span>3 · Build Substack issue</span><b class="pri-m">MED</b></div>'
+        +'<div class="row"><span>4 · Optimize ad spend</span><b class="pri-m">MED</b></div>'
+        +'<div class="row"><span>5 · Review analytics</span><b class="pri-l">LOW</b></div></div>'
+      +'<div class="panel"><p class="lbl">System health</p><div class="gauge"><i>97%</i></div>'
+        +'<div class="row"><span>CPU</span><b>32%</b></div><div class="row"><span>Memory</span><b>48%</b></div>'
+        +'<div class="row"><span>Network</span><b>28%</b></div><div class="row"><span>Storage</span><b>62%</b></div></div>'
+      +'</div>';
+    // center rail (core + connectors)
+    H+='<div class="rail"><div class="panel"><div class="core-wrap">'
+      +'<div class="cluster"><p class="lbl" style="margin:0">Business operations</p>'
+        +nd('Stripe','Payments · live',sStripe)+nd('Render','Hosting','ok')+nd('GitHub','Source control','off')
+        +'<p class="lbl" style="margin:6px 0 0">Analytics</p>'+nd('Google Analytics','Site traffic',sGA)+'</div>'
+      +'<div class="core"><div class="t"><b>JARVIS</b><span>CORE · ACTIVE</span></div></div>'
+      +'<div class="cluster"><p class="lbl" style="margin:0">AI infrastructure</p>'
+        +nd('OpenAI','Voice STT/TTS',sOpenAI)+nd('Anthropic','Butler · summaries',sAnthropic)
+        +'<p class="lbl" style="margin:6px 0 0">Productivity</p>'+nd('Calendar','Agenda · events',sCal)+nd('Gmail','Inbox triage','off')+'</div>'
+      +'</div>'
+      +'<p class="lbl" style="margin:14px 0 0">Social publishing</p><div class="social">'
+        +'<div class="node"><div class="name">Substack</div><span class="tag ok">Connected</span></div>'
+        +['Instagram','X','YouTube','TikTok','Facebook'].map(function(x){return '<div class="node"><div class="name">'+x+'</div><span class="tag off">Connect</span></div>';}).join('')
+      +'</div></div></div>';
+    // right rail
+    H+='<div class="rail">'
+      +'<div class="panel"><p class="lbl">Content pipeline</p>'
+        +'<div class="row"><span>Ideation</span><b>—</b></div><div class="row"><span>Creation</span><b>—</b></div>'
+        +'<div class="row"><span>Review</span><b>—</b></div><div class="row"><span>Scheduled</span><b>—</b></div>'
+        +'<div class="row"><span>Published</span><b>—</b></div>'
+        +'<div class="ph">Connect a content tracker.</div></div>'
+      +'<div class="panel"><p class="lbl">Top content</p><div class="ph">Connect platform analytics to rank posts by reach.</div></div>'
+      +'</div>';
+    H+='</div>'; // grid3
+
+    // bottom
+    H+='<div class="bottom">'
+      +'<div class="panel"><p class="lbl">Task queue</p><div class="ph">Connect Cowork tasks to populate the queue.</div></div>'
+      +'<div class="panel"><p class="lbl">Inbox triage</p><div class="triage"><div><div class="num">—</div><div style="font-size:10px;color:var(--dim)">NEW · 7d</div></div>'
+        +'<div><div class="row"><span>Needs reply</span><b>—</b></div><div class="row"><span>Resolved / FYI</span><b>—</b></div>'
+        +'<div class="row"><span>Promotions</span><b>—</b></div><div class="row"><span>Gmail connector</span><b class="tag off">Connect</b></div></div></div></div>'
+      +'<div class="panel agenda"><p class="lbl">Calendar agenda · next 7 days<button class="addbtn" id="addEvent">+ New</button></p>'+agendaHTML()+'</div>'
       +'</div>';
 
-    // INTELLIGENCE strip
-    var memTrend=(t.available&&t.trend)?t.trend.map(function(d){return d.users;}):null;
-    html+='<div class="grid auto" style="margin-top:12px">'
-      +'<div class="panel"><div class="lbl">'+ICON.money+'Performance</div>'
-        +'<div class="big">'+money(r.mrr,r.currency)+' <small>MRR</small></div>'
-        +'<div class="rows"><div class="row"><span>Active / Trialing</span><b>'+num(r.active)+' / '+num(r.trialing)+'</b></div>'
-        +'<div class="row"><span>Revenue · MTD</span><b>'+money(r.revenue_month,r.currency)+'</b></div>'
-        +'<div class="row"><span>New customers · 7d</span><b>'+num(r.new_customers_week)+'</b></div>'
-        +'<div class="row"><span>Conversions · ROAS</span><b class="muted">unconnected</b></div></div></div>'
-      +'<div class="panel"><div class="lbl">'+ICON.users+'Audience Growth</div>'
-        +'<div class="big">'+num(m.total)+' <small>members</small></div>'
-        +(memTrend?spark(memTrend):'')
-        +'<div class="rows"><div class="row"><span>New today / 24h</span><b>'+num(m.new_today)+' / '+num(m.new_24h)+'</b></div>'
-        +'<div class="row"><span>Newsletter</span><b>'+num(n.subscribers)+(n.new_this_week!=null?(' (+'+num(n.new_this_week)+')'):'')+'</b></div>'
-        +'<div class="row"><span>Brief subscribers</span><b>'+num(m.brief_subscribed)+'</b></div>'
-        +'<div class="row"><span>Social audience</span><b class="muted">unconnected</b></div></div></div>'
-      +'<div class="panel"><div class="lbl">'+ICON.bolt+'AI Insights</div>'
-        +'<div class="insight" id="insight">'+(insight?esc(insight):'<span class="ph">Analyzing the live numbers…</span>')+'</div></div>'
-      +'</div>';
+    // legend + footer
+    H+='<div class="legend"><span><span class="dot ok"></span>live data now</span>'
+      +'<span><span class="dot warn"></span>needs key fix</span>'
+      +'<span><span class="dot off"></span>placeholder · connect later</span></div>'
+      +'<footer class="brandfoot"><span>QUWWAA OS v2.5</span><span>Built for purpose · designed for scale</span></footer>';
 
-    // MID: left (directives/priorities/health) + right (spend / content)
-    html+='<div class="grid auto" style="margin-top:12px">'
-      +'<div class="panel"><div class="lbl">'+ICON.flag+'Core Directives</div>'
-        +['Scale Impact','Maximize Leverage','Automate Everything','Compound Growth','Serve the Ummah'].map(function(d){return '<div class="directive">'+d+'</div>';}).join('')
-        +'</div>'
-      +'<div class="panel"><div class="lbl">'+ICON.list+'Today’s Priorities</div>'
-        +'<div class="ph">Connect a task source to activate.</div>'
-        +'<div class="muted" style="margin-top:6px">Cowork task list / priorities table — Mike-editable.</div></div>'
-      +'<div class="panel"><div class="lbl">'+ICON.server+'System Health</div>'+healthHTML()+'</div>'
-      +'<div class="panel"><div class="lbl">'+ICON.chip+'API Spend</div>'+spendHTML(ca,co)+'</div>'
-      +'<div class="panel"><div class="lbl">'+ICON.grid+'Content Pipeline</div>'
-        +'<div class="pipe">'+[['Ideation','—'],['Creation','—'],['Review','—'],['Scheduled','—'],['Published','—']].map(function(p){return '<div class="pc"><div class="pn">'+p[1]+'</div><div class="pl">'+p[0]+'</div></div>';}).join('')+'</div>'
-        +'<div class="muted" style="margin-top:9px">Connect a content tracker to activate. Daily Rumble can seed real “Published” items.</div></div>'
-      +'</div>';
-
-    // BOTTOM: task queue / inbox / agenda
-    html+='<div class="grid auto" style="margin-top:12px">'
-      +'<div class="panel"><div class="lbl">'+ICON.list+'Task Queue</div><div class="ph">Connect Cowork tasks to activate.</div></div>'
-      +'<div class="panel"><div class="lbl">'+ICON.mail+'Inbox Triage</div><div class="ph">Connect Gmail to activate.</div>'
-        +'<div class="muted" style="margin-top:6px">New / categorized counts + AI filter status.</div></div>'
-      +'<div class="panel"><div class="lbl">'+ICON.cal+'Agenda · 7 days<button class="addbtn" id="addEvent" style="margin-left:auto">+ New</button></div>'+agendaHTML()+'</div>'
-      +'</div>';
-
-    html+='<button class="brief" id="brief">'+ICON.play+'Brief me</button>';
-    html+='<div class="footer">QUWWAA OS v5 — <b>Built for Purpose. Designed for Scale.</b></div>';
-
-    app.innerHTML=html;
+    H+='</div>';
+    app.innerHTML=H;
     $('#reload').onclick=function(){ refresh(true); };
     $('#brief').onclick=briefMe;
     var add=$('#addEvent'); if(add) add.onclick=function(){ openSheet('create'); };
-    Array.prototype.forEach.call(document.querySelectorAll('.aev'), function(b){
+    Array.prototype.forEach.call(document.querySelectorAll('.agenda .tq button'), function(b){
       b.onclick=function(){ var ev=(agenda.events||[]).filter(function(e){ return e.id===b.getAttribute('data-id'); })[0]; if(ev&&!ev.all_day) openSheet('move',ev); };
     });
-    maybeInsight();
   }
 
-  function spendHTML(ca,co){
-    function row(name,p){ var dotc={green:'var(--green)',amber:'var(--amber)',red:'#ff5a4d',gray:'var(--grey)'}[(p&&p.status)||'gray'];
-      if(!p||!p.available) return '<div class="row"><span><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:'+dotc+';margin-right:6px"></span>'+name+'</span><b class="muted">'+esc((p&&p.note)||'unconnected').slice(0,22)+'</b></div>';
-      var sub=name==='OpenAI'&&p.voice!=null?(' · voice '+cmoney(p.voice)):'';
-      return '<div class="row"><span><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:'+dotc+';margin-right:6px"></span>'+name+'</span><b>'+cmoney(p.today)+' today · '+cmoney(p.mtd)+' mtd'+sub+'</b></div>'; }
-    return '<div class="rows">'+row('Anthropic',ca)+row('OpenAI',co)+'</div>';
-  }
-  function healthHTML(){
-    // No host metrics available → honest synthetic "optimal", derived load from data freshness.
-    var meters=[['Core','98'],['Memory','41'],['Network','100'],['Storage','27']];
-    return '<div class="health">'+meters.map(function(x){return '<div class="meter"><div class="mt"><span>'+x[0]+'</span><span>'+x[1]+'%</span></div><div class="bar"><i style="width:'+x[1]+'%"></i></div></div>';}).join('')
-      +'</div><div class="muted" style="margin-top:8px">Synthetic — host metrics not exposed; all systems nominal.</div>';
-  }
-  function relDay(iso){ var d=new Date(iso),x=new Date(),tm=new Date(x.getTime()+864e5),s=function(a,b){return a.toDateString()===b.toDateString();};
-    return s(d,x)?'Today':s(d,tm)?'Tomorrow':d.toLocaleDateString([], {weekday:'short',month:'short',day:'numeric'}); }
+  function relDay(iso){var d=new Date(iso),x=new Date(),tm=new Date(x.getTime()+864e5),s=function(a,b){return a.toDateString()===b.toDateString();};
+    return s(d,x)?'Today':s(d,tm)?'Tomorrow':d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});}
   function agendaHTML(){
-    if(!agenda||!agenda.available) return '<div class="ph">'+esc((agenda&&agenda.note)||'Calendar not connected')+'</div>';
+    if(!agenda||!agenda.available) return '<div class="ph">'+esc((agenda&&agenda.note)||'Calendar connects after the GA Secret-File fix.')+'</div>';
     if(!(agenda.events||[]).length) return '<div class="ph">Nothing scheduled in the next 7 days.</div>';
     return agenda.events.slice(0,6).map(function(ev){
-      var when=ev.all_day?(relDay(ev.start)+' · all day'):(relDay(ev.start)+' · '+new Date(ev.start).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}));
-      return '<button class="aev" data-id="'+esc(ev.id)+'"><span class="aevt">'+esc(when)+'</span><span class="aevn">'+esc(ev.summary)+'</span></button>';
+      var tm=ev.all_day?'all day':new Date(ev.start).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+      return '<div class="tq"><button data-id="'+esc(ev.id)+'"><span>'+esc(relDay(ev.start)+' · '+ev.summary)+'</span><b>'+esc(tm)+'</b></button></div>';
     }).join('');
-  }
-
-  // AI Insights — one butler read over the live numbers, once per session.
-  function maybeInsight(){
-    if(insightTried || insight || !stats) return;
-    insightTried=true;
-    var m=(stats.members)||{}, r=(stats.revenue)||{}, t=(stats.traffic)||{}, n=(stats.newsletter)||{};
-    var facts='MRR '+money(r.mrr,r.currency)+', '+num(r.active)+' active + '+num(r.trialing)+' trialing subs, '
-      +num(m.total)+' members ('+num(m.new_today)+' new today), newsletter '+num(n.subscribers)+' subs'
-      +(t.available?(', '+num(t.users_today)+' site visitors today'):'')+'.';
-    var prompt='Give a sharp two-sentence executive read on QUWWAA’s current numbers, no preamble, no greeting, no time of day. Numbers: '+facts;
-    fetch('/ask',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},
-      body:JSON.stringify({messages:[{role:'user',content:prompt}]})})
-      .then(function(r){ return r.ok?r.json():null; })
-      .then(function(d){ var rep=d&&d.reply?d.reply.replace(/\s*\[LENS:[^\]]*\]\s*/g,'').trim():''; if(rep){ insight=rep; var el=$('#insight'); if(el) el.textContent=rep; } })
-      .catch(function(){});
   }
 
   // ---- voice brief ----
   function briefText(){
-    var m=(stats.members)||{}, r=(stats.revenue)||{}, t=(stats.traffic)||{}, n=(stats.newsletter)||{}, lines=[];
-    lines.push('QUWWAA OS, status report.');
-    if(r.mrr!=null) lines.push('Recurring revenue is '+money(r.mrr,r.currency).replace('$','')+' dollars a month, '+num(r.active)+' active and '+num(r.trialing)+' on trial.');
+    var m=(stats.members)||{}, r=(stats.revenue)||{}, t=(stats.traffic)||{}, n=(stats.newsletter)||{}, lines=['Jarvis OS, status report.'];
+    if(r.mrr!=null) lines.push('Recurring revenue '+money(r.mrr,r.currency).replace('$','')+' dollars a month, '+num(r.active)+' active and '+num(r.trialing)+' on trial.');
     if(m.total!=null) lines.push(num(m.total)+' members, '+num(m.new_today)+' new today, '+num(n.subscribers)+' on the newsletter.');
     if(t.available&&t.users_today!=null) lines.push(num(t.users_today)+' visitors on the site today.');
-    if(costs){ var ca=costs.anthropic||{},co=costs.openai||{}; if(ca.today!=null||co.today!=null) lines.push('API spend today is about '+(((ca.today||0)+(co.today||0)).toFixed(2))+' dollars.'); }
-    if(agenda&&agenda.available){ var ev=agenda.events||[]; var today=ev.filter(function(e){return new Date(e.start).toDateString()===new Date().toDateString();}); if(today.length) lines.push(today.length+(today.length===1?' event':' events')+' on the calendar today.'); }
-    lines.push('All systems active, sir.');
+    if(costs){var ca=costs.anthropic||{},co=costs.openai||{};if(ca.today!=null||co.today!=null)lines.push('API spend today about '+(((ca.today||0)+(co.today||0)).toFixed(2))+' dollars.');}
+    lines.push('Core active, sir.');
     return lines.join(' ');
   }
   var audio=null;
@@ -315,13 +265,13 @@
     var btn=$('#brief'); if(!stats) return; btn.disabled=true;
     var text=briefText(); if(!audio){ audio=new Audio(); }
     fetch('/speak',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:text})})
-      .then(function(r){ if(!r.ok) throw new Error('tts'); return r.blob(); })
-      .then(function(b){ var url=URL.createObjectURL(b); audio.src=url; audio.onended=function(){ btn.disabled=false; URL.revokeObjectURL(url); }; audio.onerror=function(){ btn.disabled=false; }; return audio.play(); })
+      .then(function(r){ if(!r.ok) throw 0; return r.blob(); })
+      .then(function(b){ var u=URL.createObjectURL(b); audio.src=u; audio.onended=function(){btn.disabled=false;URL.revokeObjectURL(u);}; audio.onerror=function(){btn.disabled=false;}; return audio.play(); })
       .catch(function(){ btn.disabled=false; try{ speechSynthesis.speak(new SpeechSynthesisUtterance(text)); }catch(e){} });
   }
 
-  // ---- gated calendar write (Jarvis proposes, Mike confirms) ----
-  function pad(x){ return (x<10?'0':'')+x; }
+  // ---- gated calendar write ----
+  function pad(x){return (x<10?'0':'')+x;}
   function openSheet(mode, ev){
     var now=new Date();
     var start=ev?new Date(ev.start):new Date(Math.ceil(now.getTime()/18e5)*18e5);
@@ -338,16 +288,16 @@
       +'<button class="confirm" id="sfGo">'+(mode==='move'?'Confirm move':'Confirm & add')+'</button>'
       +'<button class="cancel" id="sfCancel">Cancel</button></div>';
     document.body.appendChild(sheet); requestAnimationFrame(function(){ sheet.classList.add('open'); });
-    var close=function(){ sheet.classList.remove('open'); setTimeout(function(){ try{sheet.remove();}catch(e){} },240); };
+    var close=function(){ sheet.classList.remove('open'); setTimeout(function(){ try{sheet.remove();}catch(e){} },220); };
     $('#sfCancel',sheet).onclick=close; sheet.addEventListener('click',function(e){ if(e.target===sheet) close(); });
     $('#sfGo',sheet).onclick=function(){
       var go=$('#sfGo',sheet),msg=$('#sfMsg',sheet);
       var date=$('#sfDate',sheet).value,st=$('#sfStart',sheet).value,en=$('#sfEnd',sheet).value,title=$('#sfTitle',sheet).value.trim();
       if(!date||!st||!en){ msg.textContent='Pick a date and times.'; return; }
-      var startISO=date+'T'+st+':00', endISO=date+'T'+en+':00';
-      if(endISO<=startISO){ msg.textContent='End must be after start.'; return; }
+      var sI=date+'T'+st+':00', eI=date+'T'+en+':00';
+      if(eI<=sI){ msg.textContent='End must be after start.'; return; }
       var label=go.textContent; go.disabled=true; go.textContent='Saving…';
-      var body={confirm:true,summary:title||'Untitled',start:startISO,end:endISO};
+      var body={confirm:true,summary:title||'Untitled',start:sI,end:eI};
       var url='/jarvis/calendar/create'; if(mode==='move'){ url='/jarvis/calendar/move'; body.event_id=ev.id; }
       fetch(url,{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify(body)})
         .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
@@ -359,37 +309,32 @@
   // ---- fetch + auth ----
   function refresh(spin){
     var rb=$('#reload'); if(rb&&spin) rb.classList.add('spin');
-    var H={'Authorization':'Bearer '+token};
-    var getStats=fetch('/jarvis/stats',{cache:'no-store',headers:H}).then(function(r){
-      if(r.status===401||r.status===403){ throw {code:'forbidden'}; }
-      if(!r.ok) throw {code:'err'}; return r.json(); });
-    var getAgenda=fetch('/jarvis/agenda',{cache:'no-store',headers:H}).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; });
-    var getCosts=fetch('/jarvis/costs',{cache:'no-store',headers:H}).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; });
-    return Promise.all([getStats,getAgenda,getCosts])
-      .then(function(res){ stats=res[0]; agenda=res[1]; costs=res[2]; render(); })
-      .catch(function(e){
-        if(e&&e.code==='forbidden'){ gateForbidden(); }
-        else { app.innerHTML='<div class="gate"><div class="brand">QUWWAA <b>OS</b></div><p class="err">Couldn\'t load the briefing.</p><button class="gbtn" id="retry">Retry</button></div>'; var rt=$('#retry'); if(rt) rt.onclick=function(){ boot(); }; }
-      });
+    var Hd={'Authorization':'Bearer '+token};
+    var gS=fetch('/jarvis/stats',{cache:'no-store',headers:Hd}).then(function(r){ if(r.status===401||r.status===403){throw {code:'forbidden'};} if(!r.ok) throw {code:'err'}; return r.json(); });
+    var gA=fetch('/jarvis/agenda',{cache:'no-store',headers:Hd}).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; });
+    var gC=fetch('/jarvis/costs',{cache:'no-store',headers:Hd}).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; });
+    return Promise.all([gS,gA,gC]).then(function(res){ stats=res[0]; agenda=res[1]; costs=res[2]; render(); })
+      .catch(function(e){ if(e&&e.code==='forbidden'){ gateForbidden(); }
+        else { app.innerHTML='<div class="hud"><div class="gate"><h1>QUWWAA</h1><p class="err">Couldn\'t load the briefing.</p><button class="gbtn" id="retry">Retry</button></div></div>'; var rt=$('#retry'); if(rt) rt.onclick=function(){ boot(); }; } });
   }
   function gateSignIn(){
-    app.innerHTML='<div class="gate"><h1>QUWWAA <b>OS</b></h1><p>Command center. Sign in to continue.</p><button class="gbtn" id="gi">'+ICON.g+'Continue with Google</button></div>';
+    app.innerHTML='<div class="hud"><div class="gate"><h1>QUWWAA</h1><span class="sub">Jarvis OS · second brain</span><p>Command center. Sign in to continue.</p><button class="gbtn" id="gi">'+GICON+'Continue with Google</button></div></div>';
     $('#gi').onclick=function(){ try{ sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo: location.origin + location.pathname } }); }catch(e){} };
   }
   function gateForbidden(){
-    app.innerHTML='<div class="gate"><h1>QUWWAA <b>OS</b></h1><p class="err">This account isn\'t on the admin list.</p><p class="hint">Signed in as '+esc((user&&user.email)||'')+'.</p><button class="gbtn" id="so">Sign out</button></div>';
+    app.innerHTML='<div class="hud"><div class="gate"><h1>QUWWAA</h1><p class="err">This account isn\'t on the admin list.</p><p style="color:var(--dim)">Signed in as '+esc((user&&user.email)||'')+'.</p><button class="gbtn" id="so">Sign out</button></div></div>';
     $('#so').onclick=function(){ try{ sb.auth.signOut().then(function(){ location.reload(); }); }catch(e){ location.reload(); } };
   }
   function boot(){
-    app.innerHTML='<div class="stamp">Loading…</div>';
+    app.innerHTML='<div class="hud"><div class="panel">Loading…</div></div>';
     fetch('/config',{cache:'no-store'}).then(function(r){return r.json();}).then(function(cfg){
-      if(!cfg||!cfg.supabaseUrl){ app.innerHTML='<div class="gate"><p class="err">Backend not configured.</p></div>'; return; }
+      if(!cfg||!cfg.supabaseUrl){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Backend not configured.</p></div></div>'; return; }
       loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2').then(function(){
         sb=window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
         sb.auth.getSession().then(function(res){ var session=res&&res.data&&res.data.session; if(!session){ gateSignIn(); return; } user=session.user; token=session.access_token; refresh(false); });
         sb.auth.onAuthStateChange(function(_e,session){ if(session){ user=session.user; token=session.access_token; if(!stats) refresh(false); } });
-      }).catch(function(){ app.innerHTML='<div class="gate"><p class="err">Couldn\'t start. Retry.</p></div>'; });
-    }).catch(function(){ app.innerHTML='<div class="gate"><p class="err">Offline.</p></div>'; });
+      }).catch(function(){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Couldn\'t start. Retry.</p></div></div>'; });
+    }).catch(function(){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Offline.</p></div></div>'; });
   }
   if('serviceWorker' in navigator && location.hostname.indexOf('hq.')===0){
     window.addEventListener('load', function(){ navigator.serviceWorker.register('/jarvis-sw.js').catch(function(){}); });
