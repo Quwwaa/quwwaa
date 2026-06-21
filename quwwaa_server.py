@@ -1129,12 +1129,12 @@ def compose_brief_email(slot='morning', exclude_urls=None):
         '</table></td></tr></table></div>')
     return subject, doc, [s.get('url', '') for s in secs]
 
-def create_kit_broadcast(subject, content, preview_text='', send_at=None):
-    """Create a Kit v4 broadcast. No send_at -> draft; with send_at -> scheduled."""
+def create_kit_broadcast(subject, content, preview_text='', send_at=None, description='QUWWAA Brief'):
+    """Create a Kit v4 broadcast. No send_at -> draft; with send_at -> scheduled.
+    `description` is the idempotency tag (one per slot per send-date)."""
     if not KIT_API_KEY:
         return None
-    body = {'subject': subject, 'content': content, 'description': 'QUWWAA Morning Brief',
-            'public': False}
+    body = {'subject': subject, 'content': content, 'description': description, 'public': False}
     if preview_text:
         body['preview_text'] = preview_text[:150]
     if send_at:
@@ -1145,18 +1145,97 @@ def create_kit_broadcast(subject, content, preview_text='', send_at=None):
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read() or b'{}')
 
+def kit_broadcast_exists(description, send_at_dt=None):
+    """True if Kit already has a broadcast for this send — the final backstop so we
+    never create a second send for the same (slot, send-date) even if both the
+    in-memory and Supabase guards are lost (e.g. a fresh deploy). Matches either our
+    exact description tag OR any broadcast already scheduled for the same instant
+    (the latter catches one created by the old code, whose tag differed)."""
+    if not KIT_API_KEY:
+        return False
+    try:
+        req = urllib.request.Request('https://api.kit.com/v4/broadcasts?per_page=50',
+            headers={'X-Kit-Api-Key': KIT_API_KEY, 'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read() or b'{}')
+        for b in (data.get('broadcasts') or []):
+            if (b.get('description') or '') == description:
+                return True
+            if send_at_dt is not None and b.get('send_at'):
+                try:
+                    bdt = datetime.fromisoformat(str(b['send_at']).replace('Z', '+00:00'))
+                    if abs((bdt - send_at_dt).total_seconds()) < 90:   # same scheduled minute
+                        return True
+                except Exception:
+                    pass
+        return False
+    except Exception:
+        return False
+
+BRIEF_STATE_KEY = 'brief_email_state'
+
+def brief_state_load():
+    """Load the per-slot day guards + de-dup set from Supabase so a restart/redeploy
+    can't re-fire a slot. Best-effort; on miss/error keep whatever's in memory."""
+    try:
+        rows = sb_rest('GET', 'jarvis_settings?key=eq.' + BRIEF_STATE_KEY + '&select=value&limit=1')
+        val = ((rows or [{}])[0].get('value')) or {}
+        if isinstance(val, str):
+            val = json.loads(val)
+        if isinstance(val, dict):
+            BRIEF_EMAIL['morning_day'] = val.get('morning_day')
+            BRIEF_EMAIL['evening_day'] = val.get('evening_day')
+            BRIEF_EMAIL['sent_day'] = val.get('sent_day')
+            BRIEF_EMAIL['sent_urls'] = set(val.get('sent_urls') or [])
+    except Exception:
+        pass
+
+def brief_state_save():
+    """Persist the guards after every state change (upsert key=brief_email_state)."""
+    try:
+        sb_rest('POST', 'jarvis_settings',
+                body={'key': BRIEF_STATE_KEY, 'value': {
+                    'morning_day': BRIEF_EMAIL.get('morning_day'),
+                    'evening_day': BRIEF_EMAIL.get('evening_day'),
+                    'sent_day': BRIEF_EMAIL.get('sent_day'),
+                    'sent_urls': sorted(BRIEF_EMAIL.get('sent_urls') or []),
+                    'updated_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}},
+                prefer='resolution=merge-duplicates,return=minimal')
+    except Exception:
+        pass
+
 def run_brief_email(slot='morning', force=False):
     """Compose + create one broadcast for `slot` ('morning'|'evening'). Idempotent
-    per Phoenix day, per slot (one auto attempt/day each); force=True (manual admin
-    trigger) bypasses the day guard. The evening slot excludes every story the
-    morning slot already sent today, so the two emails never repeat a story."""
+    per Phoenix day, per slot, guarded three ways: in-memory, persisted Supabase
+    state (survives restarts), and a Kit lookup by (slot, send-date) description.
+    Only ever schedules for TODAY — if the send hour has already passed it skips
+    (never pre-books tomorrow). force=True (manual admin) bypasses the soft guards.
+    The evening slot excludes every story the morning slot already sent today."""
     if not KIT_API_KEY or BRIEF_EMAIL_MODE == 'off':
         return {'skipped': 'disabled'}
     now_phx = datetime.now(timezone.utc).astimezone(PHOENIX_TZ)
     today = now_phx.strftime('%Y-%m-%d')
     day_key = 'evening_day' if slot == 'evening' else 'morning_day'
+    brief_state_load()                                   # refresh guards from Supabase (survives redeploys)
     if not force and BRIEF_EMAIL.get(day_key) == today:
         return {'skipped': 'already_today', 'slot': slot}
+    # Same-day only: if the send hour has already passed, skip — do NOT pre-book
+    # tomorrow (that is what double-books the next morning).
+    send_hour = BRIEF_EVENING_SEND_HOUR if slot == 'evening' else BRIEF_SEND_HOUR
+    send_at = None; send_dt_utc = None
+    if BRIEF_EMAIL_MODE == 'send':
+        send_dt = now_phx.replace(hour=send_hour, minute=0, second=0, microsecond=0)
+        if send_dt <= now_phx and not force:
+            return {'skipped': 'window_passed', 'slot': slot}
+        if send_dt > now_phx:
+            send_dt_utc = send_dt.astimezone(timezone.utc)
+            send_at = send_dt_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+    # Backstop: if Kit already has this slot+date broadcast (by our tag) or one
+    # already scheduled for this exact send time, don't create another.
+    descr = 'QUWWAA %s Brief %s' % (slot, today)
+    if not force and kit_broadcast_exists(descr, send_dt_utc):
+        BRIEF_EMAIL[day_key] = today; brief_state_save()
+        return {'skipped': 'kit_exists', 'slot': slot}
     # Reset the cross-email de-dup set at the start of each Phoenix day.
     if BRIEF_EMAIL.get('sent_day') != today:
         BRIEF_EMAIL['sent_day'] = today
@@ -1173,24 +1252,18 @@ def run_brief_email(slot='morning', force=False):
     exclude = set(BRIEF_EMAIL.get('sent_urls') or ()) if slot == 'evening' else None
     subject, content, urls = compose_brief_email(slot, exclude_urls=exclude)
     if slot == 'evening' and not urls:
-        BRIEF_EMAIL[day_key] = today                    # nothing new today — consume the slot, don't mail dupes
+        BRIEF_EMAIL[day_key] = today; brief_state_save()  # nothing new today — consume slot, don't mail dupes
         return {'skipped': 'nothing_new', 'slot': slot}
     BRIEF_EMAIL[day_key] = today                        # consume the slot (1 auto attempt; manual can force)
-    send_hour = BRIEF_EVENING_SEND_HOUR if slot == 'evening' else BRIEF_SEND_HOUR
-    send_at = None
-    if BRIEF_EMAIL_MODE == 'send':
-        send_dt = now_phx.replace(hour=send_hour, minute=0, second=0, microsecond=0)
-        if send_dt <= now_phx:
-            send_dt += timedelta(days=1)
-        send_at = send_dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     try:
-        res = create_kit_broadcast(subject, content, preview_text=subject, send_at=send_at)
+        res = create_kit_broadcast(subject, content, preview_text=subject, send_at=send_at, description=descr)
         bid = None
         if isinstance(res, dict):
             bid = (res.get('broadcast') or {}).get('id') if isinstance(res.get('broadcast'), dict) else res.get('id')
         for u in urls:                                  # record what went out so the other slot won't repeat it
             nu = _norm_brief_url(u)
             if nu: BRIEF_EMAIL['sent_urls'].add(nu)
+        brief_state_save()                              # persist guards + sent_urls
         if BRIEF_EMAIL_MODE == 'draft' and ADMIN_USER_ID:
             try: push_to_user(ADMIN_USER_ID, {'title': slot.capitalize() + ' Brief draft ready',
                 'body': 'Review & send in Kit — ' + subject[:80], 'url': '/'}, 'notify_brief')
@@ -1206,20 +1279,23 @@ def run_brief_email(slot='morning', force=False):
         return {'error': type(e).__name__, 'detail': detail}
 
 def brief_email_loop():
-    """Each poll, fire the morning and evening slots — each once per Phoenix day,
-    composed BRIEF_COMPOSE_LEAD_MIN minutes before its send hour."""
+    """Fire each slot only inside its compose window — morning in
+    [BRIEF_SEND_HOUR - lead, BRIEF_SEND_HOUR), evening likewise — so a slot is
+    only ever scheduled for the SAME day, never pre-booked for tomorrow. Each
+    slot runs at most once per Phoenix day (guard persisted across restarts)."""
     if not KIT_API_KEY or BRIEF_EMAIL_MODE == 'off':
         return
     lead = timedelta(minutes=BRIEF_COMPOSE_LEAD_MIN)
+    brief_state_load()                                   # prime guards from Supabase before the first poll
     while True:
         try:
             now_phx = datetime.now(timezone.utc).astimezone(PHOENIX_TZ)
             today = now_phx.strftime('%Y-%m-%d')
-            m_compose = now_phx.replace(hour=BRIEF_SEND_HOUR, minute=0, second=0, microsecond=0) - lead
-            if now_phx >= m_compose and BRIEF_EMAIL.get('morning_day') != today:
+            m_hi = now_phx.replace(hour=BRIEF_SEND_HOUR, minute=0, second=0, microsecond=0)
+            if (m_hi - lead) <= now_phx < m_hi and BRIEF_EMAIL.get('morning_day') != today:
                 run_brief_email('morning')
-            e_compose = now_phx.replace(hour=BRIEF_EVENING_SEND_HOUR, minute=0, second=0, microsecond=0) - lead
-            if now_phx >= e_compose and BRIEF_EMAIL.get('evening_day') != today:
+            e_hi = now_phx.replace(hour=BRIEF_EVENING_SEND_HOUR, minute=0, second=0, microsecond=0)
+            if (e_hi - lead) <= now_phx < e_hi and BRIEF_EMAIL.get('evening_day') != today:
                 run_brief_email('evening')
         except Exception:
             pass
