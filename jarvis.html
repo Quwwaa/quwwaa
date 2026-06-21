@@ -74,7 +74,9 @@
   /* center reactor + clusters */
   .center{display:flex;flex-direction:column;min-height:476px;position:relative;overflow:visible}
   .core-row{display:grid;grid-template-columns:1fr 268px 1fr;gap:16px;align-items:center;flex:1}
-  .health-corner{align-self:flex-start;width:min(48%,360px);border-top:1px solid var(--line2);padding-top:10px;margin-top:8px;z-index:2}
+  .health-row{display:flex;gap:16px;border-top:1px solid var(--line2);margin-top:8px;padding-top:10px;z-index:2}
+  .health-corner{flex:1;min-width:0}
+  .status-corner{flex:1;min-width:0}
   .health-corner .gauge{width:70px;height:70px} .health-corner .gauge b{font-size:15px} .health-corner .gaugewrap{margin:0}
   .center .bgspokes{position:absolute;inset:0;z-index:0;pointer-events:none;opacity:.5}
   .cluster{display:flex;flex-direction:column;gap:9px;position:relative;z-index:2}
@@ -251,9 +253,6 @@
     // left rail
     H+='<div class="rail">'
       +'<div class="panel cmd" style="display:flex;align-items:center;gap:10px">'+ico('render')+'<div><div class="nn" style="font-size:14px;font-weight:800">QUWWAA</div><div class="nr" style="font-size:8.5px;color:var(--green2);letter-spacing:.15em">COMMAND SUITE</div></div><span class="tag ok" style="margin-left:auto"><span class="dot ok"></span>Online</span></div>'
-      +'<div class="panel"><p class="lbl">System status<span class="ln"></span></p>'
-        +['Core AI','Memory engine','Data ingestion','Task orchestrator','Automation layer'].map(function(x){return '<div class="row"><span style="display:flex;align-items:center;gap:7px"><span class="dot ok"></span>'+x+'</span><b>Operational</b></div>';}).join('')
-        +'<div class="row"><span style="display:flex;align-items:center;gap:7px"><span class="dot ok"></span>Security shield</span><b>Active</b></div></div>'
       +'<div class="panel"><p class="lbl">Core directives<span class="ln"></span></p><ul class="bul" style="font-size:11.5px;color:var(--dim2)">'
         +['Scale impact','Maximize leverage','Automate everything','Compound growth','Serve the Ummah'].map(function(x){return '<li>'+x+'</li>';}).join('')+'</ul></div>'
       +'<div class="panel"><p class="lbl">Today\'s priorities<span class="ln"></span></p>'
@@ -274,8 +273,13 @@
         +nodeCard('openai','OpenAI','Voice · STT/TTS',okOpenAI)+nodeCard('anthropic','Anthropic','Butler · summaries',okAnthropic)
         +'<p class="lbl" style="margin:6px 0 2px">Productivity<span class="ln"></span></p>'+nodeCard('calendar','Calendar','Agenda · events',okCal)+nodeCard('gmail','Gmail','Inbox triage',false)+'</div>'
       +'</div>'
+      +'<div class="health-row">'
       +'<div class="health-corner"><p class="lbl">System health<span class="ln"></span></p><div class="gaugewrap"><div class="gauge"><i><b>97%</b><span>OPTIMAL</span></i></div>'
         +'<div class="gmeters"><div class="row"><span>CPU</span><b>32%</b></div><div class="row"><span>Memory</span><b>48%</b></div><div class="row"><span>Network</span><b>28%</b></div><div class="row"><span>Storage</span><b>62%</b></div></div></div></div>'
+      +'<div class="status-corner"><p class="lbl">System status<span class="ln"></span></p>'
+        +['Core AI','Memory engine','Data ingestion','Task orchestrator','Automation layer'].map(function(x){return '<div class="row"><span style="display:flex;align-items:center;gap:7px"><span class="dot ok"></span>'+x+'</span><b>Operational</b></div>';}).join('')
+        +'<div class="row"><span style="display:flex;align-items:center;gap:7px"><span class="dot ok"></span>Security shield</span><b>Active</b></div></div>'
+      +'</div>'
       +'</div>';
     // social column
     var soc=[['instagram','Instagram','Visual content',false],['facebook','Facebook','Community',false],['tiktok','TikTok','Short-form',false],['youtube','YouTube','Long-form',false],['x','X','Real-time',false],['substack','Substack','Newsletter · live',true]];
