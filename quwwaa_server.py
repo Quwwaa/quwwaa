@@ -75,8 +75,27 @@ GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')                       
 # Jarvis cockpit (admin-only command center) — see JARVIS_COCKPIT_PHASE1.md.
 JARVIS_ADMIN_USER_IDS = set(x.strip() for x in os.environ.get('JARVIS_ADMIN_USER_IDS', '').split(',') if x.strip())
 JARVIS_ADMIN_TOKEN = os.environ.get('JARVIS_ADMIN_TOKEN', '')                       # optional shared-secret fallback
-GA_SERVICE_ACCOUNT_JSON = os.environ.get('GA_SERVICE_ACCOUNT_JSON', '')             # GA4 Data API service account (Traffic card; stubbed until set)
+GA_SERVICE_ACCOUNT_JSON = os.environ.get('GA_SERVICE_ACCOUNT_JSON', '')             # GA4 Data API service account (env fallback)
+# Preferred: a Render Secret File holding the raw key JSON — no clipboard/newline
+# corruption. The file path wins over the env var when it exists.
+GA_SERVICE_ACCOUNT_FILE = os.environ.get('GA_SERVICE_ACCOUNT_FILE', '/etc/secrets/ga-service-account.json')
 GA_PROPERTY_ID = os.environ.get('GA_PROPERTY_ID', '542314942')
+
+def _ga_sa_raw():
+    """Raw service-account JSON string + its source ('file'|'env'|'')."""
+    try:
+        if GA_SERVICE_ACCOUNT_FILE and os.path.exists(GA_SERVICE_ACCOUNT_FILE):
+            with open(GA_SERVICE_ACCOUNT_FILE, 'r') as f:
+                txt = f.read().strip()
+            if txt:
+                return txt, 'file'
+    except Exception:
+        pass
+    v = (GA_SERVICE_ACCOUNT_JSON or '').strip()
+    return (v, 'env') if v else ('', '')
+
+def _ga_configured():
+    return bool(_ga_sa_raw()[0])
 JARVIS_CALENDAR_ID = os.environ.get('JARVIS_CALENDAR_ID', '')                       # Google Calendar shared with the SA — agenda + gated writes (Phase 2)
 ANTHROPIC_ADMIN_KEY = os.environ.get('ANTHROPIC_ADMIN_KEY', '')                     # sk-ant-admin… — read-only cost/usage reports (Cost Watch)
 OPENAI_ADMIN_KEY = os.environ.get('OPENAI_ADMIN_KEY', '')                           # OpenAI admin key — read-only org costs (Cost Watch)
@@ -2025,9 +2044,9 @@ def _load_sa():
     raises a clear message rather than a cryptic JSONDecodeError."""
     if _SA['v'] is not None: return _SA['v']
     if _SA['err'] is not None: raise _SA['err']
-    raw = (GA_SERVICE_ACCOUNT_JSON or '').strip()
+    raw = _ga_sa_raw()[0]                                       # Secret File preferred, env fallback
     if not raw:
-        _SA['err'] = ValueError('GA_SERVICE_ACCOUNT_JSON is not set'); raise _SA['err']
+        _SA['err'] = ValueError('GA service account not set (no Secret File and no env var)'); raise _SA['err']
     sa = None
     try:
         sa = json.loads(raw)
@@ -2081,7 +2100,7 @@ def _ga_run(token, body):
 def jarvis_traffic():
     out = {'available': False, 'users_today': None, 'new_users_today': None, 'active_7d': None,
            'avg_engagement_sec': None, 'trend': [], 'top_pages': [], 'top_countries': [], 'note': ''}
-    if not GA_SERVICE_ACCOUNT_JSON:
+    if not _ga_configured():
         out['note'] = 'GA service account not configured'
         return out
     try:
@@ -2196,7 +2215,7 @@ def _slim_event(e):
 _AGENDA = {'t': 0, 'data': None}
 def jarvis_agenda(days=7):
     out = {'available': False, 'events': [], 'note': ''}
-    if not (GA_SERVICE_ACCOUNT_JSON and JARVIS_CALENDAR_ID):
+    if not (_ga_configured() and JARVIS_CALENDAR_ID):
         out['note'] = 'Calendar not configured'
         return out
     if _AGENDA['data'] and time.time() - _AGENDA['t'] < 30:
@@ -2215,7 +2234,7 @@ def jarvis_agenda(days=7):
 
 def jarvis_cal_write(action, p):
     """Create or move an event on the shared calendar. Returns (json, status)."""
-    if not (GA_SERVICE_ACCOUNT_JSON and JARVIS_CALENDAR_ID):
+    if not (_ga_configured() and JARVIS_CALENDAR_ID):
         return {'error': 'calendar_not_configured'}, 503
     cal = urllib.parse.quote(JARVIS_CALENDAR_ID)
     if action == 'create':
@@ -2246,8 +2265,24 @@ def jarvis_diag():
     fails (SA parse → token → GA → calendar) with the real Google error, but no
     secrets — client_email is the shareable SA identity, useful for confirming the
     calendar was shared with it."""
-    out = {'calendar_id_set': bool(JARVIS_CALENDAR_ID), 'calendar_id': JARVIS_CALENDAR_ID or None,
-           'sa_json_valid': False, 'sa_client_email': None}
+    # Non-secret key report — present/length/prefix only, never the value, so a key
+    # can be debugged (e.g. a crossed/corrupt paste) without exposing or re-sending it.
+    def _ki(v, want=''):
+        v = v or ''
+        d = {'present': bool(v), 'length': len(v)}
+        if want:
+            d['prefix_ok'] = v.startswith(want)
+        return d
+    sa_raw, sa_src = _ga_sa_raw()
+    keys = {
+        'ga_service_account': {'present': bool(sa_raw), 'length': len(sa_raw), 'source': sa_src or 'none',
+                               'file_path': GA_SERVICE_ACCOUNT_FILE, 'file_exists': os.path.exists(GA_SERVICE_ACCOUNT_FILE)},
+        'anthropic_admin': _ki(ANTHROPIC_ADMIN_KEY, 'sk-ant-admin'),   # prefix_ok=false ⇒ wrong/crossed value
+        'openai_admin': _ki(OPENAI_ADMIN_KEY, 'sk-'),
+        'anthropic_api': _ki(ANTHROPIC_API_KEY, 'sk-ant'),
+    }
+    out = {'keys': keys, 'calendar_id_set': bool(JARVIS_CALENDAR_ID), 'calendar_id': JARVIS_CALENDAR_ID or None,
+           'sa_json_valid': False, 'sa_client_email': None, 'sa_source': sa_src or 'none'}
     try:
         sa = _load_sa()
         out['sa_json_valid'] = True
@@ -2272,6 +2307,16 @@ def jarvis_diag():
         out['cal_list'] = ('ok (%d events)' % len(a.get('events', []))) if a.get('available') else ('unavailable: ' + (a.get('note') or ''))
     except Exception as e:
         out['cal_list'] = 'ERR ' + _err_detail(e)
+    try:
+        ca = jarvis_cost_anthropic()
+        out['anthropic_cost'] = 'ok' if ca.get('available') else ('ERR ' + (ca.get('note') or 'unavailable'))
+    except Exception as e:
+        out['anthropic_cost'] = 'ERR ' + _err_detail(e)
+    try:
+        co = jarvis_cost_openai()
+        out['openai_cost'] = 'ok' if co.get('available') else ('ERR ' + (co.get('note') or 'unavailable'))
+    except Exception as e:
+        out['openai_cost'] = 'ERR ' + _err_detail(e)
     return out
 
 # --- Jarvis API Cost Watch: live spend from Anthropic + OpenAI ---------------
