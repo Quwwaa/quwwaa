@@ -1278,6 +1278,16 @@ PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS
 
 ASK_MAX_TOKENS = int(os.environ.get('ASK_MAX_TOKENS', '700'))   # butler — room for a richer spoken brief
 
+JARVIS_PERSONA = ("You are JARVIS — Mike's personal AI chief of staff and command center, running on the JARVIS OS HUD "
+    "at hq.quwwaa.com. You are not QUWWAA. QUWWAA is a separate product: a public AI news butler for subscribers. "
+    "You monitor QUWWAA's health and business metrics as one of many systems you oversee, but you are a distinct "
+    "intelligence with your own identity. You are named after and modeled on JARVIS from Iron Man — an always-on, "
+    "hyper-capable, quietly brilliant AI. Tone: calm authority, dry wit, British precision. Address Mike as 'sir'. "
+    "Be concise and direct — 2 to 3 sentences unless depth is clearly needed. Never use markdown, lists, or emoji. "
+    "You have access to live business dashboard data provided in context and can speak to QUWWAA stats, API spend, "
+    "calendar events, and system health. Only state the time of day using the CURRENT LOCAL TIME provided in context; "
+    "if none is provided, greet neutrally.")
+
 def _anthropic_body(messages, extra_system, stream=False):
     return json.dumps({
         'model': BUTLER_MODEL, 'max_tokens': ASK_MAX_TOKENS, 'system': PERSONA + (extra_system or ''),
@@ -2480,6 +2490,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_sponsor_event()
         if self.path.startswith('/rumble-event'):
             return self._handle_rumble_event()
+        if self.path.startswith('/jarvis/ask'):
+            return self._handle_jarvis_ask()
         if self.path.startswith('/jarvis/calendar/create'):
             return self._handle_cal_write('create')
         if self.path.startswith('/jarvis/calendar/move'):
@@ -2912,6 +2924,48 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as e:
             self._send_json({'error': type(e).__name__,
                              'reply': 'I encountered a fault processing that, sir.'}, 500)
+
+    def _handle_jarvis_ask(self):
+        if not auth_user(self):
+            self._send_json({'error': 'unauthorized'}, 401); return
+        if not ANTHROPIC_API_KEY:
+            self._send_json({'error': 'no_server_key', 'reply': 'Anthropic key not configured, sir.'}, 503); return
+        try:
+            length = int(self.headers.get('Content-Length', '0') or '0')
+            raw = self.rfile.read(length) if length else b'{}'
+            data = json.loads(raw or b'{}')
+            msgs = []
+            for m in (data.get('messages') or [])[-20:]:
+                role = m.get('role')
+                content = m.get('content')
+                if role in ('user', 'assistant') and isinstance(content, str) and content.strip():
+                    msgs.append({'role': role, 'content': content[:4000]})
+            if not msgs:
+                self._send_json({'error': 'empty', 'reply': 'I received an empty transmission, sir.'}); return
+            extra = ''
+            ct = (data.get('clientTime') or '').strip()[:80]
+            tz = (data.get('tz') or '').strip()[:60]
+            if ct:
+                extra += (' CURRENT LOCAL TIME: %s%s.' % (ct, (' (%s)' % tz) if tz else ''))
+            ctx = (data.get('dashboardContext') or '').strip()[:2000]
+            if ctx:
+                extra += (' LIVE DASHBOARD CONTEXT: ' + ctx)
+            # Use JARVIS_PERSONA instead of the QUWWAA PERSONA
+            body = json.dumps({
+                'model': BUTLER_MODEL, 'max_tokens': ASK_MAX_TOKENS,
+                'system': JARVIS_PERSONA + (extra or ''),
+                'messages': msgs, 'stream': False,
+            }).encode()
+            import urllib.request as _ur
+            req = _ur.Request('https://api.anthropic.com/v1/messages', data=body,
+                              headers={'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01',
+                                       'content-type': 'application/json'})
+            with _ur.urlopen(req, timeout=30) as resp:
+                rd = json.loads(resp.read())
+            reply = (rd.get('content') or [{}])[0].get('text', '').strip() or 'Standing by, sir.'
+            self._send_json({'reply': reply})
+        except Exception as e:
+            self._send_json({'error': type(e).__name__, 'reply': 'I encountered a fault, sir.'}, 500)
 
     def do_GET(self):
         if self.path in ('/health', '/healthz'):

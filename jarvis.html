@@ -499,7 +499,9 @@
     var sysContent=JARVIS_PERSONA+'\n\nLive dashboard context:\n'+jvBuildContext();
     var body={messages:jvMsgs, stream:false};
     try{
-      var r=await fetch('/ask',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify(Object.assign({},{messages:[{role:'system',content:sysContent}].concat(jvMsgs),stream:false}))});
+      var now=new Date();
+      var payload={messages:jvMsgs,clientTime:now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}),tz:Intl.DateTimeFormat().resolvedOptions().timeZone,dashboardContext:jvBuildContext()};
+      var r=await fetch('/jarvis/ask',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify(payload)});
       var reply='';
       if(r.ok){
         var d=await r.json();
