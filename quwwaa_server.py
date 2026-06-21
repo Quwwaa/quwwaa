@@ -76,6 +76,7 @@ JARVIS_ADMIN_USER_IDS = set(x.strip() for x in os.environ.get('JARVIS_ADMIN_USER
 JARVIS_ADMIN_TOKEN = os.environ.get('JARVIS_ADMIN_TOKEN', '')                       # optional shared-secret fallback
 GA_SERVICE_ACCOUNT_JSON = os.environ.get('GA_SERVICE_ACCOUNT_JSON', '')             # GA4 Data API service account (Traffic card; stubbed until set)
 GA_PROPERTY_ID = os.environ.get('GA_PROPERTY_ID', '542314942')
+JARVIS_CALENDAR_ID = os.environ.get('JARVIS_CALENDAR_ID', '')                       # Google Calendar shared with the SA — agenda + gated writes (Phase 2)
 # Registration-wall meter for FREE registered members (server-enforced per profile).
 FREE_PER_DAY = int(os.environ.get('FREE_PER_DAY', '1'))
 FREE_PER_MONTH = int(os.environ.get('FREE_PER_MONTH', '5'))
@@ -1908,11 +1909,17 @@ def jarvis_revenue():
         pass
     return out
 
-def _ga_access_token(sa):
+_GTOKENS = {}   # scope -> (expires_epoch, access_token); one Jarvis SA, GA + Calendar scopes
+def _google_token(scope):
+    """OAuth2 access token for the Jarvis service account at the given scope
+    (GA read or Calendar read/write). Cached until ~1 min before expiry."""
+    hit = _GTOKENS.get(scope)
+    if hit and hit[0] - 60 > time.time():
+        return hit[1]
     import jwt                                              # PyJWT (RS256 via cryptography, already installed)
+    sa = json.loads(GA_SERVICE_ACCOUNT_JSON)
     now = int(time.time())
-    assertion = jwt.encode({'iss': sa['client_email'],
-                            'scope': 'https://www.googleapis.com/auth/analytics.readonly',
+    assertion = jwt.encode({'iss': sa['client_email'], 'scope': scope,
                             'aud': 'https://oauth2.googleapis.com/token',
                             'iat': now, 'exp': now + 3600}, sa['private_key'], algorithm='RS256')
     body = urllib.parse.urlencode({'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
@@ -1920,7 +1927,13 @@ def _ga_access_token(sa):
     req = urllib.request.Request('https://oauth2.googleapis.com/token', data=body,
                                  headers={'Content-Type': 'application/x-www-form-urlencoded'})
     with urllib.request.urlopen(req, timeout=15) as r:
-        return json.loads(r.read())['access_token']
+        d = json.loads(r.read())
+    tok = d['access_token']
+    _GTOKENS[scope] = (now + int(d.get('expires_in', 3600)), tok)
+    return tok
+
+GA_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly'
+CAL_SCOPE = 'https://www.googleapis.com/auth/calendar'
 
 def _ga_run(token, body):
     req = urllib.request.Request('https://analyticsdata.googleapis.com/v1beta/properties/%s:runReport' % GA_PROPERTY_ID,
@@ -1936,8 +1949,7 @@ def jarvis_traffic():
         out['note'] = 'GA service account not configured'
         return out
     try:
-        sa = json.loads(GA_SERVICE_ACCOUNT_JSON)
-        tok = _ga_access_token(sa)
+        tok = _google_token(GA_SCOPE)
         today = _ga_run(tok, {'dateRanges': [{'startDate': 'today', 'endDate': 'today'}],
                               'metrics': [{'name': 'activeUsers'}, {'name': 'newUsers'}, {'name': 'userEngagementDuration'}]})
         trend = _ga_run(tok, {'dateRanges': [{'startDate': '6daysAgo', 'endDate': 'today'}],
@@ -2019,6 +2031,80 @@ def jarvis_stats():
     JARVIS_CACHE['data'] = data; JARVIS_CACHE['t'] = time.time()
     return data
 
+# --- Jarvis calendar (Phase 2): read agenda + gated create/move -------------
+# Uses the SAME service account (Calendar scope). Reads are free; writes require
+# admin auth AND an explicit confirm flag (Jarvis proposes, Mike confirms).
+CAL_TZ = 'America/Phoenix'
+
+def _cal_api(method, path, body=None, params=None):
+    tok = _google_token(CAL_SCOPE)
+    url = 'https://www.googleapis.com/calendar/v3/' + path
+    if params:
+        url += '?' + urllib.parse.urlencode(params)
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read()
+    return json.loads(raw) if raw else {}
+
+def _slim_event(e):
+    s = e.get('start', {}) or {}; en = e.get('end', {}) or {}
+    return {'id': e.get('id'), 'summary': e.get('summary') or '(no title)',
+            'start': s.get('dateTime') or s.get('date'), 'end': en.get('dateTime') or en.get('date'),
+            'all_day': bool(s.get('date') and not s.get('dateTime')),
+            'location': e.get('location') or '',
+            'attendees': [a.get('email') for a in e.get('attendees', []) if a.get('email')],
+            'html_link': e.get('htmlLink')}
+
+_AGENDA = {'t': 0, 'data': None}
+def jarvis_agenda(days=7):
+    out = {'available': False, 'events': [], 'note': ''}
+    if not (GA_SERVICE_ACCOUNT_JSON and JARVIS_CALENDAR_ID):
+        out['note'] = 'Calendar not configured'
+        return out
+    if _AGENDA['data'] and time.time() - _AGENDA['t'] < 30:
+        return _AGENDA['data']
+    try:
+        now = datetime.now(timezone.utc)
+        data = _cal_api('GET', 'calendars/' + urllib.parse.quote(JARVIS_CALENDAR_ID) + '/events',
+                        params={'timeMin': now.isoformat(), 'timeMax': (now + timedelta(days=days)).isoformat(),
+                                'singleEvents': 'true', 'orderBy': 'startTime', 'maxResults': 25})
+        out['events'] = [_slim_event(e) for e in data.get('items', []) if e.get('status') != 'cancelled']
+        out['available'] = True
+    except Exception as ex:
+        out['note'] = 'Calendar error: ' + type(ex).__name__
+    _AGENDA['data'] = out; _AGENDA['t'] = time.time()
+    return out
+
+def jarvis_cal_write(action, p):
+    """Create or move an event on the shared calendar. Returns (json, status)."""
+    if not (GA_SERVICE_ACCOUNT_JSON and JARVIS_CALENDAR_ID):
+        return {'error': 'calendar_not_configured'}, 503
+    cal = urllib.parse.quote(JARVIS_CALENDAR_ID)
+    if action == 'create':
+        start, end = p.get('start'), p.get('end')
+        if not (start and end):
+            return {'error': 'missing_times'}, 400
+        ev = {'summary': (p.get('summary') or 'Untitled').strip(),
+              'start': {'dateTime': start, 'timeZone': CAL_TZ},
+              'end': {'dateTime': end, 'timeZone': CAL_TZ}}
+        if p.get('location'):    ev['location'] = p['location']
+        if p.get('description'): ev['description'] = p['description']
+        if p.get('attendees'):   ev['attendees'] = [{'email': a} for a in p['attendees'] if a]  # consumer-Gmail invite caveat
+        _AGENDA['t'] = 0
+        return {'ok': True, 'event': _slim_event(_cal_api('POST', 'calendars/' + cal + '/events', body=ev))}, 200
+    if action == 'move':
+        eid, start, end = p.get('event_id'), p.get('start'), p.get('end')
+        if not (eid and start and end):
+            return {'error': 'missing_fields'}, 400
+        patch = {'start': {'dateTime': start, 'timeZone': CAL_TZ}, 'end': {'dateTime': end, 'timeZone': CAL_TZ}}
+        if p.get('summary'): patch['summary'] = p['summary']
+        _AGENDA['t'] = 0
+        return {'ok': True, 'event': _slim_event(
+            _cal_api('PATCH', 'calendars/' + cal + '/events/' + urllib.parse.quote(eid), body=patch))}, 200
+    return {'error': 'unknown_action'}, 400
+
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
@@ -2075,7 +2161,25 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_sync_account()
         if self.path.startswith('/sponsor-event'):
             return self._handle_sponsor_event()
+        if self.path.startswith('/jarvis/calendar/create'):
+            return self._handle_cal_write('create')
+        if self.path.startswith('/jarvis/calendar/move'):
+            return self._handle_cal_write('move')
         self.send_error(404)
+
+    def _handle_cal_write(self, action):
+        if not jarvis_authed(self):
+            self._send_json({'error': 'unauthorized'}, 401); return
+        d = self._read_json()
+        if not d.get('confirm'):                       # gated: Jarvis proposes, Mike confirms
+            self._send_json({'error': 'confirm_required'}, 400); return
+        try:
+            res, code = jarvis_cal_write(action, d)
+            self._send_json(res, code)
+        except urllib.error.HTTPError as he:
+            self._send_json({'error': 'calendar_http', 'status': he.code}, 502)
+        except Exception as e:
+            self._send_json({'error': type(e).__name__}, 500)
 
     def _handle_sponsor_event(self):
         """In-app impression/click tracking for the sponsor strip (anonymous,
@@ -2598,6 +2702,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json({'error': 'unauthorized'}, 401); return
             try:
                 self._send_json(jarvis_stats())
+            except Exception as e:
+                self._send_json({'error': type(e).__name__}, 500)
+        elif self.path.startswith('/jarvis/agenda'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            try:
+                self._send_json(jarvis_agenda())
             except Exception as e:
                 self._send_json({'error': type(e).__name__}, 500)
         else:
