@@ -2017,23 +2017,54 @@ def _sub_monthly_cents(sub):
         total += amt
     return total
 
+def _comped_coupon_ids():
+    """Coupon ids that zero the recurring charge forever (100%-off-forever, etc.)."""
+    ids = set()
+    try:
+        for c in _stripe_list('coupons', {'limit': 100}):
+            if not c.get('valid', True):
+                continue
+            if c.get('duration') == 'forever' and (c.get('percent_off') == 100 or c.get('amount_off')):
+                ids.add(c['id'])
+    except Exception:
+        pass
+    return ids
+
+def _sub_is_comped(sub, comped_ids):
+    def coup_id(d):
+        if not d: return None
+        src = d.get('source') or {}
+        c = src.get('coupon') or d.get('coupon')
+        return c.get('id') if isinstance(c, dict) else c
+    discs = list(sub.get('discounts') or [])
+    if sub.get('discount'):
+        discs.append(sub['discount'])
+    cust = sub.get('customer')
+    if isinstance(cust, dict) and cust.get('discount'):
+        discs.append(cust['discount'])
+    return any(coup_id(d) in comped_ids for d in discs)
+
 def jarvis_revenue():
-    out = {'active': None, 'trialing': None, 'mrr': None, 'revenue_month': None,
-           'new_customers_week': None, 'currency': 'usd'}
+    out = {'active': None, 'trialing': None, 'comped': None, 'paying': None,
+           'mrr': None, 'revenue_month': None, 'new_customers_week': None, 'currency': 'usd'}
     if not STRIPE_SECRET_KEY:
         return out
     try:
         active = _stripe_list('subscriptions', {'status': 'active', 'limit': 100})
         trial = _stripe_list('subscriptions', {'status': 'trialing', 'limit': 100})
-        mrr = sum(_sub_monthly_cents(s) for s in active + trial) / 100.0
+        comped_ids = _comped_coupon_ids()
+        all_subs = active + trial
+        paying = [s for s in all_subs if not _sub_is_comped(s, comped_ids)]
+        comped = [s for s in all_subs if _sub_is_comped(s, comped_ids)]
+        mrr = sum(_sub_monthly_cents(s) for s in paying) / 100.0
         now = datetime.now(timezone.utc)
         month0 = now.astimezone(PHOENIX_TZ).replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
         charges = _stripe_list('charges', {'limit': 100, 'created[gte]': int(month0.timestamp())})
         rev = sum(c.get('amount', 0) for c in charges if c.get('paid') and not c.get('refunded')) / 100.0
         custs = _stripe_list('customers', {'limit': 100, 'created[gte]': int((now - timedelta(days=7)).timestamp())})
         cur = (active or trial or [{}])[0].get('currency') or 'usd'
-        out.update(active=len(active), trialing=len(trial), mrr=round(mrr, 2),
-                   revenue_month=round(rev, 2), new_customers_week=len(custs), currency=cur)
+        out.update(active=len(active), trialing=len(trial), comped=len(comped), paying=len(paying),
+                   mrr=round(mrr, 2), revenue_month=round(rev, 2), new_customers_week=len(custs), currency=cur)
     except Exception:
         pass
     return out

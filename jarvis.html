@@ -378,10 +378,12 @@
 
   function briefText(){
     var m=(stats.members)||{}, r=(stats.revenue)||{}, t=(stats.traffic)||{}, n=(stats.newsletter)||{}, lines=['Jarvis OS, status report.'];
-    if(r.mrr!=null) lines.push('Recurring revenue '+money(r.mrr,r.currency).replace('$','')+' dollars a month, '+num(r.active)+' active and '+num(r.trialing)+' on trial.');
+    if(r.mrr!=null) lines.push('Recurring revenue '+money(r.mrr,r.currency).replace('$','')+' dollars a month, from '+num(r.paying)+' paying, '+num(r.trialing)+' on trial.');
+    if(r.comped!=null) lines.push(num(r.comped)+' on the family free plan, one hundred percent off forever.');
+    if(r.comped!=null&&r.comped>10) lines.push('Heads up, sir — the family free plan has '+num(r.comped)+' members. That is unusually high. The coupon may have leaked.');
     if(m.total!=null) lines.push(num(m.total)+' members, '+num(m.new_today)+' new today, '+num(n.subscribers)+' on the newsletter.');
     if(t.available&&t.users_today!=null) lines.push(num(t.users_today)+' visitors today.');
-    if(costs){var ca=costs.anthropic||{},co=costs.openai||{};if(ca.today!=null||co.today!=null)lines.push('API spend today about '+(((ca.today||0)+(co.today||0)).toFixed(2))+' dollars.');}
+    if(costs){var ca=costs.anthropic||{},co=costs.openai||{};if(co.today!=null)lines.push('OpenAI spend today '+cm(co.today)+'.'); if(ca.credits!=null)lines.push('Anthropic credits remaining '+ca.credits+'.'); }
     lines.push('Core active, sir.'); return lines.join(' ');
   }
   var audio=null;
@@ -475,7 +477,7 @@
     lines.push('Current time: '+now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+', '+now.toLocaleDateString([],{weekday:'long',month:'long',day:'numeric',year:'numeric'})+'.');
     if(stats){
       var m=stats.members||{}, r=stats.revenue||{}, t=stats.traffic||{}, n=stats.newsletter||{};
-      if(r.mrr!=null) lines.push('MRR: $'+r.mrr+' ('+r.currency+'). Active: '+r.active+'. Trialing: '+(r.trialing||0)+'. New customers this week: '+(r.new_customers_week||0)+'.');
+      if(r.mrr!=null) lines.push('MRR: $'+r.mrr+' ('+r.currency+') — paying-only, comped excluded. Paying subscribers: '+(r.paying||0)+'. Trialing: '+(r.trialing||0)+'. Family-free (100%-off-forever): '+(r.comped||0)+'. New customers this week: '+(r.new_customers_week||0)+'.');
       if(m.total!=null) lines.push('Total QUWWAA members: '+m.total+'. New today: '+(m.new_today||0)+'.');
       if(n.subscribers!=null) lines.push('Newsletter subscribers (Kit): '+n.subscribers+'.'+(n.new_subscribers_week!=null?' New this week: '+n.new_subscribers_week+'.':''));
       if(t.available){
