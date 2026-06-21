@@ -112,26 +112,6 @@
       overflow-y:auto; -webkit-overflow-scrolling:touch; padding:20px 0 0; }
   body.home #homeCards { display:block; width:100%; max-width:660px; margin:18px auto 0;
       padding:0 22px 40px; pointer-events:auto; }
-  /* Daily Rumble house card — pinned above the news cards, visually distinct */
-  #rumbleCard { display:none; width:100%; max-width:660px; margin:18px auto 0; padding:0 22px; pointer-events:auto; }
-  body.home #rumbleCard[data-show="1"] { display:block; }
-  .drcard { display:flex; gap:14px; align-items:stretch; text-decoration:none; border-radius:14px; padding:12px;
-      background:linear-gradient(135deg, rgba(217,128,38,.16), rgba(40,28,18,.42)); border:1px solid rgba(217,128,38,.42);
-      box-shadow:inset 0 1px 0 rgba(255,255,255,.08), 0 8px 24px rgba(0,0,0,.35); transition:border-color .15s, transform .15s; }
-  .drcard:hover { border-color:rgba(217,128,38,.72); }
-  .drcard:active { transform:scale(.995); }
-  .drthumb { flex:none; width:104px; align-self:stretch; border-radius:10px; overflow:hidden; background:rgba(255,180,90,.08); }
-  .drthumb img { width:100%; height:100%; min-height:84px; object-fit:cover; display:block; }
-  .drbody { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; }
-  .drlabel { font-size:11px; letter-spacing:.6px; text-transform:uppercase; color:#e08a32; font-weight:600; margin-bottom:5px; }
-  .drtitle { font-family:var(--font-serif); font-weight:500; font-size:18px; line-height:1.2; color:#fff3e9; margin-bottom:4px;
-      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .drexc { font-size:13px; line-height:1.4; color:#cba98f; margin-bottom:7px;
-      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .drcta { font-size:12.5px; font-weight:600; color:#ffce9a; }
-  @media (max-width:560px){ .drthumb{ width:88px; } .drtitle{ font-size:16px; } }
-  body.bright #rumbleCard .drcard { background:linear-gradient(135deg, rgba(217,128,38,.16), rgba(255,245,235,.6)); }
-  body.bright #rumbleCard .drtitle { color:#3a2410; } body.bright #rumbleCard .drexc { color:#7a5a3a; }
   /* brief sections (the board's cards) */
   /* Cards are visible by default; the entry animation is opt-in via .pop so a
      re-render (reconcile) can never leave a card stuck invisible or replay it. */
@@ -406,10 +386,6 @@
     <div class="core"></div>
   </div>
   <div id="status">Standing by</div>
-  <!-- House cross-promo: one Daily Rumble Substack post, pinned above the news
-       cards, rotating per visitor. Populated from the /brief response; hidden
-       until/unless the feed has items. -->
-  <div id="rumbleCard" hidden></div>
   <div id="homeCards"></div>
 </div>
 
@@ -1008,7 +984,13 @@
       (x.summary ? '<div class="bsum">'+esc(x.summary)+'</div>' : '') +
       '<div class="bmeta">'+esc(meta||'')+'</div>';
     sec.style.cursor = 'pointer';
-    sec.onclick = ()=> openArticle(x);
+    // The Daily Rumble house card is a normal-looking news card but taps out to
+    // Substack (external) and tracks the click, instead of the in-app article view.
+    if(x._substack){
+      sec.onclick = function(){ rumbleTrack({link:x._substack, title:x.title}, 'click'); window.open(x._substack, '_blank', 'noopener'); };
+    } else {
+      sec.onclick = ()=> openArticle(x);
+    }
     return sec;
   }
   // Stable per-story key. Some brief items share a placeholder thumbnail as their
@@ -1031,7 +1013,7 @@
       if(existing && existing.getAttribute('data-sig') === sig){
         node = existing; have.delete(key);                  // unchanged → reuse as-is, no animation
       } else {
-        node = storyCard(x, x.label, (x.source||'')+(x.time?' · '+x.time:''));
+        node = storyCard(x, x.label, x.source ? (x.source+(x.time?' · '+x.time:'')) : (x.time||''));
         node.setAttribute('data-key', key); node.setAttribute('data-sig', sig);
         if(existing){                                        // same story, changed content → swap in place, no pop
           wrap.replaceChild(node, existing); have.delete(key);
@@ -1211,8 +1193,8 @@
     }catch(e){}
     return sections;
   }
-  // ---------- Daily Rumble house card (pinned above the board, rotates per visitor) ----------
-  let rumbleChosen = null;
+  // ---------- Daily Rumble house card (blends into the board as a normal news card) ----------
+  let rumbleChosen = null, rumbleSlot = 0;
   function rumbleTrack(it, kind){
     if(!it || !it.link) return;
     if(kind==='impression'){
@@ -1222,9 +1204,16 @@
     try{ fetch('/rumble-event',{method:'POST',headers:{'content-type':'application/json'},keepalive:true,
       body:JSON.stringify({url:it.link, title:it.title, kind:kind})}).catch(function(){}); }catch(e){}
   }
-  // Newest-first, then rotate: index 0 on first-ever load (or when a new post
-  // appears), stepping one older each load and wrapping. No-storage → time bucket.
-  function pickRumble(items){
+  function relTime(ts){
+    if(!ts) return '';
+    const s = Math.max(0, Date.now()/1000 - ts);
+    return s<3600 ? Math.floor(s/60)+'m ago' : s<86400 ? Math.floor(s/3600)+'h ago' : Math.floor(s/86400)+'d ago';
+  }
+  // Pick the post (newest-first then rotate) AND the board slot (a varying spot
+  // within the top 5) once per page load; fire one impression. Idempotent across
+  // re-paints so qp:auth re-renders don't advance or double-count.
+  function prepRumble(items){
+    if(rumbleChosen || !items || !items.length) return;
     const newest = items[0].link || items[0].pubDate || '';
     let pos = 0, haveLS = true;
     try{
@@ -1233,26 +1222,19 @@
     }catch(e){ haveLS = false; pos = Math.floor(Date.now()/60000); }
     const idx = ((pos % items.length) + items.length) % items.length;
     try{ if(haveLS) localStorage.setItem('qr_dr_pos', String((pos+1) % items.length)); }catch(e){}   // advance for next load
-    const chosen = items[idx];
-    rumbleTrack(chosen, 'impression');
-    return chosen;
+    const it = items[idx];
+    rumbleSlot = Math.floor(Math.random()*5);                // varying slot within the top 5 (not always #1)
+    // Shaped like a brief section so it renders through the same storyCard path.
+    rumbleChosen = { label:'Daily Rumble', title:it.title, image:it.image||'', summary:it.excerpt||'',
+                     url:it.link, source:'', time:relTime(it.ts), _substack:it.link };
+    rumbleTrack(it, 'impression');                           // counts once the card is part of the board
   }
-  function renderRumble(items){
-    const card = $('rumbleCard'); if(!card) return;
-    if(!items || !items.length){ card.setAttribute('hidden',''); card.removeAttribute('data-show'); card.innerHTML=''; return; }
-    if(!rumbleChosen) rumbleChosen = pickRumble(items);     // pick once per page load (idempotent across re-paints)
-    const it = rumbleChosen;
-    const thumb = it.image ? '<div class="drthumb"><img src="'+esc(it.image)+'" alt="" loading="lazy" onerror="var p=this.closest(\'.drthumb\'); if(p) p.style.display=\'none\'"></div>' : '';
-    card.innerHTML =
-      '<a class="drcard" href="'+esc(it.link)+'" target="_blank" rel="noopener">'
-      + thumb
-      + '<div class="drbody"><div class="drlabel">◆ From Daily Rumble</div>'
-      + '<div class="drtitle">'+esc(it.title||'')+'</div>'
-      + (it.excerpt ? '<div class="drexc">'+esc(it.excerpt)+'</div>' : '')
-      + '<div class="drcta">Read on Substack →</div></div></a>';
-    card.removeAttribute('hidden'); card.setAttribute('data-show','1');
-    const a = card.querySelector('a.drcard');
-    if(a) a.addEventListener('click', function(){ rumbleTrack(it, 'click'); });
+  // Splice the Daily Rumble card into the board's top 5 at its chosen slot.
+  function withRumble(sections){
+    if(!rumbleChosen) return sections;
+    const arr = sections.slice();
+    arr.splice(Math.min(rumbleSlot, arr.length), 0, rumbleChosen);
+    return arr;
   }
 
   let homeRendered = -1, boardRetries = 0, lastBrief = [], briefInFlight = null, lastRumble = [];
@@ -1260,9 +1242,9 @@
   // settles so we re-personalize WITHOUT hitting /brief again. Reconcile keeps it
   // flicker-free even if this fires several times in a row.
   function paintBrief(){
-    renderRumble(lastRumble);
     if(!lastBrief.length) return;
-    const ordered = personalizeSections(lastBrief);
+    prepRumble(lastRumble);                             // pick post + slot once; needs the board's stories to sit among
+    const ordered = withRumble(personalizeSections(lastBrief));
     renderBoardSections(ordered, homeRendered < 0);   // animate only on the very first paint
     homeRendered = ordered.length;
     setStatus('Standing by');
@@ -1276,7 +1258,7 @@
     if(briefInFlight){ try{ await briefInFlight; }catch(e){} if(lastBrief.length) paintBrief(); return; }
     briefInFlight = fetch('/brief', {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
     let d=null; try{ d = await briefInFlight; }catch(e){} finally { briefInFlight = null; }
-    if(d && Array.isArray(d.rumble)){ lastRumble = d.rumble; renderRumble(lastRumble); }   // house card can show before the brief finishes
+    if(d && Array.isArray(d.rumble)) lastRumble = d.rumble;   // folded into the board on paint (varying top-5 slot)
     const sections = (d && d.sections) || [];
     if(!sections.length){
       if(homeRendered < 0) setStatus('Assembling today’s brief…');
@@ -1299,7 +1281,7 @@
         return a ? {label:w.label, title:a.title, url:a.url, image:a.image, source:a.source, time:a.time, summary:''} : null;
       }catch(e){ return null; }
     }))).filter(Boolean);
-    if(got.length){ renderBoardSections(got.concat(personalizeSections(lastBrief)), false); }
+    if(got.length){ renderBoardSections(withRumble(got.concat(personalizeSections(lastBrief))), false); }
   }
   // re-render the board whenever membership/auth changes (free brief <-> personalized)
   document.addEventListener('qp:auth', function(){ try{ if(document.body.classList.contains('home')) loadHome(false); }catch(e){} });
