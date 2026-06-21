@@ -251,6 +251,7 @@
     var ca=(costs&&costs.anthropic)||{}, co=(costs&&costs.openai)||{};
     var okStripe=r.mrr!=null, okGA=!!t.available, okOpenAI=!!co.available, okAnthropic=!!ca.available, okCal=!!(agenda&&agenda.available);
     var bul=[]; if(n.subscribers!=null) bul.push('Brief reaching '+num(n.subscribers)+' inboxes');
+    if(ca.credits!=null) bul.push('Anthropic credits '+ca.credits+(ca.mtd?' · '+cm(ca.mtd)+' MTD':''));
     if(co.voice!=null) bul.push('OpenAI voice spend '+cm(co.voice)+' MTD');
     if(m.total!=null) bul.push(num(m.total)+' members · '+num(m.new_today)+' new today');
     if(r.mrr!=null) bul.push('MRR '+money(r.mrr,r.currency)+' · '+num(r.active)+' active');
@@ -262,7 +263,7 @@
 
     // top
     H+='<div class="top"><div class="panel brandtop"><h1>JARVIS OS</h1><span class="j">v2.5</span><span class="s">Second Brain Command System</span>'
-      +'<div class="ctrls"><button class="btn" id="reload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>Sync</button><button class="btn" id="brief">▶ Brief</button></div></div>'
+      +'<div class="ctrls"><button class="btn" id="reload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>Sync</button></div></div>'
       +'<div class="panel"><p class="lbl">Intelligence &amp; Analytics<span class="ln"></span>'+when.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})+'</p><div class="intel">'
         +'<div class="stat"><span class="k">Campaign velocity</span><span class="n">—</span><div class="chart">'+chart(null,false)+'</div></div>'
         +'<div><span class="k" style="color:var(--green2);font-size:9px;letter-spacing:.12em">Performance overview</span><div class="perf" style="margin-top:6px">'
@@ -474,18 +475,28 @@
     var lines=[]; var now=new Date();
     lines.push('Current time: '+now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+', '+now.toLocaleDateString([],{weekday:'long',month:'long',day:'numeric',year:'numeric'})+'.');
     if(stats){
-      var m=stats.members||{}, r=stats.revenue||{}, n=stats.newsletter||{};
-      if(r.mrr!=null) lines.push('MRR: $'+r.mrr+'. Active subscriptions: '+r.active+'. Trialing: '+r.trialing+'. New customers (7d): '+r.new_customers_week+'.');
-      if(m.total!=null) lines.push('Total members: '+m.total+'. New today: '+m.new_today+'.');
-      if(n.subscribers!=null) lines.push('Newsletter subscribers: '+n.subscribers+'.');
+      var m=stats.members||{}, r=stats.revenue||{}, t=stats.traffic||{}, n=stats.newsletter||{};
+      if(r.mrr!=null) lines.push('MRR: $'+r.mrr+' ('+r.currency+'). Active: '+r.active+'. Trialing: '+(r.trialing||0)+'. New customers this week: '+(r.new_customers_week||0)+'.');
+      if(m.total!=null) lines.push('Total QUWWAA members: '+m.total+'. New today: '+(m.new_today||0)+'.');
+      if(n.subscribers!=null) lines.push('Newsletter subscribers (Kit): '+n.subscribers+'.'+(n.new_subscribers_week!=null?' New this week: '+n.new_subscribers_week+'.':''));
+      if(t.available){
+        if(t.users_today!=null) lines.push('GA visitors today: '+t.users_today+'.'+(t.users_week!=null?' This week: '+t.users_week+'.':'')+(t.sessions_today!=null?' Sessions today: '+t.sessions_today+'.':'')+(t.pageviews_today!=null?' Pageviews today: '+t.pageviews_today+'.':''));
+      } else { lines.push('Google Analytics: offline — GA service account key not yet configured.'); }
     }
     if(costs){
       var ca=costs.anthropic||{}, co=costs.openai||{};
-      if(co.mtd!=null) lines.push('OpenAI spend MTD: $'+co.mtd+'. Voice: $'+(co.voice||0)+'.');
-      if(ca.mtd!=null) lines.push('Anthropic spend MTD: $'+ca.mtd+'.');
+      if(co.mtd!=null) lines.push('OpenAI spend MTD: $'+co.mtd+'. Today: $'+(co.today||0)+'. Voice MTD: $'+(co.voice||0)+'. Status: '+(co.status||'unknown')+'.');
+      if(ca.credits!=null||ca.mtd!=null) lines.push('Anthropic credits remaining: '+(ca.credits||'unknown')+'. MTD spend: '+(ca.mtd!=null?'$'+ca.mtd:'unknown')+'. Status: '+(ca.status||'unknown')+'.');
+      else lines.push('Anthropic cost: not yet set — update anthropic_cost in jarvis_settings.');
     }
-    if(agenda&&agenda.available&&(agenda.events||[]).length){
-      lines.push('Upcoming calendar events: '+agenda.events.slice(0,3).map(function(e){ return e.summary+' ('+new Date(e.start).toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})+')'; }).join('; ')+'.');
+    if(agenda){
+      if(agenda.available&&(agenda.events||[]).length){
+        lines.push('Upcoming calendar: '+agenda.events.slice(0,5).map(function(e){
+          var dt=e.all_day?'all day':new Date(e.start).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+          return e.summary+' ('+dt+')';
+        }).join('; ')+'.');
+      } else if(agenda.available){ lines.push('Calendar: nothing scheduled in the next 7 days.'); }
+      else { lines.push('Calendar: offline — GA service account key needed.'); }
     }
     return lines.join(' ');
   }

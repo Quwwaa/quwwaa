@@ -2287,7 +2287,6 @@ def jarvis_diag():
     keys = {
         'ga_service_account': {'present': bool(sa_raw), 'length': len(sa_raw), 'source': sa_src or 'none',
                                'file_path': GA_SERVICE_ACCOUNT_FILE, 'file_exists': os.path.exists(GA_SERVICE_ACCOUNT_FILE)},
-        'anthropic_admin': _ki(ANTHROPIC_ADMIN_KEY, 'sk-ant-admin'),   # prefix_ok=false ⇒ wrong/crossed value
         'openai_admin': _ki(OPENAI_ADMIN_KEY, 'sk-'),
         'anthropic_api': _ki(ANTHROPIC_API_KEY, 'sk-ant'),
     }
@@ -2345,32 +2344,22 @@ def _round_map(m):
     return dict(sorted(((k, round(v, 2)) for k, v in m.items()), key=lambda kv: -kv[1]))
 
 def jarvis_cost_anthropic():
-    out = {'available': False, 'today': None, 'mtd': None, 'last7': [], 'by_model': {}, 'note': ''}
-    if not ANTHROPIC_ADMIN_KEY:
-        out['note'] = 'ANTHROPIC_ADMIN_KEY not set'; return out
+    # Reads manually-maintained figures from jarvis_settings (key='anthropic_cost').
+    # Row value is a JSON object: {"credits": "12.50", "mtd": "7.20", "updated_at": "..."}
+    # Update via Supabase dashboard or a future /jarvis/settings endpoint.
     try:
-        days, by_model, page = {}, {}, None
-        for _ in range(6):
-            ps = [('starting_at', _cost_month_start().strftime('%Y-%m-%dT00:00:00Z')),
-                  ('bucket_width', '1d'), ('limit', '31'), ('group_by[]', 'model')]
-            if page: ps.append(('page', page))
-            req = urllib.request.Request('https://api.anthropic.com/v1/organizations/cost_report?' + urllib.parse.urlencode(ps),
-                                         headers={'x-api-key': ANTHROPIC_ADMIN_KEY, 'anthropic-version': '2023-06-01'})
-            with urllib.request.urlopen(req, timeout=20) as r:
-                d = json.loads(r.read())
-            for b in d.get('data', []):
-                dk = (b.get('starting_at') or '')[:10]
-                for res in b.get('results', []):
-                    amt = float(res.get('amount') or 0)
-                    days[dk] = days.get(dk, 0.0) + amt
-                    mdl = res.get('model') or 'other'
-                    by_model[mdl] = by_model.get(mdl, 0.0) + amt
-            page = d.get('next_page') if d.get('has_more') else None
-            if not page: break
-        out.update(_summarize_days(days)); out['by_model'] = _round_map(by_model); out['available'] = True
+        rows = sb_rest('GET', 'jarvis_settings?key=eq.anthropic_cost&select=value&limit=1')
+        val = ((rows or [{}])[0].get('value')) or {}
+        if isinstance(val, str):
+            val = json.loads(val)
+        credits = (val.get('credits') or '').strip() or None
+        mtd_raw = val.get('mtd')
+        mtd = round(float(mtd_raw), 2) if mtd_raw not in (None, '') else None
+        return {'available': bool(credits or mtd is not None), 'manual': True,
+                'credits': credits, 'mtd': mtd,
+                'note': '' if (credits or mtd is not None) else 'set key=anthropic_cost in jarvis_settings'}
     except Exception as e:
-        out['note'] = _err_detail(e)
-    return out
+        return {'available': False, 'manual': True, 'credits': None, 'mtd': None, 'note': _err_detail(e)}
 
 def jarvis_cost_openai():
     out = {'available': False, 'today': None, 'mtd': None, 'last7': [], 'by_line_item': {}, 'voice': None, 'note': ''}
