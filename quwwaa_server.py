@@ -1909,6 +1909,42 @@ def jarvis_revenue():
         pass
     return out
 
+def _err_detail(e):
+    """Readable error incl. the Google HTTP body — the real reason (403 not shared,
+    404 wrong calendar id, invalid_grant, etc.) instead of a bare exception name."""
+    if isinstance(e, urllib.error.HTTPError):
+        try: body = e.read().decode('utf-8', 'ignore')[:300]
+        except Exception: body = ''
+        return 'HTTP %s %s' % (e.code, body)
+    return '%s: %s' % (type(e).__name__, str(e)[:200])
+
+_SA = {'v': None, 'err': None}
+def _load_sa():
+    """Parse the service-account key once. Tolerates a base64-encoded value and
+    backslash-escaped private-key newlines (common env-var paste mangling), and
+    raises a clear message rather than a cryptic JSONDecodeError."""
+    if _SA['v'] is not None: return _SA['v']
+    if _SA['err'] is not None: raise _SA['err']
+    raw = (GA_SERVICE_ACCOUNT_JSON or '').strip()
+    if not raw:
+        _SA['err'] = ValueError('GA_SERVICE_ACCOUNT_JSON is not set'); raise _SA['err']
+    sa = None
+    try:
+        sa = json.loads(raw)
+    except Exception:
+        try:
+            import base64
+            sa = json.loads(base64.b64decode(raw + '===').decode('utf-8'))
+        except Exception:
+            _SA['err'] = ValueError('GA_SERVICE_ACCOUNT_JSON is not valid JSON (paste the whole key file, or a base64 of it)')
+            raise _SA['err']
+    pk = sa.get('private_key')
+    if isinstance(pk, str) and '\\n' in pk and '\n' not in pk:
+        sa['private_key'] = pk.replace('\\n', '\n')             # un-mangle escaped newlines
+    if not (sa.get('client_email') and sa.get('private_key')):
+        _SA['err'] = ValueError('Service-account key is missing client_email or private_key'); raise _SA['err']
+    _SA['v'] = sa; return sa
+
 _GTOKENS = {}   # scope -> (expires_epoch, access_token); one Jarvis SA, GA + Calendar scopes
 def _google_token(scope):
     """OAuth2 access token for the Jarvis service account at the given scope
@@ -1917,7 +1953,7 @@ def _google_token(scope):
     if hit and hit[0] - 60 > time.time():
         return hit[1]
     import jwt                                              # PyJWT (RS256 via cryptography, already installed)
-    sa = json.loads(GA_SERVICE_ACCOUNT_JSON)
+    sa = _load_sa()
     now = int(time.time())
     assertion = jwt.encode({'iss': sa['client_email'], 'scope': scope,
                             'aud': 'https://oauth2.googleapis.com/token',
@@ -1974,7 +2010,7 @@ def jarvis_traffic():
                    top_countries=[{'country': r['dimensionValues'][0]['value'], 'users': int(float(r['metricValues'][0]['value']))}
                                   for r in ctry.get('rows', [])], note='')
     except Exception as e:
-        out['note'] = 'GA error: ' + type(e).__name__
+        out['note'] = 'GA error: ' + _err_detail(e)
     return out
 
 def _kit_get(path):
@@ -2073,7 +2109,7 @@ def jarvis_agenda(days=7):
         out['events'] = [_slim_event(e) for e in data.get('items', []) if e.get('status') != 'cancelled']
         out['available'] = True
     except Exception as ex:
-        out['note'] = 'Calendar error: ' + type(ex).__name__
+        out['note'] = 'Calendar error: ' + _err_detail(ex)
     _AGENDA['data'] = out; _AGENDA['t'] = time.time()
     return out
 
@@ -2104,6 +2140,39 @@ def jarvis_cal_write(action, p):
         return {'ok': True, 'event': _slim_event(
             _cal_api('PATCH', 'calendars/' + cal + '/events/' + urllib.parse.quote(eid), body=patch))}, 200
     return {'error': 'unknown_action'}, 400
+
+def jarvis_diag():
+    """Admin-only health probe for the Google integration. Reports which step
+    fails (SA parse → token → GA → calendar) with the real Google error, but no
+    secrets — client_email is the shareable SA identity, useful for confirming the
+    calendar was shared with it."""
+    out = {'calendar_id_set': bool(JARVIS_CALENDAR_ID), 'calendar_id': JARVIS_CALENDAR_ID or None,
+           'sa_json_valid': False, 'sa_client_email': None}
+    try:
+        sa = _load_sa()
+        out['sa_json_valid'] = True
+        out['sa_client_email'] = sa.get('client_email')
+    except Exception as e:
+        out['sa_error'] = _err_detail(e)
+        return out
+    try:
+        _google_token(GA_SCOPE); out['ga_token'] = 'ok'
+    except Exception as e:
+        out['ga_token'] = 'ERR ' + _err_detail(e)
+    try:
+        t = jarvis_traffic(); out['ga_report'] = 'ok' if t.get('available') else ('unavailable: ' + (t.get('note') or ''))
+    except Exception as e:
+        out['ga_report'] = 'ERR ' + _err_detail(e)
+    try:
+        _google_token(CAL_SCOPE); out['cal_token'] = 'ok'
+    except Exception as e:
+        out['cal_token'] = 'ERR ' + _err_detail(e)
+    try:
+        a = jarvis_agenda()
+        out['cal_list'] = ('ok (%d events)' % len(a.get('events', []))) if a.get('available') else ('unavailable: ' + (a.get('note') or ''))
+    except Exception as e:
+        out['cal_list'] = 'ERR ' + _err_detail(e)
+    return out
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -2176,10 +2245,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             res, code = jarvis_cal_write(action, d)
             self._send_json(res, code)
-        except urllib.error.HTTPError as he:
-            self._send_json({'error': 'calendar_http', 'status': he.code}, 502)
         except Exception as e:
-            self._send_json({'error': type(e).__name__}, 500)
+            self._send_json({'error': _err_detail(e)}, 502)
 
     def _handle_sponsor_event(self):
         """In-app impression/click tracking for the sponsor strip (anonymous,
@@ -2709,6 +2776,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json({'error': 'unauthorized'}, 401); return
             try:
                 self._send_json(jarvis_agenda())
+            except Exception as e:
+                self._send_json({'error': type(e).__name__}, 500)
+        elif self.path.startswith('/jarvis/diag'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            try:
+                self._send_json(jarvis_diag())
             except Exception as e:
                 self._send_json({'error': type(e).__name__}, 500)
         else:
