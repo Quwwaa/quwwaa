@@ -1531,11 +1531,17 @@ def whisper_transcribe(file_bytes, filename, content_type):
         return (json.loads(r.read()).get('text') or '').strip()
 
 
+def _phonetic_for_tts(text):
+    """Say "quwwaa" as "qoo-wah" — a TTS-only respelling (OpenAI speech reads plain
+    text, no SSML/phonemes). Applied to the spoken input only; the on-screen brand
+    name, summaries, and everything else stay untouched."""
+    return re.sub(r'\bquwwaa\b', 'Qoowah', text, flags=re.IGNORECASE)
+
 def openai_tts(text):
     """Render text to MP3 speech via OpenAI. Falls back to the always-valid
     tts-1 model/voice if the configured primary model or voice is rejected,
     so a mis-set TTS_MODEL/TTS_VOICE never leaves the butler mute."""
-    text = text[:4000]
+    text = _phonetic_for_tts(text[:4000])
     tries = [(TTS_MODEL, TTS_VOICE, TTS_MODEL.startswith('gpt-4o'))]
     if (TTS_MODEL, TTS_VOICE) != ('tts-1', 'onyx'):
         tries.append(('tts-1', 'onyx', False))
