@@ -124,9 +124,10 @@ def ago(dt):
     if s < 86400: return '%dh ago' % (s // 3600)
     return '%dd ago' % (s // 86400)
 
-def _gdelt_call(q, days):
+def _gdelt_call(q, days, lang='en'):
+    sl = LANGS.get(lang, LANGS['en'])['gdelt']
     url = 'https://api.gdeltproject.org/api/v2/doc/doc?' + urllib.parse.urlencode({
-        'query': q + ' sourcelang:english', 'mode': 'artlist', 'maxrecords': '40',
+        'query': q + ' sourcelang:%s' % sl, 'mode': 'artlist', 'maxrecords': '40',
         'format': 'json', 'timespan': '%dd' % days, 'sort': 'datedesc'})
     body = fetch(url, timeout=7) or b'{}'
     try:
@@ -135,15 +136,15 @@ def _gdelt_call(q, days):
         # GDELT returns plain-text errors (rate limits etc.) — treat as empty
         return []
 
-def src_gdelt(q, days=7):
+def src_gdelt(q, days=7, lang='en'):
     try:
-        arts = _gdelt_call(q, days)
+        arts = _gdelt_call(q, days, lang)
     except Exception:
         arts = []  # GDELT flaky/rate-limited — skip rather than stall the whole board
     words = q.split()
     if len(arts) < 8 and len(words) > 3:
         # query too strict — relax to the strongest three terms
-        arts += _gdelt_call(' '.join(words[:3]), days)
+        arts += _gdelt_call(' '.join(words[:3]), days, lang)
     out = []
     for a in arts:
         dt = None
@@ -157,9 +158,10 @@ def src_gdelt(q, days=7):
                     'ts': dt.timestamp() if dt else 0, 'via': 'GDELT'})
     return out
 
-def src_gnews(q, days=7):
+def src_gnews(q, days=7, lang='en'):
+    hl, gl, ceid = LANGS.get(lang, LANGS['en'])['gnews']
     url = 'https://news.google.com/rss/search?' + urllib.parse.urlencode(
-        {'q': '%s when:%dd' % (q, days), 'hl': 'en-US', 'gl': 'US', 'ceid': 'US:en'})
+        {'q': '%s when:%dd' % (q, days), 'hl': hl, 'gl': gl, 'ceid': ceid})
     out = []
     root = ET.fromstring(fetch(url))
     for item in root.iter('item'):
@@ -509,19 +511,26 @@ def _is_article_url(u):
         return False
     return True
 
-def aggregate(q, days=7, fast=False):
+def aggregate(q, days=7, fast=False, lang='en'):
     results, seen, arts = [], set(), []
     diag = {}
     cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
-    sources = ((src_bing, 'BING'), (src_gdelt, 'GDELT'), (src_yahoo, 'YAHOO')) if fast else \
-              ((src_rsspack, 'FEEDS'), (src_gdelt, 'GDELT'), (src_bing, 'BING'),
-               (src_yahoo, 'YAHOO'), (src_bsky, 'BLUESKY'),
-               (src_gnews, 'GNEWS'), (src_reddit, 'REDDIT'))
+    if lang != 'en':
+        # Non-English: native-language sources only — locale-aware Google News +
+        # GDELT sourcelang. (Bing/Yahoo/curated feeds are English-centric.)
+        sources = ((src_gnews, 'GNEWS'), (src_gdelt, 'GDELT'))
+    elif fast:
+        sources = ((src_bing, 'BING'), (src_gdelt, 'GDELT'), (src_yahoo, 'YAHOO'))
+    else:
+        sources = ((src_rsspack, 'FEEDS'), (src_gdelt, 'GDELT'), (src_bing, 'BING'),
+                   (src_yahoo, 'YAHOO'), (src_bsky, 'BLUESKY'),
+                   (src_gnews, 'GNEWS'), (src_reddit, 'REDDIT'))
     # Return with whatever has arrived by the deadline rather than waiting on the
     # slowest source — a single stalled feed must never hold up the whole board.
     deadline = 4.0 if fast else 6.5
     ex = ThreadPoolExecutor(max_workers=len(sources))
-    futs = {ex.submit(f, q, days): n for f, n in sources}
+    futs = ({ex.submit(f, q, days, lang): n for f, n in sources} if lang != 'en'
+            else {ex.submit(f, q, days): n for f, n in sources})
     enough = 8 if fast else 36   # return as soon as we clearly have plenty; don't wait on stragglers
     try:
         for fu in as_completed(list(futs), timeout=deadline):
@@ -556,7 +565,8 @@ def aggregate(q, days=7, fast=False):
     arts = arts[:60]
     if not fast:  # fast mode skips the slow enrichment passes
         fix_gnews_urls(arts)
-        upgrade_gnews(arts)          # may REWRITE a['url'] from a Bing match…
+        if lang == 'en':
+            upgrade_gnews(arts)      # may REWRITE a['url'] from a Bing match — English-only, so skip for other langs
         fill_images(arts)
         arts = [a for a in arts if _is_article_url(a.get('url', ''))]   # …so re-validate after enrichment
     return {'query': q, 'days': days, 'articles': arts, 'diag': diag,
@@ -565,12 +575,12 @@ def aggregate(q, days=7, fast=False):
 CACHE = {}
 CACHE_TTL = 600  # seconds; in memory only, gone on restart
 
-def cached_aggregate(q, days=7, fast=False):
-    key = (q.lower().strip(), days, fast)
+def cached_aggregate(q, days=7, fast=False, lang='en'):
+    key = (q.lower().strip(), days, fast, lang)
     hit = CACHE.get(key)
     if hit and time.time() - hit[0] < CACHE_TTL:
         return hit[1]
-    payload = aggregate(q, days, fast)
+    payload = aggregate(q, days, fast, lang)
     if payload.get('articles'):
         CACHE[key] = (time.time(), payload)
     return payload
@@ -590,8 +600,8 @@ HOME_CATS = [
 HOME_SNAPSHOT = {'t': 0, 'items': []}
 HOME_REFRESH = int(os.environ.get('HOME_REFRESH', '300'))  # rebuild every 5 min
 
-def _pick_card(cat, fast=True, exclude_urls=None):
-    payload = cached_aggregate(cat['q'], cat['days'], fast)
+def _pick_card(cat, fast=True, exclude_urls=None, lang='en'):
+    payload = cached_aggregate(_cat_query(cat, lang), cat['days'], fast, lang)
     arts = payload.get('articles', [])
     mah = cat.get('maxAgeH')
     if mah:
@@ -644,6 +654,74 @@ BRIEF_CATS = [
     {'label': 'Worth Knowing',      'q': 'breaking news',           'days': 1, 'maxAgeH': 20},
 ]
 BRIEF = {'t': 0, 'sections': []}
+
+# --- Localization (Phase 1) --------------------------------------------------
+# Native-sourced news + in-language summaries. English is the BASE path and is
+# unchanged. Other languages source from locale-aware Google News + GDELT
+# sourcelang (so headlines/articles are native, never machine-translated) and get
+# summaries written in-language. Caches and the brief are keyed per language;
+# non-English content is built lazily on first request. Unknown lang -> English.
+LANGS = {
+    'en': {'gnews': ('en-US', 'US', 'US:en'),  'gdelt': 'english',    'plang': 'English'},
+    'es': {'gnews': ('es-419', 'MX', 'MX:es-419'), 'gdelt': 'spanish', 'plang': 'Spanish'},
+    'fr': {'gnews': ('fr', 'FR', 'FR:fr'),     'gdelt': 'french',     'plang': 'French'},
+    'ar': {'gnews': ('ar', 'EG', 'EG:ar'),     'gdelt': 'arabic',     'plang': 'Arabic'},
+    'ru': {'gnews': ('ru', 'RU', 'RU:ru'),     'gdelt': 'russian',    'plang': 'Russian'},
+    'ms': {'gnews': ('ms', 'MY', 'MY:ms'),     'gdelt': 'malay',      'plang': 'Malay'},
+    'id': {'gnews': ('id', 'ID', 'ID:id'),     'gdelt': 'indonesian', 'plang': 'Indonesian'},
+}
+DEFAULT_LANG = 'en'
+
+# Localized per-category brief query terms (don't search English keywords against
+# native-language sources). Languages without a map fall back to the English query.
+CAT_QUERIES = {
+    'es': {
+        'US Politics': 'política Estados Unidos', 'World': 'noticias internacionales',
+        'Middle East': 'Oriente Medio', 'Sports': 'deportes',
+        'Finance': 'economía finanzas', 'Markets': 'bolsa mercados',
+        'Tech': 'tecnología', 'AI': 'inteligencia artificial',
+        'Culture & Entertainment': 'entretenimiento famosos', 'Science': 'ciencia',
+        'Nature & Disasters': 'desastres naturales', 'Crime & Justice': 'crimen justicia',
+        'Worth Knowing': 'últimas noticias',
+    },
+}
+
+def norm_lang(s):
+    """Normalize a requested language to a supported code, else English."""
+    s = (s or '').strip().lower().replace('_', '-').split('-')[0]   # 'ar-EG' -> 'ar'
+    return s if s in LANGS else DEFAULT_LANG
+
+def _cat_query(cat, lang):
+    """The brief search terms for a category in the target language."""
+    if lang == 'en':
+        return cat['q']
+    return (CAT_QUERIES.get(lang) or {}).get(cat['label']) or cat['q']
+
+# Per-language brief stores. English stays in BRIEF (the prewarmed base); other
+# languages build lazily and live here.
+BRIEF_I18N = {}
+def _brief_store(lang):
+    if lang == 'en':
+        return BRIEF
+    return BRIEF_I18N.setdefault(lang, {'t': 0, 'sections': []})
+
+BRIEF_BUILDING = set()          # langs with a build in flight — avoid concurrent duplicate builds
+def ensure_brief_lang(lang):
+    """For a non-English language, kick off a background build if the store is
+    empty/partial/stale (English is prewarmed separately). Returns immediately so
+    the request never blocks on ~13 summaries; the client re-fetches to fill in."""
+    if lang == 'en':
+        return
+    store = _brief_store(lang)
+    stale = store['t'] == 0 or len(store['sections']) < len(BRIEF_CATS) or (time.time() - store['t'] > BRIEF_TTL)
+    if not stale or lang in BRIEF_BUILDING:
+        return
+    BRIEF_BUILDING.add(lang)
+    def _run():
+        try: build_brief(full=(store['t'] == 0), lang=lang)
+        except Exception: pass
+        finally: BRIEF_BUILDING.discard(lang)
+    threading.Thread(target=_run, daemon=True).start()
 BRIEF_TTL = int(os.environ.get('BRIEF_TTL', '10800'))   # rebuild at most every 3 hours
 
 def summarize_story(title, desc):
@@ -866,11 +944,15 @@ LEDE_SYS = ("You are QUWWAA, a wire-service editor. Write a tight, factual news 
     "facts you are confident are true (from the provided material or well-established public knowledge) and do not "
     "invent specifics. Output only the summary, nothing else.")
 
-def _lede(user_content, strict=False, longer=False):
+def _lede(user_content, strict=False, longer=False, lang='en'):
     sysmsg = LEDE_SYS \
         + (" Write 2-3 short paragraphs (about 60-110 words)." if longer else "") \
         + (" A generic restatement is unacceptable — include concrete, verifiable specifics "
            "(names, places, numbers, what happened)." if strict else "")
+    if lang != 'en':
+        pl = LANGS.get(lang, {}).get('plang', 'the source language')
+        sysmsg += (" Write the summary in %s. The article is in %s; keep it natural and native, "
+                   "not translated-sounding. Leave proper names and source names as given." % (pl, pl))
     body = json.dumps({'model': ASK_MODEL, 'max_tokens': (380 if longer else 170), 'system': sysmsg,
                        'messages': [{'role': 'user', 'content': user_content}]}).encode()
     req = urllib.request.Request('https://api.anthropic.com/v1/messages', data=body, headers={
@@ -901,7 +983,7 @@ def _neighbors_with_bodies(title, source, exclude_url, budget=9):
         pass
     return [a for a in out if (a.get('body') or '').strip()]
 
-def make_summary(title, source='', section='', url='', desc='', longer=False, body=None, neighbors=None):
+def make_summary(title, source='', section='', url='', desc='', longer=False, body=None, neighbors=None, lang='en'):
     """Tiered, quality-checked summary used by BOTH the brief cards (longer=False)
     and the in-app article view (longer=True). Returns (summary, degraded). Never
     emits meta/apology/headline-restatement slop — a failing tier is rejected and
@@ -918,7 +1000,7 @@ def make_summary(title, source='', section='', url='', desc='', longer=False, bo
     if body and len(body) > 400:
         try:
             s = _lede('Section: %s\nSource: %s\nHeadline: %s\n\nArticle:\n%s\n\nWrite the summary.'
-                      % (section, source, title, body), longer=longer)
+                      % (section, source, title, body), longer=longer, lang=lang)
             if _ok_summary(s, title, require_specifics=False): return s, False
             attempts.append(s)
         except Exception: pass
@@ -933,7 +1015,7 @@ def make_summary(title, source='', section='', url='', desc='', longer=False, bo
                   % (n.get('title', ''), n.get('source', ''), (n.get('body') or '')[:600]) for n in neighbors)))
         for strict in (False, True):
             try:
-                s = _lede(ctx, strict=strict, longer=longer)
+                s = _lede(ctx, strict=strict, longer=longer, lang=lang)
                 if _ok_summary(s, title, require_specifics=False): return s, False
                 attempts.append(s)
             except Exception: pass
@@ -942,7 +1024,7 @@ def make_summary(title, source='', section='', url='', desc='', longer=False, bo
         s = _lede('Section: %s\nSource: %s\nHeadline: %s\nSnippet: %s\n\nWrite a confident, factual summary of '
                   'this event using the headline, snippet and your knowledge of it. Name the who/what/where. Do '
                   'not apologize or say you lack information.'
-                  % (section, source, title, desc or '(none)'), strict=True, longer=longer)
+                  % (section, source, title, desc or '(none)'), strict=True, longer=longer, lang=lang)
         if _ok_summary(s, title): return s, True
         attempts.append(s)
     except Exception: pass
@@ -955,16 +1037,19 @@ def make_summary(title, source='', section='', url='', desc='', longer=False, bo
         return desc, True
     return '', True
 
-def quality_summary(title, source='', section='', url='', desc=''):
+def quality_summary(title, source='', section='', url='', desc='', lang='en'):
     """Short wire-lede for the brief cards — background prewarm path."""
-    return make_summary(title, source, section, url, desc, longer=False)
+    return make_summary(title, source, section, url, desc, longer=False, lang=lang)
 
-def build_brief(full=False):
+def build_brief(full=False, lang='en'):
     """Assemble one summarized story per section. On a 'full' rebuild every
     section is re-summarized fresh; otherwise sections already present are kept
     and only the MISSING ones are fetched/summarized — so filling out a partial
-    brief costs an AI call only for the sections that are still empty."""
-    prev = {s['label']: s for s in BRIEF['sections']}   # last-good cards, kept as a fallback
+    brief costs an AI call only for the sections that are still empty. `lang`
+    sources stories natively in that language and summarizes in-language; the
+    result is published to that language's brief store (English -> BRIEF)."""
+    store = _brief_store(lang)
+    prev = {s['label']: s for s in store['sections']}   # last-good cards, kept as a fallback
     out = []
     for cat in BRIEF_CATS:
         label = cat['label']
@@ -982,7 +1067,7 @@ def build_brief(full=False):
             np = dict(p)
             try:
                 desc = og_desc(p.get('url', '')) if str(p.get('url', '')).startswith('http') else ''
-                summ, deg = quality_summary(p.get('title', ''), p.get('source', ''), label, p.get('url', ''), desc)
+                summ, deg = quality_summary(p.get('title', ''), p.get('source', ''), label, p.get('url', ''), desc, lang=lang)
                 np['summary'] = summ
                 np['degraded'] = bool(deg and tries < 3)    # stop retrying after 3 cycles
             except Exception: pass
@@ -992,22 +1077,22 @@ def build_brief(full=False):
             try:
                 # Use the FULL aggregate (more sources + image backfill) so each section
                 # reliably yields a thumbnailed story — the fast path comes back empty too often.
-                card = _pick_card(cat, fast=False)
+                card = _pick_card(cat, fast=False, lang=lang)
             except Exception:
                 card = None
             if card:
                 a = card['a']
                 url = a.get('url', '')
                 desc = og_desc(url) if url.startswith('http') else ''
-                summ, deg = quality_summary(a.get('title', ''), a.get('source', ''), label, url, desc)
+                summ, deg = quality_summary(a.get('title', ''), a.get('source', ''), label, url, desc, lang=lang)
                 out.append({'label': label, 'title': a.get('title', ''), 'url': url,
                             'source': a.get('source', ''), 'image': a.get('image', ''),
                             'time': a.get('time', ''), 'summary': summ, 'degraded': deg})
             elif p:
                 out.append(p)                           # keep the previous good story rather than drop the section
         if out:
-            BRIEF['sections'] = list(out)               # publish progress so /brief fills in live
-    BRIEF['t'] = time.time()               # always stamp so we don't loop full rebuilds
+            store['sections'] = list(out)               # publish progress so /brief fills in live
+    store['t'] = time.time()               # always stamp so we don't loop full rebuilds
 
 # --- Daily Morning Brief email (Kit broadcast, teaser format) ------------------
 # Per-slot day guards + a per-day "already emailed" url set so the evening brief
@@ -3186,7 +3271,13 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path.startswith('/home'):
             self._send_json({'items': HOME_SNAPSHOT['items'], 't': HOME_SNAPSHOT['t']})
         elif self.path.startswith('/brief'):
-            self._send_json({'sections': BRIEF['sections'], 't': BRIEF['t'], 'rumble': RUMBLE['items']})
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            lang = norm_lang((qs.get('lang') or ['en'])[0])
+            store = _brief_store(lang)
+            if lang != 'en':
+                ensure_brief_lang(lang)          # lazy background build; fills on subsequent fetches
+            self._send_json({'sections': store['sections'], 't': store['t'],
+                             'rumble': RUMBLE['items'], 'lang': lang})
         elif self.path.startswith('/sponsors'):
             try: items = get_sponsors()
             except Exception: items = []
@@ -3228,8 +3319,9 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 days = 7
             fast = (qs.get('fast') or ['0'])[0] == '1'
+            lang = norm_lang((qs.get('lang') or ['en'])[0])
             try:
-                payload = cached_aggregate(q, days, fast) if q else {'query': '', 'articles': [], 'sources': 0}
+                payload = cached_aggregate(q, days, fast, lang) if q else {'query': '', 'articles': [], 'sources': 0}
             except Exception as e:
                 payload = {'query': q, 'articles': [], 'sources': 0, 'error': str(e)}
             self._send_json(payload)
