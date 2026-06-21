@@ -65,7 +65,9 @@ VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')             # secret
 VAPID_SUBJECT = os.environ.get('VAPID_SUBJECT', 'mailto:quwwaa.io@gmail.com')
 # Daily Morning Brief email (Kit broadcast). Mode: off | draft | send.
 BRIEF_EMAIL_MODE = os.environ.get('BRIEF_EMAIL_MODE', 'draft').lower()
-BRIEF_SEND_HOUR = int(os.environ.get('BRIEF_SEND_HOUR', '6'))                       # America/Phoenix clock hour
+BRIEF_SEND_HOUR = int(os.environ.get('BRIEF_SEND_HOUR', '6'))                       # morning slot, America/Phoenix clock hour
+BRIEF_EVENING_SEND_HOUR = int(os.environ.get('BRIEF_EVENING_SEND_HOUR', '15'))      # evening slot, MST (3 PM)
+BRIEF_COMPOSE_LEAD_MIN = int(os.environ.get('BRIEF_COMPOSE_LEAD_MIN', '60'))        # compose this many min before each send
 BRIEF_COMPOSE_HOUR = int(os.environ.get('BRIEF_COMPOSE_HOUR', str(max(0, BRIEF_SEND_HOUR - 1))))
 BRIEF_EMAIL_TOKEN = os.environ.get('BRIEF_EMAIL_TOKEN', '')                         # gates the manual /admin trigger
 ADMIN_USER_ID = os.environ.get('ADMIN_USER_ID', '')                                # optional: who to ping for draft review
@@ -574,7 +576,7 @@ HOME_CATS = [
 HOME_SNAPSHOT = {'t': 0, 'items': []}
 HOME_REFRESH = int(os.environ.get('HOME_REFRESH', '300'))  # rebuild every 5 min
 
-def _pick_card(cat, fast=True):
+def _pick_card(cat, fast=True, exclude_urls=None):
     payload = cached_aggregate(cat['q'], cat['days'], fast)
     arts = payload.get('articles', [])
     mah = cat.get('maxAgeH')
@@ -583,6 +585,8 @@ def _pick_card(cat, fast=True):
         fresh = [a for a in arts if (a.get('ts') or 0) >= cut]
         if fresh:
             arts = fresh
+    if exclude_urls:
+        arts = [a for a in arts if _norm_brief_url(a.get('url', '')) not in exclude_urls]
     a = next((x for x in arts if x.get('image')), arts[0] if arts else None)
     if not a:
         return None
@@ -992,7 +996,19 @@ def build_brief(full=False):
     BRIEF['t'] = time.time()               # always stamp so we don't loop full rebuilds
 
 # --- Daily Morning Brief email (Kit broadcast, teaser format) ------------------
-BRIEF_EMAIL = {'day': None}
+# Per-slot day guards + a per-day "already emailed" url set so the evening brief
+# never repeats a story the morning brief already sent.
+BRIEF_EMAIL = {'morning_day': None, 'evening_day': None, 'sent_day': None, 'sent_urls': set()}
+
+def _norm_brief_url(u):
+    """Normalize an article url for de-dup: drop scheme/query/fragment + trailing
+    slash, lowercase host so the same story via a slightly different url still
+    counts as a duplicate."""
+    try:
+        p = urllib.parse.urlsplit((u or '').strip())
+        return (p.netloc.lower() + p.path.rstrip('/')).lower()
+    except Exception:
+        return (u or '').strip().lower()
 
 def _brief_article_link(s):
     """Deep-link into the on-site article view (counts toward the free meter)."""
@@ -1000,16 +1016,51 @@ def _brief_article_link(s):
                                 's': s.get('source', ''), 'lbl': s.get('label', '')})
     return SITE_URL + '/?' + q
 
-def compose_brief_email():
+def compose_brief_email(slot='morning', exclude_urls=None):
     """Teaser email: butler intro + each section's headline + thumbnail, both
-    clickable to quwwaa.com. No summaries in the email. Returns (subject, html)."""
-    secs = list(BRIEF.get('sections') or [])
+    clickable to quwwaa.com. No summaries in the email. Copy branches on `slot`
+    ('morning'|'evening'). For the evening slot, `exclude_urls` (normalized) drops
+    any story already emailed that morning — a section whose only fresh story is a
+    morning duplicate is replaced with the next fresh story, or dropped entirely.
+    Returns (subject, html, urls) where `urls` are the stories actually included."""
+    exclude_urls = set(exclude_urls or ())
+    cats_by_label = {c['label']: c for c in BRIEF_CATS}
+    used = set()                       # urls already placed in THIS email (cross-section de-dup)
+    secs = []
+    for s in (BRIEF.get('sections') or []):
+        nu = _norm_brief_url(s.get('url', ''))
+        if nu and nu not in exclude_urls and nu not in used:
+            secs.append(s); used.add(nu); continue
+        # Duplicate (or already used here) — try the next fresh story for this category.
+        cat = cats_by_label.get(s.get('label'))
+        if not cat:
+            continue
+        try:
+            alt = _pick_card(cat, fast=False, exclude_urls=(exclude_urls | used))
+        except Exception:
+            alt = None
+        if alt:
+            a = alt['a']; au = _norm_brief_url(a.get('url', ''))
+            if au and au not in exclude_urls and au not in used:
+                secs.append({'label': alt['label'], 'title': a.get('title', ''),
+                             'url': a.get('url', ''), 'source': a.get('source', ''),
+                             'image': a.get('image', ''), 'time': a.get('time', '')})
+                used.add(au)
+        # else: no fresh non-duplicate story for this category → drop the section.
     now_phx = datetime.now(timezone.utc).astimezone(PHOENIX_TZ)
     try: date_str = now_phx.strftime('%A, %B %-d')
     except Exception: date_str = now_phx.strftime('%A, %B %d')
     top = secs[0].get('title') if secs else ''
-    subject = ('QUWWAA Brief — ' + top) if top else ('Your QUWWAA Morning Brief · ' + date_str)
-    intro = "Good morning. Here's the world this morning — tap any headline to read it on QUWWAA."
+    if slot == 'evening':
+        subject = ('QUWWAA Evening Brief — ' + top) if top else ('Your QUWWAA Evening Brief · ' + date_str)
+        intro = "Good evening. Here's where the day landed — the latest from QUWWAA."
+        header_label = 'Your Evening Brief · ' + date_str
+        footer_line = "You're receiving the QUWWAA Brief."
+    else:
+        subject = ('QUWWAA Brief — ' + top) if top else ('Your QUWWAA Morning Brief · ' + date_str)
+        intro = "Good morning. Here's the world this morning — tap any headline to read it on QUWWAA."
+        header_label = 'Your Morning Brief · ' + date_str
+        footer_line = "You're receiving the QUWWAA Morning Brief."
     rows = []
     for s in secs:
         link = _brief_article_link(s); img = s.get('image', '')
@@ -1055,14 +1106,14 @@ def compose_brief_email():
         '<tr><td align="center" style="padding:24px 12px;">'
         '<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">'
         '<tr><td align="center" style="padding:6px 0 2px;"><span style="font:500 30px Georgia,serif;color:#e08a32;letter-spacing:1px;">quwwaa</span></td></tr>'
-        '<tr><td align="center" style="font:13px Arial,sans-serif;color:#a06a3a;padding-bottom:18px;">Your Morning Brief · ' + html.escape(date_str) + '</td></tr>'
+        '<tr><td align="center" style="font:13px Arial,sans-serif;color:#a06a3a;padding-bottom:18px;">' + html.escape(header_label) + '</td></tr>'
         '<tr><td style="font:15px Georgia,serif;color:#e7d3c0;line-height:1.6;padding:0 4px 8px;">' + html.escape(intro) + '</td></tr>'
         '<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + ''.join(rows) + '</table></td></tr>'
         '<tr><td align="center" style="padding:26px 0 8px;"><a href="' + SITE_URL + '/" style="background:#d98026;color:#1a1208;font:700 15px Arial,sans-serif;text-decoration:none;padding:13px 26px;border-radius:10px;display:inline-block;">Read the full brief on QUWWAA &rarr;</a></td></tr>'
         '<tr><td align="center" style="padding:12px 16px 4px;font:13px Arial,sans-serif;color:#cba98f;line-height:1.5;">Make it yours &mdash; <a href="' + SITE_URL + '/" style="color:#e89a5a;">start your 7-day QUWWAA Gold trial</a> for unlimited articles and a butler who knows your beats.</td></tr>'
-        '<tr><td align="center" style="padding:18px 0 0;font:11px Arial,sans-serif;color:#6a4a2a;">You\'re receiving the QUWWAA Morning Brief.</td></tr>'
+        '<tr><td align="center" style="padding:18px 0 0;font:11px Arial,sans-serif;color:#6a4a2a;">' + html.escape(footer_line) + '</td></tr>'
         '</table></td></tr></table></div>')
-    return subject, doc
+    return subject, doc, [s.get('url', '') for s in secs]
 
 def create_kit_broadcast(subject, content, preview_text='', send_at=None):
     """Create a Kit v4 broadcast. No send_at -> draft; with send_at -> scheduled."""
@@ -1080,27 +1131,41 @@ def create_kit_broadcast(subject, content, preview_text='', send_at=None):
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read() or b'{}')
 
-def run_brief_email(force=False):
-    """Compose + create the daily broadcast. Idempotent per Phoenix day (one auto
-    attempt/day); force=True (manual admin trigger) bypasses the day guard."""
+def run_brief_email(slot='morning', force=False):
+    """Compose + create one broadcast for `slot` ('morning'|'evening'). Idempotent
+    per Phoenix day, per slot (one auto attempt/day each); force=True (manual admin
+    trigger) bypasses the day guard. The evening slot excludes every story the
+    morning slot already sent today, so the two emails never repeat a story."""
     if not KIT_API_KEY or BRIEF_EMAIL_MODE == 'off':
         return {'skipped': 'disabled'}
     now_phx = datetime.now(timezone.utc).astimezone(PHOENIX_TZ)
     today = now_phx.strftime('%Y-%m-%d')
-    if not force and BRIEF_EMAIL['day'] == today:
-        return {'skipped': 'already_today'}
+    day_key = 'evening_day' if slot == 'evening' else 'morning_day'
+    if not force and BRIEF_EMAIL.get(day_key) == today:
+        return {'skipped': 'already_today', 'slot': slot}
+    # Reset the cross-email de-dup set at the start of each Phoenix day.
+    if BRIEF_EMAIL.get('sent_day') != today:
+        BRIEF_EMAIL['sent_day'] = today
+        BRIEF_EMAIL['sent_urls'] = set()
     try:
-        if BRIEF['t'] == 0 or len(BRIEF['sections']) < len(BRIEF_CATS):
-            build_brief(full=(BRIEF['t'] == 0))        # freshen before composing
+        # Freshen before composing; the evening slot always refreshes so it reflects
+        # the day's latest stories rather than reusing the morning set.
+        if slot == 'evening' or BRIEF['t'] == 0 or len(BRIEF['sections']) < len(BRIEF_CATS):
+            build_brief(full=(BRIEF['t'] == 0))
     except Exception:
         pass
     if not BRIEF.get('sections'):
-        return {'skipped': 'no_brief'}
-    BRIEF_EMAIL['day'] = today                          # consume the day (1 auto attempt; manual can force)
-    subject, content = compose_brief_email()
+        return {'skipped': 'no_brief', 'slot': slot}
+    exclude = set(BRIEF_EMAIL.get('sent_urls') or ()) if slot == 'evening' else None
+    subject, content, urls = compose_brief_email(slot, exclude_urls=exclude)
+    if slot == 'evening' and not urls:
+        BRIEF_EMAIL[day_key] = today                    # nothing new today — consume the slot, don't mail dupes
+        return {'skipped': 'nothing_new', 'slot': slot}
+    BRIEF_EMAIL[day_key] = today                        # consume the slot (1 auto attempt; manual can force)
+    send_hour = BRIEF_EVENING_SEND_HOUR if slot == 'evening' else BRIEF_SEND_HOUR
     send_at = None
     if BRIEF_EMAIL_MODE == 'send':
-        send_dt = now_phx.replace(hour=BRIEF_SEND_HOUR, minute=0, second=0, microsecond=0)
+        send_dt = now_phx.replace(hour=send_hour, minute=0, second=0, microsecond=0)
         if send_dt <= now_phx:
             send_dt += timedelta(days=1)
         send_at = send_dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -1109,12 +1174,16 @@ def run_brief_email(force=False):
         bid = None
         if isinstance(res, dict):
             bid = (res.get('broadcast') or {}).get('id') if isinstance(res.get('broadcast'), dict) else res.get('id')
+        for u in urls:                                  # record what went out so the other slot won't repeat it
+            nu = _norm_brief_url(u)
+            if nu: BRIEF_EMAIL['sent_urls'].add(nu)
         if BRIEF_EMAIL_MODE == 'draft' and ADMIN_USER_ID:
-            try: push_to_user(ADMIN_USER_ID, {'title': 'Morning Brief draft ready',
+            try: push_to_user(ADMIN_USER_ID, {'title': slot.capitalize() + ' Brief draft ready',
                 'body': 'Review & send in Kit — ' + subject[:80], 'url': '/'}, 'notify_brief')
             except Exception: pass
-        print('[brief-email] %s broadcast created id=%s subject=%r' % (BRIEF_EMAIL_MODE, bid, subject))
-        return {'ok': True, 'mode': BRIEF_EMAIL_MODE, 'subject': subject, 'broadcast_id': bid, 'send_at': send_at}
+        print('[brief-email] %s %s broadcast created id=%s subject=%r' % (BRIEF_EMAIL_MODE, slot, bid, subject))
+        return {'ok': True, 'mode': BRIEF_EMAIL_MODE, 'slot': slot, 'subject': subject,
+                'broadcast_id': bid, 'send_at': send_at, 'count': len(urls)}
     except Exception as e:
         detail = ''
         try: detail = e.read().decode()[:300] if hasattr(e, 'read') else str(e)
@@ -1123,13 +1192,21 @@ def run_brief_email(force=False):
         return {'error': type(e).__name__, 'detail': detail}
 
 def brief_email_loop():
-    """Fire once per Phoenix day on/after the compose hour."""
+    """Each poll, fire the morning and evening slots — each once per Phoenix day,
+    composed BRIEF_COMPOSE_LEAD_MIN minutes before its send hour."""
     if not KIT_API_KEY or BRIEF_EMAIL_MODE == 'off':
         return
+    lead = timedelta(minutes=BRIEF_COMPOSE_LEAD_MIN)
     while True:
         try:
-            if datetime.now(timezone.utc).astimezone(PHOENIX_TZ).hour >= BRIEF_COMPOSE_HOUR:
-                run_brief_email()
+            now_phx = datetime.now(timezone.utc).astimezone(PHOENIX_TZ)
+            today = now_phx.strftime('%Y-%m-%d')
+            m_compose = now_phx.replace(hour=BRIEF_SEND_HOUR, minute=0, second=0, microsecond=0) - lead
+            if now_phx >= m_compose and BRIEF_EMAIL.get('morning_day') != today:
+                run_brief_email('morning')
+            e_compose = now_phx.replace(hour=BRIEF_EVENING_SEND_HOUR, minute=0, second=0, microsecond=0) - lead
+            if now_phx >= e_compose and BRIEF_EMAIL.get('evening_day') != today:
+                run_brief_email('evening')
         except Exception:
             pass
         time.sleep(int(os.environ.get('BRIEF_EMAIL_POLL_SEC', '900')))
@@ -2052,18 +2129,24 @@ def jarvis_revenue():
     try:
         active = _stripe_list('subscriptions', {'status': 'active', 'limit': 100})
         trial = _stripe_list('subscriptions', {'status': 'trialing', 'limit': 100})
-        comped_ids = _comped_coupon_ids()
         all_subs = active + trial
-        paying = [s for s in all_subs if not _sub_is_comped(s, comped_ids)]
-        comped = [s for s in all_subs if _sub_is_comped(s, comped_ids)]
-        mrr = sum(_sub_monthly_cents(s) for s in paying) / 100.0
+        # Isolate comped detection so a coupon API failure never kills MRR
+        try:
+            comped_ids = _comped_coupon_ids()
+            paying_subs = [s for s in all_subs if not _sub_is_comped(s, comped_ids)]
+            comped_count = len(all_subs) - len(paying_subs)
+        except Exception:
+            paying_subs = all_subs
+            comped_count = None
+        mrr = sum(_sub_monthly_cents(s) for s in paying_subs) / 100.0
         now = datetime.now(timezone.utc)
         month0 = now.astimezone(PHOENIX_TZ).replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
         charges = _stripe_list('charges', {'limit': 100, 'created[gte]': int(month0.timestamp())})
         rev = sum(c.get('amount', 0) for c in charges if c.get('paid') and not c.get('refunded')) / 100.0
         custs = _stripe_list('customers', {'limit': 100, 'created[gte]': int((now - timedelta(days=7)).timestamp())})
         cur = (active or trial or [{}])[0].get('currency') or 'usd'
-        out.update(active=len(active), trialing=len(trial), comped=len(comped), paying=len(paying),
+        paying_count = len(paying_subs) if comped_count is not None else None
+        out.update(active=len(active), trialing=len(trial), comped=comped_count, paying=paying_count,
                    mrr=round(mrr, 2), revenue_month=round(rev, 2), new_customers_week=len(custs), currency=cur)
     except Exception:
         pass
@@ -3096,15 +3179,18 @@ class Handler(SimpleHTTPRequestHandler):
             token = (qs.get('token') or [''])[0]
             if not (BRIEF_EMAIL_TOKEN and token == BRIEF_EMAIL_TOKEN):
                 self._send_json({'error': 'forbidden'}, 403); return
+            slot = (qs.get('slot') or ['morning'])[0]
+            if slot not in ('morning', 'evening'): slot = 'morning'
             if (qs.get('preview') or ['0'])[0] == '1':      # view the composed HTML in a browser
-                subject, doc = compose_brief_email()
+                exclude = set(BRIEF_EMAIL.get('sent_urls') or ()) if slot == 'evening' else None
+                subject, doc, _urls = compose_brief_email(slot, exclude_urls=exclude)
                 body = ('<!-- subject: ' + subject + ' -->\n' + doc).encode('utf-8')
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
                 self.send_header('Cache-Control', 'no-store')
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers(); self.wfile.write(body); return
-            self._send_json(run_brief_email(force=True))     # force a real compose+create (test)
+            self._send_json(run_brief_email(slot, force=True))   # force a real compose+create (test)
         elif self.path.startswith('/jarvis/stats'):
             if not jarvis_authed(self):
                 self._send_json({'error': 'unauthorized'}, 401); return
