@@ -249,10 +249,13 @@
     tiktok:'#000|<svg viewBox="0 0 24 24" fill="#fff"><path d="M16 3c.3 2 1.7 3.6 3.7 3.9v3c-1.4 0-2.7-.4-3.7-1.1v6.4A6.2 6.2 0 1 1 9.8 9v3.1a3.1 3.1 0 1 0 2.2 3V3H16z"/></svg>',
     youtube:'#ff0000|<svg viewBox="0 0 24 24" fill="#fff"><path d="M10 9l5 3-5 3z"/></svg>',
     x:'#000|<svg viewBox="0 0 24 24" fill="#fff"><path d="M17 3h3l-7 8 8 10h-6l-4-5-5 5H3l7.5-8.5L3 3h6l3.7 4.8z"/></svg>',
-    substack:'#ff6719|<svg viewBox="0 0 24 24" fill="#fff"><path d="M5 4h14v2.3H5zM5 8.3h14V21l-7-3.9L5 21z"/></svg>'
+    substack:'#ff6719|<svg viewBox="0 0 24 24" fill="#fff"><path d="M5 4h14v2.3H5zM5 8.3h14V21l-7-3.9L5 21z"/></svg>',
+    canva:'cnv|<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round"><path d="M16 8.6A5 5 0 1 0 16 15.4"/></svg>'
   };
   function ico(key){ var v=IC[key]||('#0b1018|'); var i=v.indexOf('|'); var bg=v.slice(0,i), svg=v.slice(i+1);
-    var style = bg==='ig' ? 'background:radial-gradient(circle at 30% 110%,#fdf497 0,#fd5949 45%,#d6249f 60%,#285aeb 90%)' : ('background:'+bg);
+    var style = bg==='ig' ? 'background:radial-gradient(circle at 30% 110%,#fdf497 0,#fd5949 45%,#d6249f 60%,#285aeb 90%)'
+              : bg==='cnv' ? 'background:linear-gradient(135deg,#00c4cc 0%,#3a6ff0 55%,#6420ff 100%)'
+              : ('background:'+bg);
     return '<span class="ico" style="'+style+'">'+svg+'</span>'; }
 
   // Plain word: Operational / Offline for infra, Connected / Offline for social.
@@ -358,7 +361,7 @@
       +'</div>'
       +'</div>';
     // social column
-    var soc=[['instagram','Instagram','Visual content',false],['facebook','Facebook','Community',false],['tiktok','TikTok','Short-form',false],['youtube','YouTube','Long-form',false],['x','X','Real-time',false],['substack','Substack','Newsletter · live',true]];
+    var soc=[['instagram','Instagram','Visual content',false],['facebook','Facebook','Community',false],['tiktok','TikTok','Short-form',false],['youtube','YouTube','Long-form',false],['x','X','Real-time',false],['substack','Substack','Newsletter · live',true],['canva','Canva','Design studio',false]];
     H+='<div class="panel social"><p class="lbl">Social publishing<span class="ln"></span></p>'
       +soc.map(function(s){return '<div class="scard">'+ico(s[0])+'<div class="nx"><div class="nn">'+s[1]+'</div><div class="nr">'+s[2]+'</div></div>'+statusTag(s[3],'social')+'</div>';}).join('')+'</div>';
     // content rail
