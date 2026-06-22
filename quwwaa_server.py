@@ -69,6 +69,14 @@ VAPID_SUBJECT = os.environ.get('VAPID_SUBJECT', 'mailto:quwwaa.io@gmail.com')
 BRIEF_EMAIL_MODE = os.environ.get('BRIEF_EMAIL_MODE', 'draft').lower()
 BRIEF_SEND_HOUR = int(os.environ.get('BRIEF_SEND_HOUR', '6'))                       # morning slot, America/Phoenix clock hour
 BRIEF_EVENING_SEND_HOUR = int(os.environ.get('BRIEF_EVENING_SEND_HOUR', '15'))      # evening slot, MST (3 PM)
+# Deliverability hardening (post-Kit-pause): send the morning brief ONLY by default —
+# halving frequency is the biggest volume-risk reduction. Flip BRIEF_EVENING_ENABLED
+# back on to restore the evening slot. (Evening code is kept, just gated off.)
+BRIEF_EVENING_ENABLED = os.environ.get('BRIEF_EVENING_ENABLED', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+# While today (Phoenix) < this ISO date, co-brand every brief as "Daily Rumble" (the
+# name the imported list actually recognizes) to rebuild sender recognition, then fade
+# automatically. Empty = no co-branding. e.g. BRIEF_DR_COBRAND_UNTIL=2026-07-22
+BRIEF_DR_COBRAND_UNTIL = os.environ.get('BRIEF_DR_COBRAND_UNTIL', '').strip()
 BRIEF_COMPOSE_LEAD_MIN = int(os.environ.get('BRIEF_COMPOSE_LEAD_MIN', '60'))        # compose this many min before each send
 BRIEF_COMPOSE_HOUR = int(os.environ.get('BRIEF_COMPOSE_HOUR', str(max(0, BRIEF_SEND_HOUR - 1))))
 BRIEF_EMAIL_TOKEN = os.environ.get('BRIEF_EMAIL_TOKEN', '')                         # gates the manual /admin trigger
@@ -1165,6 +1173,20 @@ def _brief_article_link(s):
                                 's': s.get('source', ''), 'lbl': s.get('label', '')})
     return SITE_URL + '/?' + q
 
+def _dr_cobrand_active():
+    """True while we still lead each brief with the Daily Rumble framing. Kit paused
+    the account after a brand-new sender bulk-mailed an imported list under a name the
+    recipients didn't recognize ("QUWWAA"); the list knows "Daily Rumble". For roughly
+    the first month back we co-brand to rebuild recognition, then fade automatically
+    once today (Phoenix) reaches BRIEF_DR_COBRAND_UNTIL — one env value, no code change."""
+    if not BRIEF_DR_COBRAND_UNTIL:
+        return False
+    try:
+        today = datetime.now(timezone.utc).astimezone(PHOENIX_TZ).strftime('%Y-%m-%d')
+        return today < BRIEF_DR_COBRAND_UNTIL[:10]
+    except Exception:
+        return False
+
 def compose_brief_email(slot='morning', exclude_urls=None):
     """Teaser email: butler intro + each section's headline + thumbnail, both
     clickable to quwwaa.com. No summaries in the email. Copy branches on `slot`
@@ -1200,6 +1222,8 @@ def compose_brief_email(slot='morning', exclude_urls=None):
     try: date_str = now_phx.strftime('%A, %B %-d')
     except Exception: date_str = now_phx.strftime('%A, %B %d')
     top = secs[0].get('title') if secs else ''
+    cobrand = _dr_cobrand_active()
+    context_line = ''
     if slot == 'evening':
         subject = ('QUWWAA Evening Brief — ' + top) if top else ('Your QUWWAA Evening Brief · ' + date_str)
         intro = "Good evening. Here's where the day landed — the latest from QUWWAA."
@@ -1210,6 +1234,15 @@ def compose_brief_email(slot='morning', exclude_urls=None):
         intro = "Good morning. Here's the world this morning — tap any headline to read it on QUWWAA."
         header_label = 'Your Morning Brief · ' + date_str
         footer_line = "You're receiving the QUWWAA Morning Brief."
+    if cobrand:
+        # Lead with the brand the imported list already knows. Subject avoids spammy
+        # punctuation/ALL-CAPS/emoji; the body opens with a Daily Rumble hook plus a
+        # one-line "you subscribed to Daily Rumble" reconnection to their opt-in.
+        slot_word = 'evening' if slot == 'evening' else 'morning'
+        subject = ('Daily Rumble — ' + top) if top else ('Daily Rumble — your ' + slot_word + ' brief · ' + date_str)
+        intro = "Hey — it's Daily Rumble. I've got another list of hot stories for you from QUWWAA."
+        context_line = "You're receiving this because you subscribed to Daily Rumble. This is our new daily news brief, powered by QUWWAA."
+        footer_line = "You're receiving this because you subscribed to Daily Rumble — now powered by QUWWAA."
     rows = []
     for s in secs:
         link = _brief_article_link(s); img = s.get('image', '')
@@ -1257,7 +1290,8 @@ def compose_brief_email(slot='morning', exclude_urls=None):
         '<tr><td align="center" style="padding:6px 0 2px;"><span style="font:500 30px Georgia,serif;color:#e08a32;letter-spacing:1px;">quwwaa</span></td></tr>'
         '<tr><td align="center" style="font:13px Arial,sans-serif;color:#a06a3a;padding-bottom:18px;">' + html.escape(header_label) + '</td></tr>'
         '<tr><td style="font:15px Georgia,serif;color:#e7d3c0;line-height:1.6;padding:0 4px 8px;">' + html.escape(intro) + '</td></tr>'
-        '<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + ''.join(rows) + '</table></td></tr>'
+        + (('<tr><td style="font:13px Arial,sans-serif;color:#a06a3a;line-height:1.5;padding:0 4px 12px;">' + html.escape(context_line) + '</td></tr>') if context_line else '')
+        + '<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + ''.join(rows) + '</table></td></tr>'
         '<tr><td align="center" style="padding:26px 0 8px;"><a href="' + SITE_URL + '/" style="background:#d98026;color:#1a1208;font:700 15px Arial,sans-serif;text-decoration:none;padding:13px 26px;border-radius:10px;display:inline-block;">Read the full brief on QUWWAA &rarr;</a></td></tr>'
         '<tr><td align="center" style="padding:12px 16px 4px;font:13px Arial,sans-serif;color:#cba98f;line-height:1.5;">Make it yours &mdash; <a href="' + SITE_URL + '/" style="color:#e89a5a;">start your 7-day QUWWAA Gold trial</a> for unlimited articles and a butler who knows your beats.</td></tr>'
         '<tr><td align="center" style="padding:18px 0 0;font:11px Arial,sans-serif;color:#6a4a2a;">' + html.escape(footer_line) + '</td></tr>'
@@ -1348,6 +1382,8 @@ def run_brief_email(slot='morning', force=False):
     The evening slot excludes every story the morning slot already sent today."""
     if not KIT_API_KEY or BRIEF_EMAIL_MODE == 'off':
         return {'skipped': 'disabled'}
+    if slot == 'evening' and not BRIEF_EVENING_ENABLED and not force:   # Fix 1: morning-only by default
+        return {'skipped': 'evening_disabled', 'slot': slot}
     now_phx = datetime.now(timezone.utc).astimezone(PHOENIX_TZ)
     today = now_phx.strftime('%Y-%m-%d')
     day_key = 'evening_day' if slot == 'evening' else 'morning_day'
@@ -1429,9 +1465,10 @@ def brief_email_loop():
             m_hi = now_phx.replace(hour=BRIEF_SEND_HOUR, minute=0, second=0, microsecond=0)
             if (m_hi - lead) <= now_phx < m_hi and BRIEF_EMAIL.get('morning_day') != today:
                 run_brief_email('morning')
-            e_hi = now_phx.replace(hour=BRIEF_EVENING_SEND_HOUR, minute=0, second=0, microsecond=0)
-            if (e_hi - lead) <= now_phx < e_hi and BRIEF_EMAIL.get('evening_day') != today:
-                run_brief_email('evening')
+            if BRIEF_EVENING_ENABLED:                      # Fix 1: evening retired by default (deliverability)
+                e_hi = now_phx.replace(hour=BRIEF_EVENING_SEND_HOUR, minute=0, second=0, microsecond=0)
+                if (e_hi - lead) <= now_phx < e_hi and BRIEF_EMAIL.get('evening_day') != today:
+                    run_brief_email('evening')
         except Exception:
             pass
         time.sleep(int(os.environ.get('BRIEF_EMAIL_POLL_SEC', '900')))
