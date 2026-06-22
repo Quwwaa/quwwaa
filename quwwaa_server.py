@@ -845,6 +845,66 @@ def key_terms(title, n=6):
             break
     return ' '.join(out) or (title or '')
 
+# Signals that a butler message is asking about a current event → pull live coverage
+# into context so the model answers FROM the news, not its (cut-off) training memory.
+_NEWS_SIGNAL = re.compile(
+    r"\b(news|latest|update[sd]?|happening|happened|breaking|report(ed|s)?|stor(y|ies)|"
+    r"today|tonight|yesterday|recent(ly)?|currently|this week|did .* (die|win|happen)|"
+    r"die[sd]?|dead|death|killed?|attack|war|ceasefire|election|elected|vote[sd]?|"
+    r"resign(ed)?|announce[sd]?|launch(ed)?|verdict|ruling|indict|crash|crisis|deal|"
+    r"talks|summit|strike|protest|earthquake|hurricane|storm|outbreak|scandal|"
+    r"tell me about|what.?s? (going on|new|happening)|any news|hear about|what happened|who won)\b",
+    re.I)
+
+def _looks_like_news(text):
+    """Generous heuristic: is this a question about a current event/news?"""
+    t = (text or '').strip()
+    if len(t) < 4:
+        return False
+    if _NEWS_SIGNAL.search(t):
+        return True
+    # a multi-word Capitalized proper noun (typed input) is likely a person/place/org query
+    return bool(re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", t))
+
+def butler_live_news(query, max_n=6):
+    """Retrieve current coverage for a butler question and format it as a labeled
+    ground-truth block for the /ask system prompt. Reuses the News Lens retrieval.
+    Returns (block_text, [source names]); ('', []) when nothing relevant came back."""
+    terms = key_terms(query)
+    if not terms:
+        return '', []
+    try:
+        arts = cached_aggregate(terms, 7, True, 'en').get('articles', [])
+    except Exception:
+        arts = []
+    qtok = _tok(query) - STOPWORDS
+    rel = []
+    for a in arts:
+        if not a.get('title') or _is_blocked_article(a):
+            continue
+        if qtok and not (qtok & _tok(a['title'])):       # headline must touch the query
+            continue
+        rel.append(a)
+    rel.sort(key=lambda a: (a.get('ts') or 0), reverse=True)
+    rel = rel[:max_n]
+    if not rel:
+        return '', []
+    lines, sources = [], []
+    for i, a in enumerate(rel, 1):
+        try:
+            date = datetime.fromtimestamp(a['ts'], tz=timezone.utc).strftime('%Y-%m-%d') if a.get('ts') else ''
+        except Exception:
+            date = ''
+        snip = re.sub(r'\s+', ' ', (a.get('snippet') or '')).strip()[:240]
+        src = a.get('source') or 'source'
+        lines.append('[%d] "%s" — %s%s.%s %s' % (
+            i, a.get('title', ''), src, (', ' + date) if date else '',
+            (' ' + snip) if snip else '', a.get('url', '')))
+        if src and src not in sources:
+            sources.append(src)
+    block = "LIVE NEWS — retrieved just now, treat as current ground truth:\n" + "\n".join(lines)
+    return block, sources[:4]
+
 def summarize_article(title, desc, source):
     """A genuine, transformative 2-3 paragraph summary grounded strictly in the
     headline + publisher snippet. Returns (text, grounded). Never invents; never
@@ -1720,8 +1780,10 @@ def prewarm():
 
 # --- Butler persona + Anthropic call ----------------------------------------
 PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS from Iron Man. "
-    "Reply in that voice: impeccably polite British butler, dry wit, understated, efficient. "
-    "Refer to yourself as QUWWAA. Address the user as 'sir'. "
+    "Reply in that voice: polished, warm, dry wit, understated, efficient. "
+    "Refer to yourself as QUWWAA. Do NOT use default honorifics like 'sir' or 'ma'am' — they read stiff and "
+    "guessing gender is a needless risk; address the user by name ONLY if a name is provided in context, "
+    "otherwise keep a warm, neutral voice. "
     "Your name comes from the Arabic word 'quwwa', meaning power or strength. If the user asks what QUWWAA "
     "means, what it stands for, or where the name comes from, tell them it is Arabic for 'powerful' - chosen "
     "because you were built to be a powerful assistant that cuts through the fluff and misinformation to bring "
@@ -1737,7 +1799,11 @@ PERSONA = ("You are QUWWAA, Mike Dean's personal AI assistant, modeled on JARVIS
     "subjects, or that you cannot help with a category; for ANY topic - science, sports, tech, markets, health, "
     "culture, anything - give your brief spoken take and route it to the News Lens. Only state the time of day "
     "using the CURRENT LOCAL TIME provided in context; if none is provided, do not guess - greet neutrally "
-    "(e.g. 'Hello, sir'). (Background: Mike also publishes Daily Rumble, a Substack by Quwwaa LLC on US politics "
+    "(e.g. a simple 'Hello'). "
+    "When a 'LIVE NEWS' block of retrieved articles is provided in context, it is current ground truth: answer "
+    "FROM those articles, summarize what they report, and NEVER claim you have no knowledge of, or cannot verify, "
+    "an event they describe - the reporting is in front of you. "
+    "(Background: Mike also publishes Daily Rumble, a Substack by Quwwaa LLC on US politics "
     "and the Middle East, sponsored by Zaytuna Mobile - this is his own publication, NOT a limit on the topics "
     "you cover.) You do not answer news questions from memory and you have no general "
     "web-search tool; your live, authoritative source for any current event, story, or coverage is the on-screen "
@@ -3888,9 +3954,9 @@ class Handler(SimpleHTTPRequestHandler):
         if not member:                             # members bypass the per-IP / daily rate cap
             ok, why = rate_check(self._client_ip())
             if not ok:
-                msg = ("My apologies, sir - the day's allowance of inquiries has been reached. Do return tomorrow."
+                msg = ("My apologies - the day's allowance of inquiries has been reached. Do return tomorrow."
                        if why == 'daily_cap' else
-                       "A moment's patience, sir - you are speaking faster than I can attend. Try again shortly.")
+                       "A moment's patience - you're speaking faster than I can attend. Try again shortly.")
                 self._send_json({'error': why, 'reply': msg}, 429); return
         try:
             length = int(self.headers.get('Content-Length', '0') or '0')
@@ -3903,7 +3969,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if role in ('user', 'assistant') and isinstance(content, str) and content.strip():
                     msgs.append({'role': role, 'content': content[:4000]})
             if not msgs:
-                self._send_json({'error': 'empty', 'reply': 'I received an empty transmission, sir.'}, 400); return
+                self._send_json({'error': 'empty', 'reply': 'I received an empty transmission.'}, 400); return
             extra = ''
             lang = norm_lang(data.get('lang') or 'en')
             if lang != 'en':
@@ -3922,11 +3988,41 @@ class Handler(SimpleHTTPRequestHandler):
                 name = member.get('display_name') or ''
                 style = member.get('address_style') or 'name'
                 ints = ', '.join(member.get('interests') or [])
-                addr = name if (style == 'name' and name) else ('madam' if style == 'madam' else 'sir')
-                extra += (" MEMBER CONTEXT: You are speaking with a QUWWAA member. Address them as '%s'." % addr)
+                # Honor an explicit sir/madam choice; otherwise use the name, else stay neutral.
+                addr = name if (style == 'name' and name) else ('madam' if style == 'madam' else ('sir' if style == 'sir' else ''))
+                if addr:
+                    extra += (" MEMBER CONTEXT: You are speaking with a QUWWAA member. Address them as '%s'." % addr)
+                else:
+                    extra += (" MEMBER CONTEXT: You are speaking with a QUWWAA member. No honorific is set — "
+                              "address them warmly and neutrally (no 'sir'/'ma'am').")
                 if ints:
                     extra += (" They follow these interests: %s. Let these WEIGHT your suggestions, but never narrow what "
                               "you will discuss - help with any topic they raise." % ints)
+            # --- Retrieval grounding: when the user asks about news, pull live coverage
+            # and inject it as ground truth so the butler answers FROM the reporting it
+            # just fetched (not its training memory) — killing false "I have no knowledge
+            # of that" disclaimers AND hallucinations. English live path only.
+            q = next((m['content'] for m in reversed(msgs) if m['role'] == 'user'), '')
+            if lang == 'en' and q and _looks_like_news(q):
+                block, srcs = butler_live_news(q)
+                if block:
+                    extra += (
+                        "\n\n" + block +
+                        "\n\nGROUNDING — you have a training cutoff but are augmented with the LIVE NEWS above, "
+                        "retrieved in real time. For anything recent, rely ONLY on the provided articles, not your "
+                        "memory. NEVER tell the user you have no knowledge of, cannot verify, or are unsure an event "
+                        "happened when it appears in the provided articles — summarize it. Attribute claims to their "
+                        "source (e.g. 'According to AP…', 'Reuters reports…'). If coverage is thin or sources conflict, "
+                        "say what is confirmed versus still unclear, but do not deny the event. Do NOT mention your "
+                        "training cutoff or 'making assumptions' when articles are present. Only assert facts present in "
+                        "these articles. Open with a brief, warm, VARIED acknowledgment (never a fixed phrase), give the "
+                        "grounded spoken brief, then name the sources you drew on (e.g. 'Sources: %s' — the on-screen "
+                        "News Lens carries the clickable links). Still end with the [LENS: keywords] tag." % ', '.join(srcs))
+                else:
+                    extra += (
+                        "\n\nNO LIVE COVERAGE was retrieved for this query just now. If the user is asking about a "
+                        "current event, tell them you don't see reporting on it yet and offer to pull the News Lens — "
+                        "do NOT invent details, and do NOT deny it from memory. Still end with the [LENS: keywords] tag.")
             if data.get('stream'):                       # stream tokens for a snappy butler
                 # HTTP/1.1 chunked so the proxy forwards each token immediately
                 # (a plain HTTP/1.0 body gets buffered until close → no streaming).
@@ -3948,26 +4044,26 @@ class Handler(SimpleHTTPRequestHandler):
                 try:
                     full = anthropic_stream(msgs, extra, _w)
                     if not full.strip() and wrote[0] == 0:
-                        _w('I received an empty transmission, sir.')
+                        _w('I received an empty transmission.')
                 except Exception:
                     if wrote[0] == 0:
                         # streaming failed before any token → serve the full reply non-streamed
-                        try: _w(anthropic_chat(msgs, extra) or 'I received an empty transmission, sir.')
-                        except Exception: _w('I encountered a fault processing that, sir.')
+                        try: _w(anthropic_chat(msgs, extra) or 'I received an empty transmission.')
+                        except Exception: _w('I encountered a fault processing that.')
                 try: self.wfile.write(b'0\r\n\r\n'); self.wfile.flush()   # terminating chunk
                 except Exception: pass
                 return
-            reply = anthropic_chat(msgs, extra) or 'I received an empty transmission, sir.'
+            reply = anthropic_chat(msgs, extra) or 'I received an empty transmission.'
             self._send_json({'reply': reply})
         except urllib.error.HTTPError as e:
             detail = ''
             try: detail = e.read().decode('utf-8', 'ignore')[:160]
             except Exception: pass
             self._send_json({'error': 'upstream_%d' % e.code,
-                             'reply': 'The uplink returned an error (%d), sir. %s' % (e.code, detail)}, 502)
+                             'reply': 'The uplink returned an error (%d). %s' % (e.code, detail)}, 502)
         except Exception as e:
             self._send_json({'error': type(e).__name__,
-                             'reply': 'I encountered a fault processing that, sir.'}, 500)
+                             'reply': 'I encountered a fault processing that.'}, 500)
 
     def _handle_jarvis_ask(self):
         if not auth_user(self):
