@@ -2221,6 +2221,34 @@ def maybe_send_brief_push():
 # object. Each source degrades independently so one failure never blanks the
 # board; GA stays a clean stub until GA_SERVICE_ACCOUNT_JSON is configured.
 # ===========================================================================
+_MFA_FACTOR_CACHE = {}   # user_id -> (has_factor_bool, fetched_at_epoch)
+
+def admin_has_mfa_factor(user_id):
+    """True if this user has at least one VERIFIED MFA factor enrolled.
+    Uses the Supabase Admin API (service-role); cached ~60s. On any error,
+    returns False so we fail OPEN for enrollment (never lock an admin out)."""
+    if not user_id:
+        return False
+    now = time.time()
+    hit = _MFA_FACTOR_CACHE.get(user_id)
+    if hit and (now - hit[1]) < 60:
+        return hit[0]
+    has = False
+    try:
+        if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+            url = SUPABASE_URL + '/auth/v1/admin/users/' + urllib.parse.quote(user_id)
+            req = urllib.request.Request(url, headers={
+                'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode('utf-8') or '{}')
+            factors = data.get('factors') or []
+            has = any((f.get('status') == 'verified') for f in factors)
+    except Exception:
+        has = False     # fail open for enrollment
+    _MFA_FACTOR_CACHE[user_id] = (has, now)
+    return has
+
 def jarvis_authed(handler):
     # Shared-secret bypass (curl/diag only — skips AAL check)
     x_tok = handler.headers.get('X-Jarvis-Token', '')
@@ -2232,10 +2260,13 @@ def jarvis_authed(handler):
         u = auth_user(handler)
         if not (u and u.get('id') in JARVIS_ADMIN_USER_IDS):
             return False
-        # Require AAL2 — the session must have completed MFA
-        bearer = handler.headers.get('Authorization', '').replace('Bearer ', '').strip()
-        if _jwt_aal(bearer) != 'aal2':
-            return False
+        # AAL2 is required ONLY once the admin has actually enrolled a factor.
+        # An admin with no factor yet is allowed at AAL1 so they can reach the
+        # cockpit and enroll — otherwise the gate is a fail-closed lockout.
+        if admin_has_mfa_factor(u['id']):
+            bearer = handler.headers.get('Authorization', '').replace('Bearer ', '').strip()
+            if _jwt_aal(bearer) != 'aal2':
+                return False
         return True
     except Exception:
         return False

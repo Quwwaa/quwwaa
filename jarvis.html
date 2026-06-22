@@ -448,13 +448,15 @@
           var session=res&&res.data&&res.data.session;
           if(!session){ gateSignIn(); return; }
           user=session.user; token=session.access_token;
-          // MFA gate — require AAL2 before opening the cockpit
+          // MFA gate — mirrors the server: enforce AAL2 only once a factor is
+          // enrolled. No factor yet → let the admin in (AAL1) and nudge to enroll,
+          // never a fail-closed lockout.
           sb.auth.mfa.getAuthenticatorAssuranceLevel().then(function(lvl){
             var cur=(lvl&&lvl.data&&lvl.data.currentLevel)||'aal1';
             var nxt=(lvl&&lvl.data&&lvl.data.nextLevel)||'aal1';
-            if(cur==='aal2'){ refresh(false); }
-            else if(nxt==='aal2'){ gateMfaChallenge(); }
-            else { gateMfaEnroll(); }
+            if(cur==='aal2'){ refresh(false); }                  // already stepped up
+            else if(nxt==='aal2'){ gateMfaChallenge(); }         // factor enrolled, needs challenge
+            else { mfaNeedsEnroll=true; refresh(false); }        // no factor → in, with enroll nudge
           }).catch(function(){ refresh(false); }); // if MFA API unavailable, let through (graceful)
         });
         sb.auth.onAuthStateChange(function(_e,session){
@@ -643,7 +645,7 @@
       if(ch.error){ $('#mfaErr').textContent=ch.error.message; return; }
       var v=await sb.auth.mfa.verify({factorId:factorId,challengeId:ch.data.id,code:code});
       if(v.error){ $('#mfaErr').textContent='Invalid code — try again.'; return; }
-      token=v.data.session.access_token; _stepUpAt=Date.now();
+      token=v.data.session.access_token; _stepUpAt=Date.now(); mfaNeedsEnroll=false;
       refresh(false);
     };
     $('#mfaSignOut').onclick=function(){ sb.auth.signOut().then(function(){ location.reload(); }); };
@@ -666,7 +668,7 @@
       if(ch.error){ $('#mfaErr').textContent=ch.error.message; return; }
       var v=await sb.auth.mfa.verify({factorId:fid,challengeId:ch.data.id,code:code});
       if(v.error){ $('#mfaErr').textContent='Incorrect code.'; return; }
-      token=v.data.session.access_token; _stepUpAt=Date.now();
+      token=v.data.session.access_token; _stepUpAt=Date.now(); mfaNeedsEnroll=false;
       refresh(false);
     };
     $('#mfaGo').onclick=doAuth;
@@ -703,7 +705,7 @@
   }
 
   // Security + pending panels — refresh after each render()
-  var _secStatus=null, _pendingActions=[];
+  var _secStatus=null, _pendingActions=[], mfaNeedsEnroll=false;
   function secRefreshPanels(){
     fetch('/jarvis/security/status',{headers:{'Authorization':'Bearer '+token}})
       .then(function(r){ return r.ok?r.json():null; })
@@ -719,9 +721,11 @@
     el.innerHTML='<p class="lbl">Security<span class="ln"></span></p>'
       +'<div class="row"><span>Actions</span><b style="color:'+(on?'var(--green2)':'var(--amber)')+'">'+(on?'Enabled':'KILL SWITCH ON')+'</b></div>'
       +'<div class="row"><span>Pending approvals</span><b>'+(_secStatus.pending_count||0)+'</b></div>'
-      +'<div class="row"><span>Session AAL</span><b style="color:var(--green2)">AAL2 ✓</b></div>'
-      +'<button class="btn" id="killSwitchBtn" style="margin-top:8px;width:100%;justify-content:center;color:'+(on?'var(--amber)':'var(--green2)')+'">'+
-        (on?'Disable actions':'Enable actions')+'</button>';
+      +'<div class="row"><span>Session AAL</span><b style="color:'+(mfaNeedsEnroll?'var(--amber)':'var(--green2)')+'">'+(mfaNeedsEnroll?'AAL1 · no MFA':'AAL2 ✓')+'</b></div>'
+      +(mfaNeedsEnroll
+         ? '<button class="btn" id="enrollMfaBtn" style="margin-top:8px;width:100%;justify-content:center;color:var(--amber)">Secure your account — enable MFA</button>'
+         : '<button class="btn" id="killSwitchBtn" style="margin-top:8px;width:100%;justify-content:center;color:'+(on?'var(--amber)':'var(--green2)')+'">'+(on?'Disable actions':'Enable actions')+'</button>');
+    if(mfaNeedsEnroll){ var eb=$('#enrollMfaBtn'); if(eb) eb.onclick=function(){ gateMfaEnroll(); }; return; }
     $('#killSwitchBtn').onclick=async function(){
       var ok=await jvStepUp(); if(!ok) return;
       var newState=!on;
