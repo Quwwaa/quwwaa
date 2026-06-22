@@ -21,6 +21,8 @@ HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 ASK_MODEL = os.environ.get('ASK_MODEL', 'claude-haiku-4-5-20251001')      # high-volume news summaries — keep cheap/fast
 BUTLER_MODEL = os.environ.get('BUTLER_MODEL', 'claude-sonnet-4-6')        # the voice the user hears — richer delivery
+JARVIS_VOICE_MODEL = os.environ.get('JARVIS_VOICE_MODEL', ASK_MODEL)      # cockpit voice — fast model for low latency (TTS gives the voice)
+JARVIS_VOICE_MAX_TOKENS = int(os.environ.get('JARVIS_VOICE_MAX_TOKENS', '260'))  # concise spoken answers
 ASK_RATE_PER_MIN = int(os.environ.get('ASK_RATE_PER_MIN', '6'))    # per visitor IP
 ASK_DAILY_CAP = int(os.environ.get('ASK_DAILY_CAP', '2000'))       # global messages/day
 
@@ -3717,7 +3719,7 @@ class Handler(SimpleHTTPRequestHandler):
                 extra += (' LIVE DASHBOARD CONTEXT: ' + ctx)
             # Use JARVIS_PERSONA instead of the QUWWAA PERSONA
             body = json.dumps({
-                'model': BUTLER_MODEL, 'max_tokens': ASK_MAX_TOKENS,
+                'model': JARVIS_VOICE_MODEL, 'max_tokens': JARVIS_VOICE_MAX_TOKENS,
                 'system': JARVIS_PERSONA + (extra or ''),
                 'messages': msgs, 'stream': False,
             }).encode()

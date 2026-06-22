@@ -568,7 +568,7 @@
   boot();
 
   // ===== REACTOR VOICE =====
-  var jvMsgs=[], jvAudio=null, jvMediaRec=null, jvChunks=[], jvRecording=false, jvBusy=false;
+  var jvMsgs=[], jvAudio=null, jvMediaRec=null, jvChunks=[], jvRecording=false, jvBusy=false, jvCancelSpeak=false;
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition, jvRec=null, jvListening=false;
   if(SR){ jvRec=new SR(); jvRec.lang='en-US'; jvRec.interimResults=false; jvRec.maxAlternatives=1;
     jvRec.onstart=function(){ jvListening=true; jvSetState('listening'); };
@@ -666,7 +666,47 @@
   function jvCapFinish(){ jvCapStop(); if(jvCap.el){ jvCap.el.textContent=jvCap.segs[jvCap.segs.length-1]||''; } }
   function jvHideCaption(){ jvCapStop(); var c=jvCapEl(); if(c){ c.classList.remove('vis'); c.textContent=''; } }
 
-  function jvStopAudio(){ if(jvAudio){ try{ jvAudio.pause(); }catch(e){} jvAudio.src=''; } try{ speechSynthesis.cancel(); }catch(e){} jvHideCaption(); }
+  function jvStopAudio(){ jvCancelSpeak=true; if(jvAudio){ try{ jvAudio.pause(); }catch(e){} jvAudio.src=''; } try{ speechSynthesis.cancel(); }catch(e){} jvHideCaption(); }
+
+  // Split a reply into sentence-sized TTS chunks (tiny fragments merged forward).
+  function jvSentences(reply){
+    var parts=(reply||'').replace(/\s+/g,' ').trim().match(/[^.!?]+[.!?]*(\s|$)/g)||[reply];
+    var out=[]; parts.forEach(function(s){ s=(s||'').trim(); if(!s) return;
+      if(out.length && out[out.length-1].length<24){ out[out.length-1]+=' '+s; } else { out.push(s); } });
+    return out.length?out:[(reply||'').trim()];
+  }
+  function jvTtsFetch(txt){ return fetch('/speak',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:txt})})
+      .then(function(r){ return r.ok?r.blob():null; }).catch(function(){ return null; }); }
+  function jvPlayBlob(blob, text){
+    return new Promise(function(resolve){
+      var url=URL.createObjectURL(blob), done=false;
+      var fin=function(){ if(done) return; done=true; try{ URL.revokeObjectURL(url); }catch(e){} resolve(); };
+      if(!jvAudio) jvAudio=new Audio();
+      jvAudio.src=url;
+      jvAudio.onplay=function(){ jvCapStart(text); jvCapDriveAudio(); };
+      jvAudio.onended=function(){ jvCapFinish(); fin(); };
+      jvAudio.onerror=fin;
+      jvAudio.onpause=function(){ if(!jvAudio.ended) fin(); };   // barge-in
+      jvAudio.play().catch(fin);
+    });
+  }
+  // Pipeline: synth the first sentence and start talking, prefetching the rest
+  // while it plays — so time-to-speech is one short sentence, not the whole reply.
+  async function jvSpeakChunks(reply){
+    var parts=jvSentences(reply); if(!parts.length) return false;
+    var next=jvTtsFetch(parts[0]), played=false;
+    for(var i=0;i<parts.length;i++){
+      if(jvCancelSpeak) break;
+      var blob=await next;
+      next=(i+1<parts.length && !jvCancelSpeak)?jvTtsFetch(parts[i+1]):null;
+      if(!blob){ if(i===0) return false; continue; }   // first chunk failed → caller does fallback
+      played=true;
+      if(jvCancelSpeak) break;
+      await jvPlayBlob(blob, parts[i]);
+    }
+    if(!jvCancelSpeak){ jvCapFinish(); setTimeout(jvHideCaption,400); }
+    return played;
+  }
 
   function jvBuildContext(){
     var lines=[]; var now=new Date();
@@ -728,17 +768,11 @@
       } else { reply='I\'m having trouble reaching the server, sir.'; }
       jvMsgs.push({role:'assistant',content:reply});
       jvSetState('speaking');
-      var sr=await fetch('/speak',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:reply})});
-      if(sr.ok){
-        var blob=await sr.blob();
-        if(!jvAudio) jvAudio=new Audio();
-        var url=URL.createObjectURL(blob);
-        jvAudio.src=url;
-        jvAudio.onplay=function(){ jvCapStart(reply); jvCapDriveAudio(); };
-        jvAudio.onended=function(){ URL.revokeObjectURL(url); jvCapFinish(); setTimeout(jvHideCaption,500); jvBusy=false; jvSetState(''); };
-        jvAudio.onerror=function(){ jvHideCaption(); jvBusy=false; jvSetState(''); };
-        jvAudio.play().catch(function(){ /* audio unlock handled on tap elsewhere */ });
-      } else {
+      jvCancelSpeak=false;
+      var spoke=await jvSpeakChunks(reply);   // starts talking after the FIRST sentence
+      if(spoke){ jvBusy=false; if(!jvCancelSpeak) jvSetState(''); }
+      else {
+        // TTS unavailable → browser speech as a fallback
         jvBusy=false; jvSetState('');
         try{
           jvCapStart(reply);
