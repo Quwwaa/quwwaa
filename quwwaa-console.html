@@ -1060,6 +1060,18 @@ window.QI18N = (function(){
     const c=localCtx();
     return c.clientTime ? (' CURRENT LOCAL TIME for the user: '+c.clientTime+(c.tz?' ('+c.tz+')':'')+'. Use this for any greeting or time reference; choose good morning/afternoon/evening from it.') : '';
   }
+  // The direct (BYO-key) path bypasses the server, so it must inject the language
+  // directive itself — otherwise the fallback butler always answers in English.
+  // Mirrors the server's /ask directive (plang = English name per QUWWAA LANGS).
+  function langSys(){
+    let l='en'; try{ l=(window.QI18N && window.QI18N.get())||'en'; }catch(e){}
+    if(l==='en') return '';
+    const pl={es:'Spanish', fr:'French', ar:'Arabic', ru:'Russian', ms:'Malay', id:'Indonesian'}[l] || "the user's language";
+    return ' LANGUAGE: The user\'s language is '+pl+'. You MUST reply ENTIRELY in '+pl+' — every sentence, '
+         + 'including greetings and your butler courtesies; address the user politely in '+pl+' (not "sir"). '
+         + 'Never switch to English. Keep the final [LENS: keywords] tag in that exact bracket format; '
+         + 'the keywords may be written in '+pl+'.';
+  }
   async function ask(){
     const msgs = history.slice(-20).map(m=>({role:m.role, content:m.content}));
     // 1) Preferred path: the server-side butler. On the public site the key lives
@@ -1094,7 +1106,7 @@ window.QI18N = (function(){
         'anthropic-dangerous-direct-browser-access':'true'
       },
       body: JSON.stringify({
-        model:'claude-haiku-4-5-20251001', max_tokens:600, system:PERSONA + timeSys(), messages:msgs
+        model:'claude-haiku-4-5-20251001', max_tokens:600, system:PERSONA + langSys() + timeSys(), messages:msgs
       })
     });
     if(!res.ok){
