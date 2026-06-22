@@ -2930,7 +2930,13 @@ def _jarvis_actions_enabled():
     try:
         rows = sb_rest('GET', 'jarvis_settings?key=eq.actions_enabled&select=value&limit=1')
         val = ((rows or [{}])[0].get('value'))
-        return bool(val) if val is not None else True
+        if val is None:
+            return True
+        # value may come back as a real JSON bool, or (from older writes) the
+        # STRING "false"/"true" — bool("false") is True, so normalize explicitly.
+        if isinstance(val, str):
+            return val.strip().lower() not in ('false', '0', 'null', '')
+        return bool(val)
     except Exception:
         return True   # fail open for reads; actions gateway fails closed separately
 
@@ -3027,7 +3033,7 @@ def jarvis_audit_log(limit=50):
 def jarvis_set_kill_switch(enabled):
     try:
         sb_rest('PATCH', 'jarvis_settings?key=eq.actions_enabled',
-                {'value': json.dumps(bool(enabled)), 'updated_at': datetime.now(timezone.utc).isoformat()},
+                {'value': bool(enabled), 'updated_at': datetime.now(timezone.utc).isoformat()},
                 prefer='return=minimal')
         return {'ok': True, 'actions_enabled': bool(enabled)}
     except Exception as e:
