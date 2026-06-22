@@ -472,6 +472,19 @@
       .catch(function(){ btn.disabled=false; try{ speechSynthesis.speak(new SpeechSynthesisUtterance(text)); }catch(e){} }); }
 
   function pad(x){return (x<10?'0':'')+x;}
+  // Voice action: Jarvis proposed a calendar event → open the prefilled confirm
+  // sheet. Nothing is written until Mike taps Confirm (reuses openSheet's gated
+  // /jarvis/calendar/* write).
+  function jvProposeCalendar(p){
+    if(!p) return;
+    if(p.action==='move'){
+      var ev=(agenda&&agenda.events||[]).filter(function(e){ return e.id===p.event_id; })[0];
+      if(!ev){ ev={id:p.event_id,summary:p.summary||'Event'}; }
+      openSheet('move', {id:p.event_id, summary:p.summary||ev.summary, start:p.start, end:p.end});
+    } else {
+      openSheet('create', {summary:p.summary||'', start:p.start, end:p.end||(p.start)});
+    }
+  }
   function openSheet(mode, ev){
     var now=new Date(); var start=ev?new Date(ev.start):new Date(Math.ceil(now.getTime()/18e5)*18e5);
     var end=ev?new Date(ev.end||start.getTime()+36e5):new Date(start.getTime()+36e5);
@@ -738,7 +751,7 @@
       if(agenda.available&&(agenda.events||[]).length){
         lines.push('Upcoming calendar: '+agenda.events.slice(0,5).map(function(e){
           var dt=e.all_day?'all day':new Date(e.start).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
-          return e.summary+' ('+dt+')';
+          return e.summary+' ('+dt+')'+(e.id?' [id: '+e.id+']':'');
         }).join('; ')+'.');
       } else if(agenda.available){ lines.push('Calendar: nothing scheduled in the next 7 days.'); }
       else { lines.push('Calendar: offline — GA service account key needed.'); }
@@ -768,13 +781,15 @@
       var now=new Date();
       var payload={messages:jvMsgs,clientTime:now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}),tz:Intl.DateTimeFormat().resolvedOptions().timeZone,dashboardContext:jvBuildContext()};
       var r=await fetch('/jarvis/ask',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify(payload)});
-      var reply='';
+      var reply='', proposal=null;
       if(r.ok){
         var d=await r.json();
         reply=(d.reply||d.text||d.message||'').trim();
         if(!reply&&d.choices) reply=(d.choices[0].message&&d.choices[0].message.content)||'';
+        proposal=d.proposal||null;
       } else { reply='I\'m having trouble reaching the server, sir.'; }
       jvMsgs.push({role:'assistant',content:reply});
+      if(proposal){ jvProposeCalendar(proposal); }   // Jarvis proposes → Mike confirms on screen
       jvSetState('speaking');
       jvCancelSpeak=false;
       var spoke=await jvSpeakChunks(reply);   // starts talking after the FIRST sentence

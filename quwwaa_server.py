@@ -3269,10 +3269,20 @@ class Handler(SimpleHTTPRequestHandler):
         d = self._read_json()
         if not d.get('confirm'):                       # gated: Jarvis proposes, Mike confirms
             self._send_json({'error': 'confirm_required'}, 400); return
+        u = auth_user(self); uid = u and u.get('id')
+        summary = (d.get('summary') or '').strip() or '(event)'
         try:
             res, code = jarvis_cal_write(action, d)
+            try:
+                _jarvis_audit_write(uid, 'calendar.' + action, 1,
+                                    summary + ' @ ' + (d.get('start') or ''),
+                                    'done' if code == 200 else 'failed', self._client_ip())
+            except Exception:
+                pass
             self._send_json(res, code)
         except Exception as e:
+            try: _jarvis_audit_write(uid, 'calendar.' + action, 1, summary, 'error', self._client_ip())
+            except Exception: pass
             self._send_json({'error': _err_detail(e)}, 502)
 
     def _handle_sponsor_event(self):
@@ -3722,11 +3732,36 @@ class Handler(SimpleHTTPRequestHandler):
             ctx = (data.get('dashboardContext') or '').strip()[:2000]
             if ctx:
                 extra += (' LIVE DASHBOARD CONTEXT: ' + ctx)
+            extra += (" You can schedule calendar events with the provided tools. When the user asks to add, book, "
+                      "schedule, or move an event, call the appropriate tool. Output 'start' and 'end' as local "
+                      "datetimes in the format YYYY-MM-DDTHH:MM:SS (no timezone offset; the user's local time). "
+                      "Default an event to 30 minutes if no end/duration is given. If the title, day, or time is "
+                      "genuinely ambiguous, ask one brief clarifying question instead of calling the tool. For a move, "
+                      "use the event_id from the calendar context. You never write directly — the tool only proposes; "
+                      "Mike confirms on screen before anything is saved.")
+            tools = [
+                {'name': 'create_calendar_event',
+                 'description': "Propose a new calendar event for Mike to confirm. Does not write until he confirms.",
+                 'input_schema': {'type': 'object', 'properties': {
+                     'summary': {'type': 'string', 'description': 'Event title'},
+                     'start': {'type': 'string', 'description': 'Local start, YYYY-MM-DDTHH:MM:SS'},
+                     'end': {'type': 'string', 'description': 'Local end, YYYY-MM-DDTHH:MM:SS'},
+                     'all_day': {'type': 'boolean'}},
+                     'required': ['summary', 'start', 'end']}},
+                {'name': 'move_calendar_event',
+                 'description': "Propose moving an existing event to a new time for Mike to confirm.",
+                 'input_schema': {'type': 'object', 'properties': {
+                     'event_id': {'type': 'string', 'description': 'Event id from the calendar context'},
+                     'summary': {'type': 'string'},
+                     'start': {'type': 'string', 'description': 'Local start, YYYY-MM-DDTHH:MM:SS'},
+                     'end': {'type': 'string', 'description': 'Local end, YYYY-MM-DDTHH:MM:SS'}},
+                     'required': ['event_id', 'start', 'end']}},
+            ]
             # Use JARVIS_PERSONA instead of the QUWWAA PERSONA
             body = json.dumps({
                 'model': JARVIS_VOICE_MODEL, 'max_tokens': JARVIS_VOICE_MAX_TOKENS,
                 'system': JARVIS_PERSONA + (extra or ''),
-                'messages': msgs, 'stream': False,
+                'messages': msgs, 'stream': False, 'tools': tools,
             }).encode()
             import urllib.request as _ur
             req = _ur.Request('https://api.anthropic.com/v1/messages', data=body,
@@ -3734,8 +3769,30 @@ class Handler(SimpleHTTPRequestHandler):
                                        'content-type': 'application/json'})
             with _ur.urlopen(req, timeout=30) as resp:
                 rd = json.loads(resp.read())
-            reply = (rd.get('content') or [{}])[0].get('text', '').strip() or 'Standing by, sir.'
-            self._send_json({'reply': reply})
+            blocks = rd.get('content') or []
+            reply = ' '.join(b.get('text', '').strip() for b in blocks if b.get('type') == 'text').strip()
+            # Tool use → a PROPOSAL only. The client surfaces a confirm sheet; the
+            # actual write goes through the gated /jarvis/calendar/* endpoints.
+            proposal = None
+            for b in blocks:
+                if b.get('type') == 'tool_use' and b.get('name') in ('create_calendar_event', 'move_calendar_event'):
+                    inp = b.get('input') or {}
+                    if b['name'] == 'create_calendar_event':
+                        proposal = {'action': 'create', 'summary': inp.get('summary') or 'Untitled',
+                                    'start': inp.get('start'), 'end': inp.get('end'),
+                                    'all_day': bool(inp.get('all_day'))}
+                    else:
+                        proposal = {'action': 'move', 'event_id': inp.get('event_id'),
+                                    'summary': inp.get('summary'),
+                                    'start': inp.get('start'), 'end': inp.get('end')}
+                    break
+            if proposal and not reply:
+                reply = ('Shall I move that, sir?' if proposal['action'] == 'move'
+                         else 'Shall I add that to your calendar, sir?')
+            out = {'reply': reply or 'Standing by, sir.'}
+            if proposal:
+                out['proposal'] = proposal
+            self._send_json(out)
         except Exception as e:
             self._send_json({'error': type(e).__name__, 'reply': 'I encountered a fault, sir.'}, 500)
 

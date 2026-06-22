@@ -2,7 +2,7 @@
    The cockpit is live-data and admin-gated, so we never cache API responses
    (/jarvis/stats, /config, /speak, /ask, auth) — only the app shell + icons, so
    it opens from the home screen and the numbers are always fresh from network. */
-const CACHE = 'quwwaa-hq-v39';
+const CACHE = 'quwwaa-hq-v40';
 const SHELL = ['/jarvis.html', '/jarvis-manifest.json', '/icon-192.png', '/icon-512.png', '/icon-180.png'];
 
 self.addEventListener('install', e => {
