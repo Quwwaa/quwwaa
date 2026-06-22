@@ -2267,6 +2267,120 @@ def admin_has_mfa_factor(user_id):
     _MFA_FACTOR_CACHE[user_id] = (has, now)
     return has
 
+# --- MFA backup codes / break-glass recovery -------------------------------
+# A verified TOTP factor with no recovery path locked the sole admin out twice.
+# Rule now: only enforce AAL2 once a factor is enrolled AND backup codes exist,
+# and always offer a break-glass recovery (a backup code clears the factor).
+_BACKUP_HAS_CACHE = {}   # user_id -> (has_unused_bool, fetched_at)
+
+def _backup_hash(code):
+    """Salted hash of a normalized backup code (service-role key as the salt)."""
+    norm = re.sub(r'[^a-z0-9]', '', (code or '').lower())
+    return hashlib.sha256((SUPABASE_SERVICE_ROLE_KEY + ':' + norm).encode()).hexdigest()
+
+def jarvis_generate_backup_codes(user_id, n=8):
+    """Generate n one-time codes, store hashes (replacing any prior set), return
+    the plaintext codes ONCE for display. Returns [] on failure."""
+    import secrets
+    codes = ['-'.join(secrets.token_hex(2) for _ in range(2)) for _ in range(n)]  # e.g. 'a1b2-c3d4'
+    try:
+        sb_rest('DELETE', 'jarvis_mfa_backup_codes?user_id=eq.' + urllib.parse.quote(user_id))
+        sb_rest('POST', 'jarvis_mfa_backup_codes',
+                [{'user_id': user_id, 'code_hash': _backup_hash(c)} for c in codes],
+                prefer='return=minimal')
+        _BACKUP_HAS_CACHE[user_id] = (True, time.time())
+        return codes
+    except Exception:
+        return []
+
+def jarvis_has_backup_codes(user_id):
+    """True if the admin has at least one UNUSED backup code. Cached ~60s;
+    fails open (False) so a lookup error never forces an AAL2 lockout."""
+    if not user_id:
+        return False
+    now = time.time()
+    hit = _BACKUP_HAS_CACHE.get(user_id)
+    if hit and (now - hit[1]) < 60:
+        return hit[0]
+    has = False
+    try:
+        rows = sb_rest('GET', 'jarvis_mfa_backup_codes?user_id=eq.' + urllib.parse.quote(user_id)
+                       + '&used_at=is.null&select=id&limit=1')
+        has = bool(rows)
+    except Exception:
+        has = False
+    _BACKUP_HAS_CACHE[user_id] = (has, now)
+    return has
+
+def _sb_admin_get(path):
+    """GET the Supabase Admin API (service-role). Returns parsed JSON or None."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY):
+        return None
+    req = urllib.request.Request(SUPABASE_URL + '/auth/v1/admin/' + path, headers={
+        'apikey': SUPABASE_SERVICE_ROLE_KEY, 'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode('utf-8') or '{}')
+
+def _admin_id_by_email(email):
+    """Resolve an admin user_id from an email, only if it's on the allowlist."""
+    email = (email or '').strip().lower()
+    if not email:
+        return None
+    try:
+        data = _sb_admin_get('users?per_page=200')
+        users = (data or {}).get('users') if isinstance(data, dict) else None
+        for u in (users or []):
+            if (u.get('email') or '').lower() == email and u.get('id') in JARVIS_ADMIN_USER_IDS:
+                return u.get('id')
+    except Exception:
+        pass
+    return None
+
+def jarvis_recover_mfa(email, code):
+    """Break-glass: a valid unused backup code for an allowlisted admin deletes
+    their MFA factors (so they can sign in at AAL1 and re-enroll) and burns the
+    code. Returns (ok, message). Fails closed — any uncertainty denies."""
+    uid = _admin_id_by_email(email)
+    if not uid:
+        return False, 'No matching admin.'
+    try:
+        rows = sb_rest('GET', 'jarvis_mfa_backup_codes?user_id=eq.' + urllib.parse.quote(uid)
+                       + '&code_hash=eq.' + _backup_hash(code) + '&used_at=is.null&select=id&limit=1')
+    except Exception:
+        return False, 'Recovery temporarily unavailable.'
+    if not rows:
+        return False, 'Invalid or already-used code.'
+    code_id = rows[0]['id']
+    # Burn the code first (so a failure mid-way can't leave a reusable code).
+    try:
+        sb_rest('PATCH', 'jarvis_mfa_backup_codes?id=eq.' + urllib.parse.quote(code_id),
+                {'used_at': datetime.now(timezone.utc).isoformat()}, prefer='return=minimal')
+    except Exception:
+        return False, 'Recovery failed.'
+    # Delete every enrolled factor via the Admin API.
+    deleted = 0
+    try:
+        data = _sb_admin_get('users/' + urllib.parse.quote(uid))
+        for f in ((data or {}).get('factors') or []):
+            fid = f.get('id')
+            if not fid:
+                continue
+            req = urllib.request.Request(
+                SUPABASE_URL + '/auth/v1/admin/users/' + urllib.parse.quote(uid) + '/factors/' + urllib.parse.quote(fid),
+                method='DELETE', headers={'apikey': SUPABASE_SERVICE_ROLE_KEY,
+                                          'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY})
+            try:
+                urllib.request.urlopen(req, timeout=10).read()
+                deleted += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    _MFA_FACTOR_CACHE.pop(uid, None)
+    _BACKUP_HAS_CACHE.pop(uid, None)
+    return True, ('MFA reset. Sign in with Google, then re-enroll. (%d factor%s cleared.)'
+                  % (deleted, '' if deleted == 1 else 's'))
+
 def jarvis_authed(handler):
     # Shared-secret bypass (curl/diag only — skips AAL check)
     x_tok = handler.headers.get('X-Jarvis-Token', '')
@@ -2278,10 +2392,10 @@ def jarvis_authed(handler):
         u = auth_user(handler)
         if not (u and u.get('id') in JARVIS_ADMIN_USER_IDS):
             return False
-        # AAL2 is required ONLY once the admin has actually enrolled a factor.
-        # An admin with no factor yet is allowed at AAL1 so they can reach the
-        # cockpit and enroll — otherwise the gate is a fail-closed lockout.
-        if admin_has_mfa_factor(u['id']):
+        # AAL2 is enforced ONLY once a factor is enrolled AND recovery (backup
+        # codes) exists — so a verified factor without codes can never strand the
+        # admin. No factor, or factor-but-no-codes → allowed at AAL1.
+        if admin_has_mfa_factor(u['id']) and jarvis_has_backup_codes(u['id']):
             bearer = handler.headers.get('Authorization', '').replace('Bearer ', '').strip()
             if _jwt_aal(bearer) != 'aal2':
                 return False
@@ -3009,6 +3123,29 @@ class Handler(SimpleHTTPRequestHandler):
             proceed, action_id, err = require_jarvis_action(
                 self, 1, 'test', {}, 'Test action — harmless, proves the approval framework works')
             self._send_json({'queued': not proceed, 'action_id': action_id, 'err': err})
+            return
+        if self.path.startswith('/jarvis/mfa/backup-codes'):
+            # Generate/replace this admin's recovery codes. Requires a current
+            # admin session (the just-enrolled AAL2 session calls this).
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            try:
+                u = auth_user(self)
+                codes = jarvis_generate_backup_codes(u['id'])
+                self._send_json({'ok': bool(codes), 'codes': codes})
+            except Exception as e:
+                self._send_json({'error': str(e)}, 500)
+            return
+        if self.path.startswith('/jarvis/mfa/recover'):
+            # Break-glass — UNauthenticated by design (the admin is locked out).
+            # Gated by: allowlisted email AND a valid unused backup code.
+            try:
+                length = int(self.headers.get('Content-Length', '0') or '0')
+                data = json.loads(self.rfile.read(length) or b'{}')
+                ok, msg = jarvis_recover_mfa(data.get('email'), data.get('code'))
+                self._send_json({'ok': ok, 'message': msg}, 200 if ok else 400)
+            except Exception as e:
+                self._send_json({'error': str(e)}, 500)
             return
         self.send_error(404)
 

@@ -638,17 +638,61 @@
       else { var img=document.createElement('img'); img.src=qr; img.style.width='180px'; $('#mfaQr').appendChild(img); }
       $('#mfaSecret').textContent=res.data.totp.secret;
     });
+    var verifying=false;
     $('#mfaVerify').onclick=async function(){
+      if(verifying) return;                                  // guard double-submit (TOTP is single-use)
       var code=($('#mfaCode').value||'').replace(/\s/g,'');
       if(code.length!==6){ $('#mfaErr').textContent='Enter the 6-digit code.'; return; }
-      var ch=await sb.auth.mfa.challenge({factorId:factorId});
-      if(ch.error){ $('#mfaErr').textContent=ch.error.message; return; }
-      var v=await sb.auth.mfa.verify({factorId:factorId,challengeId:ch.data.id,code:code});
-      if(v.error){ $('#mfaErr').textContent='Invalid code — try again.'; return; }
-      token=v.data.session.access_token; _stepUpAt=Date.now(); mfaNeedsEnroll=false;
-      refresh(false);
+      var btn=$('#mfaVerify'); verifying=true; btn.disabled=true; btn.textContent='Verifying…'; $('#mfaErr').textContent='';
+      var reset=function(){ verifying=false; btn.disabled=false; btn.textContent='Activate MFA'; };
+      var succeed=function(sess){ if(sess&&sess.access_token){ token=sess.access_token; } _stepUpAt=Date.now(); mfaNeedsEnroll=false; showBackupCodes(); };
+      try{
+        var ch=await sb.auth.mfa.challenge({factorId:factorId});
+        if(ch.error){ throw ch.error; }
+        var v=await sb.auth.mfa.verify({factorId:factorId,challengeId:ch.data.id,code:code});
+        if(v.error){
+          // The server may have actually verified the factor even when the client
+          // reports an error (the bug that locked us out). Don't lie — re-check.
+          var lf=await sb.auth.mfa.listFactors();
+          var verified=(((lf.data||{}).totp)||[]).some(function(f){ return f.status==='verified'; });
+          if(verified){ var ses=await sb.auth.getSession(); succeed(ses&&ses.data&&ses.data.session); return; }
+          var m=((v.error.message||'')+'').toLowerCase();
+          $('#mfaErr').textContent = (m.indexOf('expired')>=0)
+            ? 'That code expired — wait for the next one in your app, then retry.'
+            : 'Incorrect code. Make sure your authenticator app\'s time is synced, then retry.';
+          reset(); return;
+        }
+        succeed(v.data.session);
+      }catch(e){ $('#mfaErr').textContent=(e&&e.message)||'Verification failed — try again.'; reset(); }
     };
     $('#mfaSignOut').onclick=function(){ sb.auth.signOut().then(function(){ location.reload(); }); };
+  }
+
+  // After a factor verifies, mint recovery codes and show them ONCE before entry.
+  // (Codes don't exist yet, so the server still authorizes this at AAL1.)
+  async function showBackupCodes(){
+    app.innerHTML='<div class="hud"><div class="gate"><h1>JARVIS OS</h1><span class="j" style="font-size:11px;letter-spacing:.2em">GENERATING RECOVERY CODES…</span></div></div>';
+    var codes=[];
+    try{ var r=await fetch('/jarvis/mfa/backup-codes',{method:'POST',headers:{'Authorization':'Bearer '+token}}); var d=await r.json(); codes=(d&&d.codes)||[]; }catch(e){}
+    var cont=function(){ sb.auth.mfa.getAuthenticatorAssuranceLevel().then(function(lvl){
+        if(((lvl&&lvl.data&&lvl.data.currentLevel)||'aal1')==='aal2'){ refresh(false); } else { gateMfaChallenge(); }
+      }).catch(function(){ refresh(false); }); };
+    if(!codes.length){
+      app.innerHTML='<div class="hud"><div class="gate"><h1>JARVIS OS</h1><span class="j" style="font-size:11px;letter-spacing:.2em;color:var(--green2)">MFA ENABLED ✓</span>'
+        +'<p style="color:var(--amber);max-width:320px">Recovery codes couldn\'t be generated right now. You can create them later from the Security panel. Keep your authenticator app safe.</p>'
+        +'<button class="gbtn" id="bcGo" style="background:var(--green);color:#05140b;border:none">Continue</button></div></div>';
+      $('#bcGo').onclick=cont; return;
+    }
+    app.innerHTML='<div class="hud"><div class="gate"><h1>JARVIS OS</h1><span class="j" style="font-size:11px;letter-spacing:.2em;color:var(--green2)">MFA ENABLED ✓ — SAVE YOUR RECOVERY CODES</span>'
+      +'<p style="color:var(--dim2);max-width:340px">Store these somewhere safe. Each works <b>once</b> if you ever lose your authenticator — a code resets MFA so you can sign back in. They won\'t be shown again.</p>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;font-family:inherit;font-size:15px;letter-spacing:.08em;color:var(--green2);background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:14px 18px;margin:6px 0">'
+      +codes.map(function(c){ return '<span>'+esc(c)+'</span>'; }).join('')+'</div>'
+      +'<button class="gbtn" id="bcCopy" style="background:none;color:var(--dim2);border:1px solid var(--line2)">Copy codes</button>'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim2);margin:10px 0"><input type="checkbox" id="bcAck"> I\'ve saved these codes</label>'
+      +'<button class="gbtn" id="bcGo" style="background:var(--green);color:#05140b;border:none;opacity:.5" disabled>Enter command center</button></div></div>';
+    $('#bcCopy').onclick=function(){ try{ navigator.clipboard.writeText(codes.join('\n')); $('#bcCopy').textContent='Copied ✓'; }catch(e){} };
+    $('#bcAck').onchange=function(){ var g=$('#bcGo'); g.disabled=!this.checked; g.style.opacity=this.checked?'1':'.5'; };
+    $('#bcGo').onclick=cont;
   }
 
   function gateMfaChallenge(){
@@ -657,7 +701,8 @@
       +'<input id="mfaCode" type="text" inputmode="numeric" maxlength="6" placeholder="000000" style="width:200px;text-align:center;font-size:28px;letter-spacing:.3em;background:var(--panel2);border:1px solid var(--line2);color:var(--white);border-radius:8px;padding:10px;font-family:inherit;margin:8px 0">'
       +'<div id="mfaErr" style="color:var(--amber);font-size:12px;min-height:16px"></div>'
       +'<button class="gbtn" id="mfaGo" style="background:var(--green);color:#05140b;border:none">Authenticate</button>'
-      +'<button style="all:unset;color:var(--dim);font-size:11px;cursor:pointer;margin-top:10px" id="mfaSignOut">Sign out</button></div></div>';
+      +'<button style="all:unset;color:var(--amber);font-size:11px;cursor:pointer;margin-top:12px" id="mfaRecover">Lost your authenticator? Use a recovery code</button>'
+      +'<button style="all:unset;color:var(--dim);font-size:11px;cursor:pointer;margin-top:8px" id="mfaSignOut">Sign out</button></div></div>';
     var doAuth=async function(){
       var code=($('#mfaCode').value||'').replace(/\s/g,'');
       if(code.length!==6){ $('#mfaErr').textContent='Enter the 6-digit code.'; return; }
@@ -673,7 +718,41 @@
     };
     $('#mfaGo').onclick=doAuth;
     $('#mfaCode').addEventListener('keydown',function(e){ if(e.key==='Enter') doAuth(); });
+    $('#mfaRecover').onclick=gateMfaRecover;
     $('#mfaSignOut').onclick=function(){ sb.auth.signOut().then(function(){ location.reload(); }); };
+  }
+
+  // Break-glass: a one-time recovery code clears MFA so a locked-out admin can
+  // sign back in (AAL1) and re-enroll. Unauthenticated by design — the server
+  // gates on allowlisted email + a valid unused code.
+  function gateMfaRecover(){
+    var em=(user&&user.email)||'';
+    app.innerHTML='<div class="hud"><div class="gate"><h1>JARVIS OS</h1><span class="j" style="font-size:11px;letter-spacing:.2em">ACCOUNT RECOVERY</span>'
+      +'<p style="color:var(--dim2);max-width:320px">Enter your admin email and one of your saved recovery codes. This resets MFA so you can sign in and set it up again.</p>'
+      +'<input id="rcEmail" type="email" placeholder="admin email" value="'+esc(em)+'" style="width:240px;text-align:center;font-size:14px;background:var(--panel2);border:1px solid var(--line2);color:var(--white);border-radius:8px;padding:10px;font-family:inherit;margin:6px 0">'
+      +'<input id="rcCode" type="text" placeholder="recovery code (xxxx-xxxx)" style="width:240px;text-align:center;font-size:15px;letter-spacing:.06em;background:var(--panel2);border:1px solid var(--line2);color:var(--white);border-radius:8px;padding:10px;font-family:inherit;margin:6px 0">'
+      +'<div id="rcMsg" style="font-size:12px;min-height:16px;margin:4px 0"></div>'
+      +'<button class="gbtn" id="rcGo" style="background:var(--amber);color:#1a1206;border:none">Reset MFA</button>'
+      +'<button style="all:unset;color:var(--dim);font-size:11px;cursor:pointer;margin-top:10px" id="rcBack">Back</button></div></div>';
+    $('#rcBack').onclick=gateMfaChallenge;
+    $('#rcGo').onclick=async function(){
+      var email=($('#rcEmail').value||'').trim(), code=($('#rcCode').value||'').trim();
+      var msg=$('#rcMsg'), btn=$('#rcGo');
+      if(!email||!code){ msg.style.color='var(--amber)'; msg.textContent='Enter your email and a recovery code.'; return; }
+      btn.disabled=true; btn.textContent='Resetting…'; msg.textContent='';
+      try{
+        var r=await fetch('/jarvis/mfa/recover',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:email,code:code})});
+        var d=await r.json();
+        if(d&&d.ok){
+          msg.style.color='var(--green2)'; msg.textContent=d.message||'MFA reset.';
+          btn.textContent='Done'; mfaNeedsEnroll=false;
+          setTimeout(function(){ sb.auth.signOut().then(function(){ location.reload(); }); }, 1800);
+        } else {
+          msg.style.color='var(--amber)'; msg.textContent=(d&&d.message)||'Recovery failed.';
+          btn.disabled=false; btn.textContent='Reset MFA';
+        }
+      }catch(e){ msg.style.color='var(--amber)'; msg.textContent='Recovery failed — try again.'; btn.disabled=false; btn.textContent='Reset MFA'; }
+    };
   }
 
   async function jvStepUp(){ // Returns true if step-up satisfied (fresh or just completed)
@@ -724,8 +803,10 @@
       +'<div class="row"><span>Session AAL</span><b style="color:'+(mfaNeedsEnroll?'var(--amber)':'var(--green2)')+'">'+(mfaNeedsEnroll?'AAL1 · no MFA':'AAL2 ✓')+'</b></div>'
       +(mfaNeedsEnroll
          ? '<button class="btn" id="enrollMfaBtn" style="margin-top:8px;width:100%;justify-content:center;color:var(--amber)">Secure your account — enable MFA</button>'
-         : '<button class="btn" id="killSwitchBtn" style="margin-top:8px;width:100%;justify-content:center;color:'+(on?'var(--amber)':'var(--green2)')+'">'+(on?'Disable actions':'Enable actions')+'</button>');
+         : '<button class="btn" id="killSwitchBtn" style="margin-top:8px;width:100%;justify-content:center;color:'+(on?'var(--amber)':'var(--green2)')+'">'+(on?'Disable actions':'Enable actions')+'</button>'
+           +'<button class="btn" id="recoveryBtn" style="margin-top:6px;width:100%;justify-content:center;color:var(--dim2)">Regenerate recovery codes</button>');
     if(mfaNeedsEnroll){ var eb=$('#enrollMfaBtn'); if(eb) eb.onclick=function(){ gateMfaEnroll(); }; return; }
+    var rb=$('#recoveryBtn'); if(rb) rb.onclick=async function(){ var ok=await jvStepUp(); if(ok) showBackupCodes(); };
     $('#killSwitchBtn').onclick=async function(){
       var ok=await jvStepUp(); if(!ok) return;
       var newState=!on;
