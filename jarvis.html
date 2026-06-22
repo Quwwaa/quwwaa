@@ -223,6 +223,8 @@
     display:flex;align-items:center;gap:14px;min-width:260px;max-width:90vw;
     transition:opacity .2s,transform .2s;pointer-events:none;opacity:0;transform:translateX(-50%) translateY(10px)}
   #jvOverlay.vis{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
+  /* lift the voice bar to the top while a sheet is open so it never covers Confirm */
+  body.jv-sheeted #jvOverlay{bottom:auto;top:18px;transform:translateX(-50%) translateY(0)}
   #jvStatus{font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:var(--green2);flex:1}
   #jvClose{background:none;border:1px solid rgba(57,255,122,.3);border-radius:7px;color:var(--dim2);
     font:inherit;font-size:10px;padding:4px 9px;cursor:pointer;letter-spacing:.08em;white-space:nowrap}
@@ -496,8 +498,8 @@
       +'<label>Date</label><input id="sfDate" type="date" value="'+dv(start)+'">'
       +'<div class="sfrow"><div><label>Start</label><input id="sfStart" type="time" value="'+tv(start)+'"></div><div><label>End</label><input id="sfEnd" type="time" value="'+tv(end)+'"></div></div>'
       +'<div class="sfmsg" id="sfMsg"></div><button class="confirm" id="sfGo">'+(mode==='move'?'Confirm move':'Confirm & add')+'</button><button class="cancel" id="sfCancel">Cancel</button></div>';
-    document.body.appendChild(sheet); requestAnimationFrame(function(){ sheet.classList.add('open'); });
-    var close=function(){ sheet.classList.remove('open'); setTimeout(function(){ try{sheet.remove();}catch(e){} },220); };
+    document.body.appendChild(sheet); document.body.classList.add('jv-sheeted'); requestAnimationFrame(function(){ sheet.classList.add('open'); });
+    var close=function(){ sheet.classList.remove('open'); document.body.classList.remove('jv-sheeted'); setTimeout(function(){ try{sheet.remove();}catch(e){} },220); jvMaybeListen(); };
     $('#sfCancel',sheet).onclick=close; sheet.addEventListener('click',function(e){ if(e.target===sheet) close(); });
     $('#sfGo',sheet).onclick=function(){
       var go=$('#sfGo',sheet),msg=$('#sfMsg',sheet);
@@ -581,12 +583,14 @@
   boot();
 
   // ===== REACTOR VOICE =====
-  var jvMsgs=[], jvAudio=null, jvMediaRec=null, jvChunks=[], jvRecording=false, jvBusy=false, jvCancelSpeak=false;
+  var jvMsgs=[], jvAudio=null, jvMediaRec=null, jvChunks=[], jvRecording=false, jvBusy=false, jvCancelSpeak=false, jvConvo=false, jvVAD=null;
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition, jvRec=null, jvListening=false;
   if(SR){ jvRec=new SR(); jvRec.lang='en-US'; jvRec.interimResults=false; jvRec.maxAlternatives=1;
     jvRec.onstart=function(){ jvListening=true; jvSetState('listening'); };
-    jvRec.onend=function(){ jvListening=false; if(document.body.classList.contains('jv-listening')){ jvSetState(''); } };
-    jvRec.onerror=function(e){ jvListening=false; jvSetState(''); jvStatus(e.error==='not-allowed'?'Mic denied':'Mic error'); };
+    jvRec.onend=function(){ jvListening=false; if(document.body.classList.contains('jv-listening')){ jvSetState(''); }
+      if(jvConvo && !jvBusy){ jvMaybeListen(); } };   // keep the conversation listening between turns
+    jvRec.onerror=function(e){ jvListening=false; jvSetState(''); jvStatus(e.error==='not-allowed'?'Mic denied':'Mic error');
+      if(e.error==='not-allowed'||e.error==='service-not-allowed'){ jvConvo=false; } };   // don't loop on a denied mic
     jvRec.onresult=function(e){ jvHandleText(e.results[0][0].transcript); };
   }
 
@@ -793,7 +797,7 @@
       jvSetState('speaking');
       jvCancelSpeak=false;
       var spoke=await jvSpeakChunks(reply);   // starts talking after the FIRST sentence
-      if(spoke){ jvBusy=false; if(!jvCancelSpeak) jvSetState(''); }
+      if(spoke){ jvBusy=false; if(!jvCancelSpeak){ jvSetState(''); jvMaybeListen(); } }
       else {
         // TTS unavailable → browser speech as a fallback
         jvBusy=false; jvSetState('');
@@ -801,7 +805,7 @@
           jvCapStart(reply);
           var u=new SpeechSynthesisUtterance(reply), usedBoundary=false;
           u.onboundary=function(e){ usedBoundary=true; jvCapStop(); jvCapRender((e.charIndex||0)+(e.charLength||1)); };
-          u.onend=function(){ jvCapFinish(); setTimeout(jvHideCaption,500); };
+          u.onend=function(){ jvCapFinish(); setTimeout(jvHideCaption,500); jvMaybeListen(); };
           speechSynthesis.speak(u);
           setTimeout(function(){ if(!usedBoundary) jvCapDriveEstimate(); }, 250);
         }catch(e){ jvCapStart(reply); jvCapDriveEstimate(); }
@@ -823,30 +827,72 @@
     catch(e){ jvMediaRec=new MediaRecorder(stream); }
     jvMediaRec.ondataavailable=function(e){ if(e.data&&e.data.size) jvChunks.push(e.data); };
     jvMediaRec.onstop=async function(){
+      jvStopVAD();
       stream.getTracks().forEach(function(t){ t.stop(); });
       jvRecording=false;
       var type=(jvMediaRec&&jvMediaRec.mimeType)||mime||'audio/webm';
       var blob=new Blob(jvChunks,{type:type});
-      if(!blob.size){ jvSetState(''); return; }
+      if(!blob.size){ jvSetState(''); return; }   // nothing said → idle; tap to talk again
       jvSetState('thinking'); jvStatus('Transcribing…');
       try{
         var r=await fetch('/transcribe',{method:'POST',headers:{'X-Audio-Type':type.split(';')[0]},body:blob});
-        if(r.ok){ var d=await r.json(); var t=(d.text||'').trim(); if(t){ jvHandleText(t); } else { jvBusy=false; jvSetState(''); jvStatus('Didn\'t catch that — tap to try again'); } }
+        if(r.ok){ var d=await r.json(); var t=(d.text||'').trim(); if(t){ jvHandleText(t); } else { jvBusy=false; jvSetState(''); jvStatus(jvConvo?'Listening… (tap End to stop)':'Didn\'t catch that — tap to try again'); jvMaybeListen(); } }
         else { jvBusy=false; jvSetState(''); jvStatus('Transcribe error'); }
       } catch(e){ jvBusy=false; jvSetState(''); jvStatus('Transcribe failed'); }
     };
     jvMediaRec.start();
     jvRecording=true; jvSetState('listening');
+    if(jvConvo) jvStartVAD(stream);   // hands-free: auto-send when you stop talking
   }
   function jvStopRecording(){ if(jvMediaRec&&jvRecording){ try{ jvMediaRec.stop(); }catch(e){} } }
 
-  function jvToggleMic(){
-    if(jvBusy&&document.body.classList.contains('jv-speaking')){ jvStopAudio(); jvBusy=false; jvSetState(''); return; }
-    if(jvBusy) return;
-    jvStopAudio();
-    if(jvRec){ jvListening?(jvRec.stop()):(function(){ jvRec.start(); }()); }
-    else{ jvRecording?jvStopRecording():jvStartRecording(); }
+  // Voice-activity detection: while in a conversation, auto-stop recording once
+  // Mike pauses, so he doesn't have to tap to send each turn (iPhone path).
+  function jvStartVAD(stream){
+    jvStopVAD();
+    try{
+      var AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
+      var ctx=new AC(), src=ctx.createMediaStreamSource(stream), an=ctx.createAnalyser();
+      an.fftSize=512; src.connect(an);
+      var buf=new Uint8Array(an.fftSize), t0=performance.now(), lastLoud=t0, hadSpeech=false, raf=0;
+      var tick=function(){
+        an.getByteTimeDomainData(buf);
+        var sum=0; for(var i=0;i<buf.length;i++){ var v=(buf[i]-128)/128; sum+=v*v; }
+        var rms=Math.sqrt(sum/buf.length), now=performance.now();
+        if(rms>0.045){ lastLoud=now; if(now-t0>180) hadSpeech=true; }
+        if((hadSpeech&&now-lastLoud>1400) || (now-t0>15000) || (!hadSpeech&&now-t0>6000)){
+          jvStopVAD(); jvStopRecording(); return;
+        }
+        raf=requestAnimationFrame(tick);
+      };
+      raf=requestAnimationFrame(tick);
+      jvVAD={stop:function(){ try{ cancelAnimationFrame(raf); }catch(e){} try{ src.disconnect(); }catch(e){} try{ ctx.close(); }catch(e){} }};
+    }catch(e){}
   }
+  function jvStopVAD(){ if(jvVAD){ try{ jvVAD.stop(); }catch(e){} jvVAD=null; } }
+
+  // Re-arm the mic for the next turn — only while a conversation is active, not
+  // busy, and no sheet is open (wait for the confirm to be decided first).
+  function jvMaybeListen(){
+    if(!jvConvo||jvBusy) return;
+    if(document.querySelector('.sheet.open')) return;
+    if(jvRec){ if(!jvListening){ try{ jvRec.start(); }catch(e){} } }
+    else { if(!jvRecording) jvStartRecording(); }
+  }
+
+  // Single tap on the reactor wakes Jarvis and starts a flowing conversation that
+  // stays live (auto-listening between turns) until Mike taps End.
+  function jvWake(){
+    jvConvo=true; jvShowOverlay();
+    if(jvBusy&&document.body.classList.contains('jv-speaking')){ jvStopAudio(); jvBusy=false; jvSetState(''); }  // barge-in
+    jvMaybeListen();
+  }
+  function jvEndConvo(){
+    jvConvo=false; jvStopVAD(); jvStopRecording(); jvStopAudio();
+    if(jvRec&&jvListening){ try{ jvRec.stop(); }catch(e){} }
+    jvBusy=false; jvSetState(''); jvHideOverlay(); jvMsgs=[];
+  }
+  function jvToggleMic(){ jvWake(); }   // legacy callers route into the conversation
 
   // Inject the overlay DOM once
   (function(){
@@ -855,7 +901,7 @@
     document.body.appendChild(ov);
     var lens=document.createElement('div'); lens.id='jvLens'; document.body.appendChild(lens);
     // #jvCaption now lives under the reactor (rendered by render()), not on body.
-    document.getElementById('jvClose').onclick=function(){ jvStopRecording(); jvStopAudio(); if(jvRec&&jvListening) jvRec.stop(); jvBusy=false; jvSetState(''); jvHideOverlay(); jvMsgs=[]; };
+    document.getElementById('jvClose').onclick=function(){ jvEndConvo(); };
   }());
 
   // Wire reactor click after render() sets up the DOM; re-wire on each render
@@ -863,7 +909,7 @@
   function jvWireReactor(){
     var reactor=document.querySelector('.reactor');
     if(!reactor) return;
-    reactor.onclick=function(e){ e.stopPropagation(); jvShowOverlay(); jvToggleMic(); };
+    reactor.onclick=function(e){ e.stopPropagation(); jvWake(); };
   }
   // Patch render to also wire reactor + security panels
   var _origRender=render;
