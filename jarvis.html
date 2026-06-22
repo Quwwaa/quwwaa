@@ -151,7 +151,7 @@
   @media (max-width:1240px){ .main{grid-template-columns:1fr 1fr} .top{grid-template-columns:1fr} .intel{grid-template-columns:1fr 1fr} .bottom{grid-template-columns:1fr 1fr} }
   @media (max-width:720px){
     .hud{padding:10px;gap:10px} .main{grid-template-columns:1fr} .intel{grid-template-columns:1fr} .perf{grid-template-columns:repeat(2,1fr)} .bottom{grid-template-columns:1fr}
-    .center{min-height:0} .core-row{grid-template-columns:1fr} .core-row .reactor{order:-1;margin:0 auto 8px} .health-corner{width:100%}
+    .center{min-height:0} .core-row{grid-template-columns:1fr} .core-row .reactor-col{order:-1;margin:0 auto 8px} .reactor-col{width:auto} #jvCaption{position:static;transform:none;margin-top:6px;max-width:90vw} .health-corner{width:100%}
     .cluster.left .node::after,.cluster.left .node::before,.cluster.right .node::after,.cluster.right .node::before{display:none}
     .brandtop h1{font-size:28px}
   }
@@ -173,12 +173,16 @@
   #jvClose{background:none;border:1px solid rgba(57,255,122,.3);border-radius:7px;color:var(--dim2);
     font:inherit;font-size:10px;padding:4px 9px;cursor:pointer;letter-spacing:.08em;white-space:nowrap}
   #jvClose:hover{border-color:var(--green2);color:var(--white)}
-  #jvCaption{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);z-index:89;
-    background:rgba(4,7,11,.82);border:1px solid var(--line);border-radius:10px;
-    padding:10px 16px;max-width:min(560px,90vw);font-size:12.5px;line-height:1.6;
-    color:var(--white);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-    opacity:0;transition:opacity .2s;pointer-events:none}
+  /* Voice reply: a single electric-green typewriter line just under the reactor. */
+  #jvCaption{position:absolute;top:calc(100% + 4px);left:50%;transform:translateX(-50%);z-index:6;
+    white-space:nowrap;overflow:hidden;text-align:center;max-width:min(360px,84vw);
+    font-size:12.5px;letter-spacing:.04em;line-height:1.3;
+    color:var(--green2);text-shadow:0 0 8px rgba(57,255,122,.6);
+    opacity:0;transition:opacity .25s;pointer-events:none}
   #jvCaption.vis{opacity:1}
+  #jvCaption .car{color:var(--green);text-shadow:0 0 8px var(--green);animation:jvcar .9s steps(1) infinite}
+  @keyframes jvcar{50%{opacity:0}}
+  .reactor-col{justify-self:center;position:relative;width:268px;display:flex;flex-direction:column;align-items:center}
   @keyframes jvPulse{0%,100%{opacity:.7}50%{opacity:1}}
   body.jv-listening #jvStatus{animation:jvPulse .8s ease-in-out infinite}
 </style>
@@ -297,7 +301,7 @@
       +'<div class="cluster left"><p class="lbl" style="margin:0 0 2px">Business operations<span class="ln"></span></p>'
         +nodeCard('stripe','Stripe','Payments · live',okStripe)+nodeCard('render','Render','Cloud hosting',true)+nodeCard('github','GitHub','Source control',false)
         +'<p class="lbl" style="margin:6px 0 2px">Analytics<span class="ln"></span></p>'+nodeCard('ga','Google Analytics','Site traffic',okGA)+'</div>'
-      +'<div class="reactor">'+reactorSVG()+'<div class="rcore"><div><b>JARVIS</b><div class="c">CORE</div><div class="a"><span class="dot ok" style="width:5px;height:5px"></span>ACTIVE</div></div></div></div>'
+      +'<div class="reactor-col"><div class="reactor">'+reactorSVG()+'<div class="rcore"><div><b>JARVIS</b><div class="c">CORE</div><div class="a"><span class="dot ok" style="width:5px;height:5px"></span>ACTIVE</div></div></div></div><div id="jvCaption"></div></div>'
       +'<div class="cluster right"><p class="lbl" style="margin:0 0 2px">AI infrastructure<span class="ln"></span></p>'
         +nodeCard('openai','OpenAI','Voice · STT/TTS',okOpenAI)+nodeCard('anthropic','Anthropic','Butler · summaries',okAnthropic)
         +'<p class="lbl" style="margin:6px 0 2px">Productivity<span class="ln"></span></p>'+nodeCard('calendar','Calendar','Agenda · events',okCal)+nodeCard('gmail','Gmail','Inbox triage',false)+'</div>'
@@ -487,10 +491,66 @@
   }
   function jvShowOverlay(){ var o=document.getElementById('jvOverlay'); if(o) o.classList.add('vis'); }
   function jvHideOverlay(){ var o=document.getElementById('jvOverlay'); if(o) o.classList.remove('vis'); jvHideCaption(); jvSetState(''); }
-  function jvShowCaption(txt){ var c=document.getElementById('jvCaption'); if(!c) return; c.textContent=txt; c.classList.add('vis'); }
-  function jvHideCaption(){ var c=document.getElementById('jvCaption'); if(c) c.classList.remove('vis'); }
 
-  function jvStopAudio(){ if(jvAudio){ try{ jvAudio.pause(); }catch(e){} jvAudio.src=''; } }
+  // ---- Under-reactor typewriter caption, one line at a time, synced to audio ----
+  var jvCap={segs:[],cum:[],total:1,raf:0,el:null};
+  function jvCapEl(){ return document.getElementById('jvCaption'); }
+  function jvSegment(reply){
+    var MAX=40, out=[];
+    var sentences=(reply||'').replace(/\s+/g,' ').trim().match(/[^.!?]+[.!?]*\s*/g)||[reply];
+    sentences.forEach(function(s){ s=(s||'').trim(); if(!s) return;
+      if(s.length<=MAX){ out.push(s); return; }
+      var line=''; s.split(' ').forEach(function(w){
+        if((line+' '+w).trim().length>MAX){ if(line) out.push(line.trim()); line=w; }
+        else line=(line+' '+w).trim();
+      });
+      if(line) out.push(line.trim());
+    });
+    return out.length?out:[(reply||'').trim()];
+  }
+  function jvCapStart(reply){
+    jvCapStop(); var el=jvCapEl(); if(!el) return;
+    var segs=jvSegment(reply), cum=[], t=0;
+    segs.forEach(function(s){ t+=s.length; cum.push(t); });
+    jvCap={segs:segs,cum:cum,total:t||1,raf:0,el:el};
+    el.classList.add('vis'); jvCapRender(0);
+  }
+  function jvCapRender(revealed){
+    var el=jvCap.el; if(!el) return;
+    revealed=Math.max(0,Math.min(jvCap.total,Math.round(revealed)));
+    var i=0, prev=0;
+    for(;i<jvCap.cum.length;i++){ if(revealed<=jvCap.cum[i]) break; prev=jvCap.cum[i]; }
+    if(i>=jvCap.segs.length){ i=jvCap.segs.length-1; prev=i>0?jvCap.cum[i-1]:0; }
+    var seg=jvCap.segs[i]||'';
+    var local=Math.max(0,Math.min(seg.length,revealed-prev));
+    var done=(local>=seg.length);
+    el.innerHTML=esc(seg.slice(0,local))+(done?'':'<span class="car">▍</span>');
+  }
+  function jvCapDriveAudio(){
+    cancelAnimationFrame(jvCap.raf);
+    var tick=function(){
+      if(!jvAudio) return;
+      var D=jvAudio.duration;
+      if(D&&isFinite(D)&&D>0){ jvCapRender(jvCap.total*(jvAudio.currentTime/D)); }
+      if(!jvAudio.paused&&!jvAudio.ended){ jvCap.raf=requestAnimationFrame(tick); }
+    };
+    jvCap.raf=requestAnimationFrame(tick);
+  }
+  function jvCapDriveEstimate(){   // ~14 chars/sec when no audio clock is available
+    cancelAnimationFrame(jvCap.raf);
+    var start=performance.now();
+    var tick=function(){
+      var revealed=((performance.now()-start)/1000)*14;
+      jvCapRender(revealed);
+      if(revealed<jvCap.total){ jvCap.raf=requestAnimationFrame(tick); }
+    };
+    jvCap.raf=requestAnimationFrame(tick);
+  }
+  function jvCapStop(){ if(jvCap.raf) cancelAnimationFrame(jvCap.raf); jvCap.raf=0; }
+  function jvCapFinish(){ jvCapStop(); if(jvCap.el){ jvCap.el.textContent=jvCap.segs[jvCap.segs.length-1]||''; } }
+  function jvHideCaption(){ jvCapStop(); var c=jvCapEl(); if(c){ c.classList.remove('vis'); c.textContent=''; } }
+
+  function jvStopAudio(){ if(jvAudio){ try{ jvAudio.pause(); }catch(e){} jvAudio.src=''; } try{ speechSynthesis.cancel(); }catch(e){} jvHideCaption(); }
 
   function jvBuildContext(){
     var lines=[]; var now=new Date();
@@ -541,7 +601,6 @@
         if(!reply&&d.choices) reply=(d.choices[0].message&&d.choices[0].message.content)||'';
       } else { reply='I\'m having trouble reaching the server, sir.'; }
       jvMsgs.push({role:'assistant',content:reply});
-      jvShowCaption(reply);
       jvSetState('speaking');
       var sr=await fetch('/speak',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:reply})});
       if(sr.ok){
@@ -549,10 +608,21 @@
         if(!jvAudio) jvAudio=new Audio();
         var url=URL.createObjectURL(blob);
         jvAudio.src=url;
-        jvAudio.onended=function(){ URL.revokeObjectURL(url); jvBusy=false; jvSetState(''); };
-        jvAudio.onerror=function(){ jvBusy=false; jvSetState(''); };
-        jvAudio.play();
-      } else { jvBusy=false; jvSetState(''); try{ speechSynthesis.speak(new SpeechSynthesisUtterance(reply)); }catch(e){} }
+        jvAudio.onplay=function(){ jvCapStart(reply); jvCapDriveAudio(); };
+        jvAudio.onended=function(){ URL.revokeObjectURL(url); jvCapFinish(); setTimeout(jvHideCaption,500); jvBusy=false; jvSetState(''); };
+        jvAudio.onerror=function(){ jvHideCaption(); jvBusy=false; jvSetState(''); };
+        jvAudio.play().catch(function(){ /* audio unlock handled on tap elsewhere */ });
+      } else {
+        jvBusy=false; jvSetState('');
+        try{
+          jvCapStart(reply);
+          var u=new SpeechSynthesisUtterance(reply), usedBoundary=false;
+          u.onboundary=function(e){ usedBoundary=true; jvCapStop(); jvCapRender((e.charIndex||0)+(e.charLength||1)); };
+          u.onend=function(){ jvCapFinish(); setTimeout(jvHideCaption,500); };
+          speechSynthesis.speak(u);
+          setTimeout(function(){ if(!usedBoundary) jvCapDriveEstimate(); }, 250);
+        }catch(e){ jvCapStart(reply); jvCapDriveEstimate(); }
+      }
     } catch(e){ jvBusy=false; jvSetState(''); jvStatus('Error — try again'); }
   }
 
@@ -600,7 +670,7 @@
     var ov=document.createElement('div'); ov.id='jvOverlay';
     ov.innerHTML='<span id="jvStatus">Standing by</span><button id="jvClose">End</button>';
     document.body.appendChild(ov);
-    var cap=document.createElement('div'); cap.id='jvCaption'; document.body.appendChild(cap);
+    // #jvCaption now lives under the reactor (rendered by render()), not on body.
     document.getElementById('jvClose').onclick=function(){ jvStopRecording(); jvStopAudio(); if(jvRec&&jvListening) jvRec.stop(); jvBusy=false; jvSetState(''); jvHideOverlay(); jvMsgs=[]; };
   }());
 
