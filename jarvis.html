@@ -583,7 +583,7 @@
   boot();
 
   // ===== REACTOR VOICE =====
-  var jvMsgs=[], jvAudio=null, jvMediaRec=null, jvChunks=[], jvRecording=false, jvBusy=false, jvCancelSpeak=false, jvConvo=false, jvVAD=null;
+  var jvMsgs=[], jvAudio=null, jvMediaRec=null, jvChunks=[], jvBusy=false, jvCancelSpeak=false, jvConvo=false;
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition, jvRec=null, jvListening=false;
   if(SR){ jvRec=new SR(); jvRec.lang='en-US'; jvRec.interimResults=false; jvRec.maxAlternatives=1;
     jvRec.onstart=function(){ jvListening=true; jvSetState('listening'); };
@@ -816,79 +816,100 @@
   function jvPickMime(){ var c=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/aac'];
     for(var i=0;i<c.length;i++){ if(window.MediaRecorder&&MediaRecorder.isTypeSupported(c[i])) return c[i]; } return ''; }
 
-  async function jvStartRecording(){
-    if(jvRecording||jvBusy) return;
-    jvStopAudio();
-    var stream; try{ stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
-    catch(e){ jvStatus('Mic denied — allow in browser settings'); return; }
-    jvChunks=[];
-    var mime=jvPickMime();
-    try{ jvMediaRec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream); }
-    catch(e){ jvMediaRec=new MediaRecorder(stream); }
-    jvMediaRec.ondataavailable=function(e){ if(e.data&&e.data.size) jvChunks.push(e.data); };
-    jvMediaRec.onstop=async function(){
-      jvStopVAD();
-      stream.getTracks().forEach(function(t){ t.stop(); });
-      jvRecording=false;
-      var type=(jvMediaRec&&jvMediaRec.mimeType)||mime||'audio/webm';
-      var blob=new Blob(jvChunks,{type:type});
-      if(!blob.size){ jvSetState(''); return; }   // nothing said → idle; tap to talk again
-      jvSetState('thinking'); jvStatus('Transcribing…');
-      try{
-        var r=await fetch('/transcribe',{method:'POST',headers:{'X-Audio-Type':type.split(';')[0]},body:blob});
-        if(r.ok){ var d=await r.json(); var t=(d.text||'').trim(); if(t){ jvHandleText(t); } else { jvBusy=false; jvSetState(''); jvStatus(jvConvo?'Listening… (tap End to stop)':'Didn\'t catch that — tap to try again'); jvMaybeListen(); } }
-        else { jvBusy=false; jvSetState(''); jvStatus('Transcribe error'); }
-      } catch(e){ jvBusy=false; jvSetState(''); jvStatus('Transcribe failed'); }
+  // ===== Full-duplex conversation engine =====
+  // One persistent, echo-cancelled mic for the whole conversation. A continuous
+  // voice-activity loop listens the ENTIRE time — including while Jarvis speaks —
+  // so the moment Mike starts talking, Jarvis hushes (barge-in) and captures the
+  // new instruction. Echo cancellation keeps Jarvis's own voice from triggering it.
+  var jvStream=null, jvAudioCtx=null, jvVADraf=0, jvCapturing=false, jvCapStart=0, jvOnset=0, jvLastLoud=0;
+
+  async function jvEnsureStream(){
+    if(jvStream) return jvStream;
+    jvStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+    return jvStream;
+  }
+  function jvReleaseStream(){
+    jvStopListenLoop();
+    if(jvStream){ try{ jvStream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){} jvStream=null; }
+  }
+  function jvStopListenLoop(){ if(jvVADraf){ cancelAnimationFrame(jvVADraf); jvVADraf=0; } }
+
+  function jvStartListenLoop(){
+    jvStopListenLoop();
+    var AC=window.AudioContext||window.webkitAudioContext; if(!AC||!jvStream) return;
+    if(!jvAudioCtx){ try{ jvAudioCtx=new AC(); }catch(e){ return; } }
+    if(jvAudioCtx.state==='suspended'){ try{ jvAudioCtx.resume(); }catch(e){} }
+    var src, an;
+    try{ src=jvAudioCtx.createMediaStreamSource(jvStream); an=jvAudioCtx.createAnalyser(); an.fftSize=512; src.connect(an); }
+    catch(e){ return; }
+    var buf=new Uint8Array(an.fftSize);
+    var loop=function(){
+      if(!jvConvo){ jvVADraf=0; return; }
+      an.getByteTimeDomainData(buf);
+      var sum=0; for(var i=0;i<buf.length;i++){ var v=(buf[i]-128)/128; sum+=v*v; }
+      var rms=Math.sqrt(sum/buf.length), now=performance.now();
+      var speaking=document.body.classList.contains('jv-speaking');
+      var sheetOpen=!!document.querySelector('.sheet.open');
+      var thresh=speaking?0.10:0.05;          // higher bar during playback to ignore residual echo
+      if(rms>thresh) jvLastLoud=now;
+      if(sheetOpen){ jvOnset=0; }              // hold off while a confirm sheet is up
+      else if(!jvCapturing){
+        if(rms>thresh){ if(!jvOnset) jvOnset=now;
+          if(now-jvOnset>160){               // sustained speech onset
+            if(speaking){ jvStopAudio(); jvBusy=false; jvSetState(''); }   // barge-in: hush + listen
+            if(!jvBusy) jvBeginSegment();
+          }
+        } else { jvOnset=0; }
+      } else {
+        if(now-jvLastLoud>1200 || now-jvCapStart>15000){ jvEndSegment(); }   // pause → send
+      }
+      jvVADraf=requestAnimationFrame(loop);
     };
-    jvMediaRec.start();
-    jvRecording=true; jvSetState('listening');
-    if(jvConvo) jvStartVAD(stream);   // hands-free: auto-send when you stop talking
+    jvVADraf=requestAnimationFrame(loop);
   }
-  function jvStopRecording(){ if(jvMediaRec&&jvRecording){ try{ jvMediaRec.stop(); }catch(e){} } }
 
-  // Voice-activity detection: while in a conversation, auto-stop recording once
-  // Mike pauses, so he doesn't have to tap to send each turn (iPhone path).
-  function jvStartVAD(stream){
-    jvStopVAD();
+  function jvBeginSegment(){
+    if(jvCapturing||!jvStream) return;
+    jvChunks=[]; var mime=jvPickMime();
+    try{ jvMediaRec=mime?new MediaRecorder(jvStream,{mimeType:mime}):new MediaRecorder(jvStream); }
+    catch(e){ try{ jvMediaRec=new MediaRecorder(jvStream); }catch(e2){ return; } }
+    jvMediaRec.ondataavailable=function(e){ if(e.data&&e.data.size) jvChunks.push(e.data); };
+    jvMediaRec.onstop=function(){ jvProcessSegment(mime); };
+    try{ jvMediaRec.start(); }catch(e){ return; }
+    jvCapturing=true; jvCapStart=performance.now(); jvLastLoud=performance.now(); jvOnset=0;
+    jvSetState('listening');
+  }
+  function jvEndSegment(){ if(!jvCapturing) return; jvCapturing=false; if(jvMediaRec){ try{ jvMediaRec.stop(); }catch(e){} } }
+
+  async function jvProcessSegment(mime){
+    var type=(jvMediaRec&&jvMediaRec.mimeType)||mime||'audio/webm';
+    var blob=new Blob(jvChunks,{type:type});
+    if(!blob.size){ if(!jvBusy) jvSetState(''); return; }
+    if(jvBusy) return;                         // a turn is already being handled
+    jvSetState('thinking'); jvStatus('Transcribing…');
     try{
-      var AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
-      var ctx=new AC(), src=ctx.createMediaStreamSource(stream), an=ctx.createAnalyser();
-      an.fftSize=512; src.connect(an);
-      var buf=new Uint8Array(an.fftSize), t0=performance.now(), lastLoud=t0, hadSpeech=false, raf=0;
-      var tick=function(){
-        an.getByteTimeDomainData(buf);
-        var sum=0; for(var i=0;i<buf.length;i++){ var v=(buf[i]-128)/128; sum+=v*v; }
-        var rms=Math.sqrt(sum/buf.length), now=performance.now();
-        if(rms>0.045){ lastLoud=now; if(now-t0>180) hadSpeech=true; }
-        if((hadSpeech&&now-lastLoud>1400) || (now-t0>15000) || (!hadSpeech&&now-t0>6000)){
-          jvStopVAD(); jvStopRecording(); return;
-        }
-        raf=requestAnimationFrame(tick);
-      };
-      raf=requestAnimationFrame(tick);
-      jvVAD={stop:function(){ try{ cancelAnimationFrame(raf); }catch(e){} try{ src.disconnect(); }catch(e){} try{ ctx.close(); }catch(e){} }};
-    }catch(e){}
-  }
-  function jvStopVAD(){ if(jvVAD){ try{ jvVAD.stop(); }catch(e){} jvVAD=null; } }
-
-  // Re-arm the mic for the next turn — only while a conversation is active, not
-  // busy, and no sheet is open (wait for the confirm to be decided first).
-  function jvMaybeListen(){
-    if(!jvConvo||jvBusy) return;
-    if(document.querySelector('.sheet.open')) return;
-    if(jvRec){ if(!jvListening){ try{ jvRec.start(); }catch(e){} } }
-    else { if(!jvRecording) jvStartRecording(); }
+      var r=await fetch('/transcribe',{method:'POST',headers:{'X-Audio-Type':type.split(';')[0]},body:blob});
+      if(r.ok){ var d=await r.json(); var t=(d.text||'').trim();
+        if(t){ jvHandleText(t); } else { jvSetState(''); jvStatus(jvConvo?'Listening…':'Tap to talk'); } }
+      else { jvSetState(''); jvStatus('Transcribe error'); }
+    } catch(e){ jvSetState(''); jvStatus('Transcribe failed'); }
   }
 
-  // Single tap on the reactor wakes Jarvis and starts a flowing conversation that
-  // stays live (auto-listening between turns) until Mike taps End.
-  function jvWake(){
+  // jvMaybeListen now just ensures the always-on loop is running.
+  function jvMaybeListen(){ if(jvConvo && jvStream && !jvVADraf) jvStartListenLoop(); }
+  function jvStopRecording(){ jvEndSegment(); }
+
+  // One tap on the reactor wakes Jarvis and opens a flowing, full-duplex
+  // conversation (he listens even while talking) until Mike taps End.
+  async function jvWake(){
     jvConvo=true; jvShowOverlay();
     if(jvBusy&&document.body.classList.contains('jv-speaking')){ jvStopAudio(); jvBusy=false; jvSetState(''); }  // barge-in
-    jvMaybeListen();
+    try{ await jvEnsureStream(); }
+    catch(e){ jvConvo=false; jvSetState(''); jvStatus('Mic denied — allow in settings'); return; }
+    jvSetState('listening'); jvStartListenLoop();
   }
   function jvEndConvo(){
-    jvConvo=false; jvStopVAD(); jvStopRecording(); jvStopAudio();
+    jvConvo=false; jvEndSegment(); jvStopAudio(); jvReleaseStream();
     if(jvRec&&jvListening){ try{ jvRec.stop(); }catch(e){} }
     jvBusy=false; jvSetState(''); jvHideOverlay(); jvMsgs=[];
   }
