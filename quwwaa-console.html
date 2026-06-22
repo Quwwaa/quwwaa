@@ -375,6 +375,24 @@
   body.bright .qarttitle, body.bright .qrelt { color:#2a1c0e; }
   body.bright .qartsum p, body.bright .qartfade p { color:#3a2c1e; }
   body.bright .qartpay h3 { color:#5a3a18; } body.bright .qartpay p { color:#6a4a2a; }
+  /* ---------- opening splash (logo + date/time → board) ---------- */
+  #splash { position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center;
+            background:radial-gradient(ellipse at 50% 40%, #20140c 0%, #0c0a08 70%, #000 100%);
+            opacity:1; transition:opacity .55s ease; }
+  #splash.hide { opacity:0; pointer-events:none; }
+  #splash .sp-inner { display:flex; flex-direction:column; align-items:center; gap:13px; animation:spRise .7s ease both; }
+  #splash .sp-logo { width:92px; height:auto; filter:drop-shadow(0 2px 12px rgba(217,128,38,.45)); animation:spPulse 2.4s ease-in-out infinite; }
+  #splash .sp-word { font-family:var(--font-serif); font-size:34px; letter-spacing:.04em; line-height:1;
+            background:linear-gradient(180deg,#fde3d2 0%,#e6ac8d 45%,#b27b61 72%,#854433 100%);
+            -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; color:transparent; }
+  #splash .sp-meta { font-size:13px; letter-spacing:.02em; color:#a06a3a; font-variant-numeric:tabular-nums; display:flex; gap:8px; align-items:center; }
+  #splash .sp-dot { opacity:.55; }
+  @keyframes spRise { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  @keyframes spPulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.05); } }
+  body.bright #splash { background:radial-gradient(ellipse at 50% 40%, #fbf2e6 0%, #f3e7d6 70%, #ece0cf 100%); }
+  body.bright #splash .sp-word { background:linear-gradient(180deg,#b35f10,#854433); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  body.bright #splash .sp-meta { color:#9a7a55; }
+  @media (prefers-reduced-motion: reduce) { #splash .sp-logo { animation:none; } #splash .sp-inner { animation:none; } }
   /* ---------- RTL (Arabic) — mirror the physical-direction bits flexbox can't ----------
      <html dir=rtl> is set by QI18N when lang==='ar'. Flex rows and start/end alignment
      auto-mirror with direction; these rules flip the remaining left/right-anchored pieces
@@ -409,6 +427,35 @@
 </style>
 </head>
 <body>
+<!-- Brief opening sequence (logo + date/time) shown while the board loads, then it
+     fades into the news board. Removed entirely for no-JS clients so it can never
+     trap a crawler or a scripting-off reader. -->
+<noscript><style>#splash{display:none!important;}</style></noscript>
+<div id="splash">
+  <div class="sp-inner">
+    <img class="sp-logo" src="logo-q.png" alt="" draggable="false">
+    <div class="sp-word">QUWWAA</div>
+    <div class="sp-meta"><span id="spDate"></span><span class="sp-dot">·</span><span id="spTime"></span></div>
+  </div>
+</div>
+<script>
+(function(){
+  var sp=document.getElementById('splash'); if(!sp) return;
+  try{
+    var now=new Date(), d=document.getElementById('spDate'), t=document.getElementById('spTime');
+    if(d) d.textContent=now.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
+    if(t) t.textContent=now.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+  }catch(e){}
+  var shown=Date.now(), MIN=1400;
+  window.__hideSplash=function(){
+    if(!sp || sp.classList.contains('hide')) return;
+    var wait=Math.max(0, MIN-(Date.now()-shown));          // hold briefly so it doesn't flash
+    setTimeout(function(){ sp.classList.add('hide');
+      setTimeout(function(){ if(sp && sp.parentNode) sp.parentNode.removeChild(sp); }, 600); }, wait);
+  };
+  setTimeout(function(){ window.__hideSplash(); }, 3200);   // hard cap — never trap the user if the board is slow
+})();
+</script>
 <noscript>
   <div style="max-width:640px;margin:40px auto;padding:0 22px;color:#e7d6c4;font-family:sans-serif;line-height:1.6;">
     <h1>QUWWAA</h1>
@@ -952,8 +999,12 @@ window.QI18N = (function(){
   };
   var NATIVE = {en:'English', es:'Español', fr:'Français', ar:'العربية', ru:'Русский', ms:'Bahasa Melayu', id:'Bahasa Indonesia'};
   var SUPPORTED = ['en', 'es', 'fr', 'ar', 'ru'];   // languages with a UI dictionary (grows each chunk)
+  // Localization is built but NOT live to customers yet — the site is English-only
+  // until it's refined. The whole engine stays intact; a stored language (and the
+  // 🌐 switcher) is only honored when the dev flag is set: localStorage.q_lang_dev='1'.
+  var LANG_DEV = (function(){ try { return localStorage.getItem('q_lang_dev') === '1'; } catch(e){ return false; } })();
   var lang = 'en';
-  try { var s = localStorage.getItem('q_lang'); if (s && SUPPORTED.indexOf(s) >= 0) lang = s; } catch(e){}
+  try { var s = localStorage.getItem('q_lang'); if (LANG_DEV && s && SUPPORTED.indexOf(s) >= 0) lang = s; } catch(e){}
   function t(key){ var d = DICT[lang] || {}; if (key in d) return d[key]; return (DICT.en[key] != null) ? DICT.en[key] : key; }
   function applyDir(l){ try{ document.documentElement.lang = l; document.documentElement.dir = (l === 'ar') ? 'rtl' : 'ltr'; }catch(e){} }
   function set(l){
@@ -1828,16 +1879,19 @@ window.QI18N = (function(){
     return arr;
   }
 
-  let homeRendered = -1, boardRetries = 0, lastBrief = [], briefInFlight = null, lastRumble = [];
+  let homeRendered = -1, boardRetries = 0, lastBrief = [], briefInFlight = null, lastRumble = [], lastExtra = [];
   // Re-render the board from the brief we already have — used when auth/membership
   // settles so we re-personalize WITHOUT hitting /brief again. Reconcile keeps it
   // flicker-free even if this fires several times in a row.
   function paintBrief(){
     if(!lastBrief.length) return;
     prepRumble(lastRumble);                             // pick post + slot once; needs the board's stories to sit among
-    const ordered = withRumble(personalizeSections(lastBrief));
+    // Curated AI leads (personalized) + Rumble house card, then the recent
+    // thumbnailed "more stories" feed so the board scrolls long like a real wire.
+    const ordered = withRumble(personalizeSections(lastBrief)).concat(lastExtra);
     renderBoardSections(ordered, homeRendered < 0);   // animate only on the very first paint
     homeRendered = ordered.length;
+    try{ if(window.__hideSplash) window.__hideSplash(); }catch(e){}   // board is up → fade the opening splash
     setStatus(T('status.standby'));
     try{ if(window.QP && QP.isMember && QP.isMember() && QP.profile){ addMemberLocal(); } }catch(e){}
   }
@@ -1850,6 +1904,7 @@ window.QI18N = (function(){
     briefInFlight = fetch('/brief?lang='+window.QI18N.get(), {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
     let d=null; try{ d = await briefInFlight; }catch(e){} finally { briefInFlight = null; }
     if(d && Array.isArray(d.rumble)) lastRumble = d.rumble;   // folded into the board on paint (varying top-5 slot)
+    if(d && Array.isArray(d.extra)) lastExtra = d.extra;      // recent thumbnailed "more stories" tail
     const sections = (d && d.sections) || [];
     const building = !!(d && d.building);                     // server still assembling this language's brief
     if(sections.length){ boardRetries = 0; lastBrief = sections; paintBrief(); }
@@ -1876,7 +1931,7 @@ window.QI18N = (function(){
                     summary:a.summary||a.snippet||a.desc||''} : null;
       }catch(e){ return null; }
     }))).filter(Boolean);
-    if(got.length){ renderBoardSections(withRumble(got.concat(personalizeSections(lastBrief))), false); }
+    if(got.length){ renderBoardSections(withRumble(got.concat(personalizeSections(lastBrief))).concat(lastExtra), false); }
   }
   // re-render the board whenever membership/auth changes (free brief <-> personalized)
   document.addEventListener('qp:auth', function(){ try{ if(document.body.classList.contains('home')) loadHome(false); }catch(e){} });
@@ -2027,6 +2082,10 @@ window.QI18N = (function(){
     try{ brainState(); }catch(e){}
   }
   function buildLangSwitcher(){
+    // Hidden on the live site (English-only for now). Re-enable for testing with
+    // localStorage.q_lang_dev='1'. The i18n engine itself is untouched.
+    var langDev=false; try{ langDev = localStorage.getItem('q_lang_dev')==='1'; }catch(e){}
+    if(!langDev) return;
     const host = $('brainState') && $('brainState').parentNode; if(!host || $('langBtn')) return;
     const btn=document.createElement('button'); btn.id='langBtn'; btn.title=T('lang.title');
     btn.textContent='🌐 '+window.QI18N.get().toUpperCase();

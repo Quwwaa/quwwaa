@@ -645,7 +645,7 @@ HOME_CATS = [
 HOME_SNAPSHOT = {'t': 0, 'items': []}
 HOME_REFRESH = int(os.environ.get('HOME_REFRESH', '300'))  # rebuild every 5 min
 
-def _pick_card(cat, fast=True, exclude_urls=None, lang='en'):
+def _pick_card(cat, fast=True, exclude_urls=None, lang='en', require_image=False):
     payload = cached_aggregate(_cat_query(cat, lang), cat['days'], fast, lang)
     arts = payload.get('articles', [])
     mah = cat.get('maxAgeH')
@@ -656,7 +656,8 @@ def _pick_card(cat, fast=True, exclude_urls=None, lang='en'):
             arts = fresh
     if exclude_urls:
         arts = [a for a in arts if _norm_brief_url(a.get('url', '')) not in exclude_urls]
-    a = next((x for x in arts if x.get('image')), arts[0] if arts else None)
+    # Prefer a story with a thumbnail; for the board, require one (no naked cards).
+    a = next((x for x in arts if x.get('image')), None if require_image else (arts[0] if arts else None))
     if not a:
         return None
     return {'label': cat['label'], 'q': cat['q'], 'days': cat['days'],
@@ -699,6 +700,11 @@ BRIEF_CATS = [
     {'label': 'Worth Knowing',      'q': 'breaking news',           'days': 1, 'maxAgeH': 20},
 ]
 BRIEF = {'t': 0, 'sections': []}
+# The board should feel full and scrollable (competitor parity) WITHOUT drifting old:
+# beyond the curated one-AI-card-per-category lead, top up with recent, thumbnailed
+# stories that carry a snippet teaser — pulled from the same aggregates (no extra AI).
+BOARD_TARGET = int(os.environ.get('BOARD_TARGET', '24'))        # aim for ~this many board cards (min 20)
+BOARD_MAX_AGE_H = int(os.environ.get('BOARD_MAX_AGE_H', '72'))  # only stories newer than this on the board
 
 # --- Localization (Phase 1) --------------------------------------------------
 # Native-sourced news + in-language summaries. English is the BASE path and is
@@ -1152,6 +1158,8 @@ def build_brief(full=False, lang='en'):
         p = prev.get(label)
         if p and not _is_article_url(p.get('url', '')):
             p = None              # never carry forward an image-host/thumbnail link → re-pick fresh
+        if p and not p.get('image'):
+            p = None              # board cards must have a thumbnail → re-pick to find one
         # Re-validate each previously-built card. Keep it only if its summary is
         # genuinely good or we've already retried it enough; otherwise re-summarize.
         if not full and p and _card_settled(p):
@@ -1170,7 +1178,7 @@ def build_brief(full=False, lang='en'):
         try:
             # Use the FULL aggregate (more sources + image backfill) so each section
             # reliably yields a thumbnailed story — the fast path comes back empty too often.
-            card = _pick_card(cat, fast=False, lang=lang)
+            card = _pick_card(cat, fast=False, lang=lang, require_image=True)
         except Exception:
             card = None
         if card:
@@ -1198,7 +1206,86 @@ def build_brief(full=False, lang='en'):
             if sec:
                 results[label] = sec
                 store['sections'] = [results[l] for l in order if l in results]
+    # Top up the board to a fuller, scrollable set (≥20, all thumbnailed, all recent)
+    # without extra AI: reuse the per-category aggregates just fetched and pull more
+    # image-bearing, snippet-carrying, recent stories the curated leads didn't use.
+    try:
+        chosen = {_norm_brief_url(s.get('url', '')) for s in store['sections']}
+        want = max(0, BOARD_TARGET - sum(1 for s in store['sections'] if s.get('image')))
+        store['extra'] = build_board_extra(lang, chosen, want)
+    except Exception:
+        store['extra'] = store.get('extra') or []
     store['t'] = time.time()               # always stamp so we don't loop full rebuilds
+
+def build_board_extra(lang, chosen_urls, want):
+    """Recent, thumbnailed stories with a snippet teaser to flesh out the board past
+    the curated AI leads — so it scrolls long like a real wire, no AI cost. Two sources:
+      • Bing News per category → topical variety (best-effort; Bing throttles, so a
+        failed call is never fatal),
+      • the curated publisher feeds fetched ONCE → reliable volume,
+    each card requiring BOTH an image and a snippet and being newer than BOARD_MAX_AGE_H.
+    Categorized, interleaved across topics (variety first), newest-first, de-duped
+    against the curated leads. English-only for now (the board is English-only)."""
+    if want <= 0 or lang != 'en':
+        return []
+    cut = time.time() - BOARD_MAX_AGE_H * 3600
+    label_tok = [(c['label'], (_tok(c['q']) - STOPWORDS)) for c in BRIEF_CATS]
+    def guess_label(title):
+        t, best, bn = _tok(title), 'World', 0
+        for lab, toks in label_tok:
+            n = len(t & toks)
+            if n > bn: bn, best = n, lab
+        return best
+    def ok(a):
+        return bool(a.get('image') and (a.get('snippet') or '').strip()
+                    and (a.get('ts') or 0) >= cut
+                    and _is_article_url(a.get('url', '')) and not _is_blocked_article(a))
+    by_cat = {}
+    # 1) Per-category variety from Bing (best-effort).
+    def grab_bing(cat):
+        try: return cat['label'], [a for a in src_bing(cat['q']) if ok(a)]
+        except Exception: return cat['label'], []
+    try:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for lab, picks in ex.map(grab_bing, BRIEF_CATS):
+                by_cat.setdefault(lab, []).extend(picks)
+    except Exception:
+        pass
+    # 2) Reliable volume from the curated publisher feeds (one sweep), labeled by topic.
+    feed_items = []
+    try:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = [ex.submit(_feed_items, n, u) for n, u in FEEDS]
+            for fu in futs:
+                try: feed_items += fu.result(timeout=12)
+                except Exception: pass
+    except Exception:
+        pass
+    for a in feed_items:
+        if ok(a):
+            by_cat.setdefault(guess_label(a.get('title', '')), []).append(a)
+    # 3) Interleave across topics for variety, newest-first within each, global de-dup.
+    for lst in by_cat.values():
+        lst.sort(key=lambda a: (a.get('ts') or 0), reverse=True)
+    order = [c['label'] for c in BRIEF_CATS] + [l for l in by_cat if l not in {c['label'] for c in BRIEF_CATS}]
+    seen = set(chosen_urls or ())
+    out, i = [], 0
+    maxlen = max((len(v) for v in by_cat.values()), default=0)
+    while len(out) < want and i < maxlen:
+        for lab in order:
+            lst = by_cat.get(lab) or []
+            if i < len(lst):
+                a = lst[i]; u = _norm_brief_url(a.get('url', ''))
+                if u and u not in seen:
+                    seen.add(u)
+                    out.append({'label': lab, 'title': a.get('title', ''), 'url': a.get('url', ''),
+                                'source': a.get('source', ''), 'image': a.get('image', ''),
+                                'time': a.get('time', ''), 'summary': (a.get('snippet') or '').strip(),
+                                'extra': True})
+                    if len(out) >= want:
+                        break
+        i += 1
+    return out
 
 # --- Daily Morning Brief email (Kit broadcast, teaser format) ------------------
 # Per-slot day guards + a per-day "already emailed" url set so the evening brief
@@ -4015,8 +4102,8 @@ class Handler(SimpleHTTPRequestHandler):
             store = _brief_store(lang)
             if lang != 'en':
                 ensure_brief_lang(lang)          # lazy background build; fills on subsequent fetches
-            self._send_json({'sections': store['sections'], 't': store['t'],
-                             'rumble': RUMBLE['items'], 'lang': lang,
+            self._send_json({'sections': store['sections'], 'extra': store.get('extra') or [],
+                             't': store['t'], 'rumble': RUMBLE['items'], 'lang': lang,
                              'building': (lang != 'en' and lang in BRIEF_BUILDING)})
         elif self.path.startswith('/sponsors'):
             try: items = get_sponsors()
