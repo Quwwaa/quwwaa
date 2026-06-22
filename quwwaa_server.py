@@ -2381,27 +2381,33 @@ def jarvis_recover_mfa(email, code):
     return True, ('MFA reset. Sign in with Google, then re-enroll. (%d factor%s cleared.)'
                   % (deleted, '' if deleted == 1 else 's'))
 
-def jarvis_authed(handler):
+def jarvis_auth_reason(handler):
+    """Returns 'ok' | 'mfa_required' | 'forbidden'. 'mfa_required' lets the
+    cockpit route a legit admin to the MFA challenge instead of the dead
+    "not on the admin list" screen (the third-lockout bug)."""
     # Shared-secret bypass (curl/diag only — skips AAL check)
     x_tok = handler.headers.get('X-Jarvis-Token', '')
     if JARVIS_ADMIN_TOKEN and x_tok and x_tok == JARVIS_ADMIN_TOKEN:
-        return True
+        return 'ok'
     if not JARVIS_ADMIN_USER_IDS:
-        return False
+        return 'forbidden'
     try:
         u = auth_user(handler)
         if not (u and u.get('id') in JARVIS_ADMIN_USER_IDS):
-            return False
+            return 'forbidden'
         # AAL2 is enforced ONLY once a factor is enrolled AND recovery (backup
         # codes) exists — so a verified factor without codes can never strand the
         # admin. No factor, or factor-but-no-codes → allowed at AAL1.
         if admin_has_mfa_factor(u['id']) and jarvis_has_backup_codes(u['id']):
             bearer = handler.headers.get('Authorization', '').replace('Bearer ', '').strip()
             if _jwt_aal(bearer) != 'aal2':
-                return False
-        return True
+                return 'mfa_required'
+        return 'ok'
     except Exception:
-        return False
+        return 'forbidden'
+
+def jarvis_authed(handler):
+    return jarvis_auth_reason(handler) == 'ok'
 
 def sb_count(path_q):
     """Exact row count for a PostgREST query without pulling the rows."""
@@ -3747,8 +3753,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self.end_headers(); self.wfile.write(body); return
             self._send_json(run_brief_email(slot, force=True))   # force a real compose+create (test)
         elif self.path.startswith('/jarvis/stats'):
-            if not jarvis_authed(self):
-                self._send_json({'error': 'unauthorized'}, 401); return
+            reason = jarvis_auth_reason(self)
+            if reason != 'ok':
+                # 'mfa_required' → cockpit shows the challenge; 'forbidden' → admin gate.
+                self._send_json({'error': reason if reason == 'mfa_required' else 'unauthorized'}, 403); return
             try:
                 self._send_json(jarvis_stats())
             except Exception as e:

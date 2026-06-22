@@ -432,17 +432,49 @@
   function refresh(spin){
     var rb=$('#reload'); if(rb&&spin) rb.classList.add('spin');
     var Hd={'Authorization':'Bearer '+token};
-    var gS=fetch('/jarvis/stats',{cache:'no-store',headers:Hd}).then(function(r){ if(r.status===401||r.status===403){throw {code:'forbidden'};} if(!r.ok) throw {code:'err'}; return r.json(); });
+    var gS=fetch('/jarvis/stats',{cache:'no-store',headers:Hd}).then(function(r){
+      if(r.status===401||r.status===403){
+        // Distinguish "needs MFA challenge" from "truly not an admin".
+        return r.json().catch(function(){return {};}).then(function(j){
+          throw {code:(j&&j.error==='mfa_required')?'mfa':'forbidden'};
+        });
+      }
+      if(!r.ok) throw {code:'err'}; return r.json();
+    });
     var gA=fetch('/jarvis/agenda',{cache:'no-store',headers:Hd}).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; });
     var gC=fetch('/jarvis/costs',{cache:'no-store',headers:Hd}).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; });
     return Promise.all([gS,gA,gC]).then(function(res){ stats=res[0]; agenda=res[1]; costs=res[2]; render(); })
-      .catch(function(e){ if(e&&e.code==='forbidden'){ gateForbidden(); }
+      .catch(function(e){ if(e&&e.code==='mfa'){ gateMfaChallenge(); }
+        else if(e&&e.code==='forbidden'){ gateForbidden(); }
         else { app.innerHTML='<div class="hud"><div class="gate"><h1>QUWWAA</h1><p class="err">Couldn\'t load the briefing.</p><button class="gbtn" id="retry">Retry</button></div></div>'; var rt=$('#retry'); if(rt) rt.onclick=function(){ boot(); }; } });
   }
   function gateSignIn(){ app.innerHTML='<div class="hud"><div class="gate"><h1>QUWWAA</h1><span class="j">Jarvis OS · second brain</span><p>Command center. Sign in to continue.</p><button class="gbtn" id="gi"><svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>Continue with Google</button></div></div>';
     $('#gi').onclick=function(){ try{ sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo: location.origin + location.pathname } }); }catch(e){} }; }
   function gateForbidden(){ app.innerHTML='<div class="hud"><div class="gate"><h1>QUWWAA</h1><p class="err">This account isn\'t on the admin list.</p><p style="color:var(--dim)">Signed in as '+esc((user&&user.email)||'')+'.</p><button class="gbtn" id="so">Sign out</button></div></div>';
     $('#so').onclick=function(){ try{ sb.auth.signOut().then(function(){ location.reload(); }); }catch(e){ location.reload(); } }; }
+  // Single auth gate — the ONLY path from a session to the cockpit. Decides
+  // AAL2 / challenge / enroll up front so onAuthStateChange and getSession can't
+  // race a blind refresh() into a 403 (the third-lockout bug).
+  var _gating=false;
+  function enterAfterAuth(session){
+    if(_gating) return; _gating=true;
+    user=session.user; token=session.access_token;
+    var go=function(){ _gating=false; };
+    sb.auth.mfa.getAuthenticatorAssuranceLevel().then(function(lvl){
+      if(lvl&&lvl.error){ throw lvl.error; }
+      var cur=(lvl&&lvl.data&&lvl.data.currentLevel)||'aal1';
+      var nxt=(lvl&&lvl.data&&lvl.data.nextLevel)||'aal1';
+      go();
+      if(cur==='aal2'){ refresh(false); }                  // already stepped up
+      else if(nxt==='aal2'){ gateMfaChallenge(); }         // factor enrolled → challenge (never refresh)
+      else { mfaNeedsEnroll=true; refresh(false); }        // no factor → in, with enroll nudge
+    }).catch(function(){
+      // AAL lookup failed — do NOT blind-refresh into a possible 403. refresh()
+      // itself routes a server 'mfa_required' to the challenge screen, so a
+      // verified-factor admin still lands on the code entry, never gateForbidden.
+      go(); refresh(false);
+    });
+  }
   function boot(){ app.innerHTML='<div class="hud"><div class="panel">Loading…</div></div>';
     fetch('/config',{cache:'no-store'}).then(function(r){return r.json();}).then(function(cfg){
       if(!cfg||!cfg.supabaseUrl){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Backend not configured.</p></div></div>'; return; }
@@ -451,21 +483,13 @@
         sb.auth.getSession().then(function(res){
           var session=res&&res.data&&res.data.session;
           if(!session){ gateSignIn(); return; }
-          user=session.user; token=session.access_token;
-          // MFA gate — mirrors the server: enforce AAL2 only once a factor is
-          // enrolled. No factor yet → let the admin in (AAL1) and nudge to enroll,
-          // never a fail-closed lockout.
-          sb.auth.mfa.getAuthenticatorAssuranceLevel().then(function(lvl){
-            var cur=(lvl&&lvl.data&&lvl.data.currentLevel)||'aal1';
-            var nxt=(lvl&&lvl.data&&lvl.data.nextLevel)||'aal1';
-            if(cur==='aal2'){ refresh(false); }                  // already stepped up
-            else if(nxt==='aal2'){ gateMfaChallenge(); }         // factor enrolled, needs challenge
-            else { mfaNeedsEnroll=true; refresh(false); }        // no factor → in, with enroll nudge
-          }).catch(function(){ refresh(false); }); // if MFA API unavailable, let through (graceful)
+          enterAfterAuth(session);
         });
+        // A fresh OAuth sign-in arrives via onAuthStateChange — it MUST go through
+        // the same AAL gate, never refresh() directly (that 403s at AAL1 and dumps
+        // a verified-factor admin to gateForbidden, skipping the challenge screen).
         sb.auth.onAuthStateChange(function(_e,session){
-          if(session){ user=session.user; token=session.access_token;
-            if(!stats){ refresh(false); } }
+          if(session && !stats){ enterAfterAuth(session); }
         });
       }).catch(function(){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Couldn\'t start. Retry.</p></div></div>'; });
     }).catch(function(){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Offline.</p></div></div>'; }); }
