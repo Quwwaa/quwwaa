@@ -945,8 +945,14 @@
       +'<div class="row"><span>Session AAL</span><b style="color:'+(mfaNeedsEnroll?'var(--amber)':'var(--green2)')+'">'+(mfaNeedsEnroll?'AAL1 · no MFA':'AAL2 ✓')+'</b></div>'
       +(mfaNeedsEnroll
          ? '<button class="btn" id="enrollMfaBtn" style="margin-top:8px;width:100%;justify-content:center;color:var(--amber)">Secure your account — enable MFA</button>'
-         : '<button class="btn" id="killSwitchBtn" style="margin-top:8px;width:100%;justify-content:center;color:'+(on?'var(--amber)':'var(--green2)')+'">'+(on?'Disable actions':'Enable actions')+'</button>'
-           +'<button class="btn" id="recoveryBtn" style="margin-top:6px;width:100%;justify-content:center;color:var(--dim2)">Regenerate recovery codes</button>');
+         : (on
+             ? '<div style="margin-top:10px;text-align:center;color:#fff;font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;line-height:1.5">Never ever ever touch the red button</div>'
+               +'<div style="display:flex;gap:8px;margin-top:6px">'
+               +'<button id="killSwitchBtn" style="flex:1;justify-content:center;display:flex;align-items:center;background:var(--red);color:#fff;border:none;border-radius:8px;padding:11px 8px;font:inherit;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer">Nuke It</button>'
+               +'<button id="recoveryBtn" style="flex:1;justify-content:center;display:flex;align-items:center;background:var(--green);color:#fff;border:none;border-radius:8px;padding:11px 8px;font:inherit;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer">Recovery Codes</button>'
+               +'</div>'
+             : '<button id="killSwitchBtn" style="margin-top:10px;width:100%;justify-content:center;display:flex;align-items:center;background:var(--green);color:#fff;border:none;border-radius:8px;padding:11px 8px;font:inherit;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer">Restore Actions</button>'
+               +'<button id="recoveryBtn" style="margin-top:6px;width:100%;justify-content:center;display:flex;align-items:center;background:var(--green);color:#fff;border:none;border-radius:8px;padding:11px 8px;font:inherit;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer">Recovery Codes</button>'));
     if(mfaNeedsEnroll){ var eb=$('#enrollMfaBtn'); if(eb) eb.onclick=function(){ gateMfaEnroll(); }; return; }
     var rb=$('#recoveryBtn'); if(rb) rb.onclick=async function(){ var ok=await jvStepUp(); if(ok) showBackupCodes(); };
     $('#killSwitchBtn').onclick=async function(){
