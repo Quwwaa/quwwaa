@@ -628,6 +628,9 @@
 
   // ===== REACTOR VOICE =====
   var jvMsgs=[], jvAudio=null, jvMediaRec=null, jvChunks=[], jvBusy=false, jvCancelSpeak=false, jvConvo=false;
+  // iOS routes audio to the quiet earpiece while the mic is capturing, so on iOS
+  // we release the mic during playback (turn-based) instead of full-duplex.
+  var IS_IOS=/iP(hone|od|ad)/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints>1);
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition, jvRec=null, jvListening=false;
   if(SR){ jvRec=new SR(); jvRec.lang='en-US'; jvRec.interimResults=false; jvRec.maxAlternatives=1;
     jvRec.onstart=function(){ jvListening=true; jvSetState('listening'); };
@@ -904,10 +907,12 @@
       } else { reply='I\'m having trouble reaching the server, sir.'; }
       jvMsgs.push({role:'assistant',content:reply});
       if(proposal){ if(proposal.action==='broadcast'){ jvProposeBroadcast(proposal); } else { jvProposeCalendar(proposal); } }   // Jarvis proposes → Mike confirms on screen
+      if(IS_IOS) jvReleaseStream();   // free the mic so playback hits the loud speaker, not the earpiece
       jvSetState('speaking');
       jvCancelSpeak=false;
+      var afterSpeak=function(){ if(IS_IOS){ jvResumeMic(); } else { jvMaybeListen(); } };
       var spoke=await jvSpeakChunks(reply);   // starts talking after the FIRST sentence
-      if(spoke){ jvBusy=false; if(!jvCancelSpeak){ jvSetState(''); jvMaybeListen(); } }
+      if(spoke){ jvBusy=false; if(!jvCancelSpeak){ jvSetState(''); afterSpeak(); } }
       else {
         // TTS unavailable → browser speech as a fallback
         jvBusy=false; jvSetState('');
@@ -915,7 +920,7 @@
           jvCapStart(reply);
           var u=new SpeechSynthesisUtterance(reply), usedBoundary=false;
           u.onboundary=function(e){ usedBoundary=true; jvCapStop(); jvCapRender((e.charIndex||0)+(e.charLength||1)); };
-          u.onend=function(){ jvCapFinish(); setTimeout(jvHideCaption,500); jvMaybeListen(); };
+          u.onend=function(){ jvCapFinish(); setTimeout(jvHideCaption,500); afterSpeak(); };
           speechSynthesis.speak(u);
           setTimeout(function(){ if(!usedBoundary) jvCapDriveEstimate(); }, 250);
         }catch(e){ jvCapStart(reply); jvCapDriveEstimate(); }
@@ -1005,18 +1010,51 @@
     } catch(e){ jvSetState(''); jvStatus('Transcribe failed'); }
   }
 
-  // jvMaybeListen now just ensures the always-on loop is running.
-  function jvMaybeListen(){ if(jvConvo && jvStream && !jvVADraf) jvStartListenLoop(); }
+  // Ensure the listen loop is running; on iOS re-acquire the mic if it was freed.
+  function jvMaybeListen(){
+    if(!jvConvo) return;
+    if(!jvStream){ if(IS_IOS) jvResumeMic(); return; }
+    if(!jvVADraf) jvStartListenLoop();
+  }
   function jvStopRecording(){ jvEndSegment(); }
 
   // One tap on the reactor wakes Jarvis and opens a flowing, full-duplex
   // conversation (he listens even while talking) until Mike taps End.
+  // iOS only allows audio that's unlocked by a user gesture. The first TTS now
+  // plays AFTER a network round-trip (transcribe→ask→speak), which loses the tap's
+  // permission — so prime the audio element + AudioContext on the tap itself.
+  var jvAudioPrimed=false;
+  function jvPrimeAudio(){
+    try{
+      if(!jvAudio) jvAudio=new Audio();
+      jvAudio.setAttribute('playsinline','');
+      if(!jvAudioPrimed){
+        jvAudio.muted=true;
+        jvAudio.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+        var p=jvAudio.play();
+        if(p&&p.then){ p.then(function(){ try{jvAudio.pause();}catch(e){} jvAudio.currentTime=0; jvAudio.muted=false; jvAudioPrimed=true; })
+                        .catch(function(){ jvAudio.muted=false; }); }
+        else { jvAudio.muted=false; jvAudioPrimed=true; }
+      }
+      var AC=window.AudioContext||window.webkitAudioContext;
+      if(AC){ if(!jvAudioCtx){ try{ jvAudioCtx=new AC(); }catch(e){} } if(jvAudioCtx&&jvAudioCtx.state==='suspended'){ jvAudioCtx.resume(); } }
+    }catch(e){}
+  }
   async function jvWake(){
+    jvPrimeAudio();                 // synchronous — must run inside the tap gesture
     jvConvo=true; jvShowOverlay();
     if(jvBusy&&document.body.classList.contains('jv-speaking')){ jvStopAudio(); jvBusy=false; jvSetState(''); }  // barge-in
     try{ await jvEnsureStream(); }
     catch(e){ jvConvo=false; jvSetState(''); jvStatus('Mic denied — allow in settings'); return; }
     jvSetState('listening'); jvStartListenLoop();
+  }
+  // iOS: re-acquire the mic after Jarvis finishes speaking, to listen for the
+  // next turn (full-duplex barge-in isn't possible while the speaker is loud).
+  async function jvResumeMic(){
+    if(!jvConvo) return;
+    if(document.querySelector('.sheet.open')) return;   // wait for a confirm to be decided
+    try{ await jvEnsureStream(); jvSetState('listening'); jvStartListenLoop(); }
+    catch(e){ jvConvo=false; jvSetState(''); }
   }
   function jvEndConvo(){
     jvConvo=false; jvEndSegment(); jvStopAudio(); jvReleaseStream();
