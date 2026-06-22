@@ -523,6 +523,23 @@ def _is_article_url(u):
         return False
     return True
 
+# Editorial block — prediction/betting markets we will never surface. Promoting
+# gambling violates QUWWAA's core principles, and these two also run undisclosed
+# paid "articles" dressed up as news. Drop ANY story about them, everywhere the
+# feed is built (board, brief, news lens, related coverage, priority tracking),
+# whether the brand is in the headline, the outlet, the URL, or the blurb.
+BLOCKED_TERMS = ('polymarket', 'kalshi')
+
+def _is_blocked_article(a):
+    """True if a story is about a blocked gambling market (case-insensitive,
+    matches brand in title / source / url / any blurb field)."""
+    try:
+        hay = ' '.join(str(a.get(k) or '') for k in
+                       ('title', 'source', 'url', 'snippet', 'summary', 'desc', 'description')).lower()
+    except Exception:
+        return False
+    return any(t in hay for t in BLOCKED_TERMS)
+
 def aggregate(q, days=7, fast=False, lang='en'):
     results, seen, arts = [], set(), []
     diag = {}
@@ -568,6 +585,8 @@ def aggregate(q, days=7, fast=False, lang='en'):
             continue
         if not _is_article_url(a.get('url', '')):     # drop image-host / thumbnail links
             continue
+        if _is_blocked_article(a):                    # never surface blocked gambling markets
+            continue
         key = re.sub(r'[\W_]+', '', (a['title'] or '').lower())[:60]   # Unicode-aware: keep Cyrillic/Arabic/accented letters, not just a-z0-9
         if not key or key in seen:
             continue
@@ -580,7 +599,7 @@ def aggregate(q, days=7, fast=False, lang='en'):
         if lang == 'en':
             upgrade_gnews(arts)      # may REWRITE a['url'] from a Bing match — English-only, so skip for other langs
         fill_images(arts)
-        arts = [a for a in arts if _is_article_url(a.get('url', ''))]   # …so re-validate after enrichment
+        arts = [a for a in arts if _is_article_url(a.get('url', '')) and not _is_blocked_article(a)]   # …so re-validate (and re-block) after enrichment
     return {'query': q, 'days': days, 'articles': arts, 'diag': diag,
             'sources': len({a['source'] for a in arts})}
 
