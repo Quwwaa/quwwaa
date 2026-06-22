@@ -284,7 +284,8 @@
     youtube:'#ff0000|<svg viewBox="0 0 24 24" fill="#fff"><path d="M10 9l5 3-5 3z"/></svg>',
     x:'#000|<svg viewBox="0 0 24 24" fill="#fff"><path d="M17 3h3l-7 8 8 10h-6l-4-5-5 5H3l7.5-8.5L3 3h6l3.7 4.8z"/></svg>',
     substack:'#ff6719|<svg viewBox="0 0 24 24" fill="#fff"><path d="M5 4h14v2.3H5zM5 8.3h14V21l-7-3.9L5 21z"/></svg>',
-    canva:'cnv|<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round"><path d="M16 8.6A5 5 0 1 0 16 15.4"/></svg>'
+    canva:'cnv|<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round"><path d="M16 8.6A5 5 0 1 0 16 15.4"/></svg>',
+    kit:'#4da8f5|<svg viewBox="0 0 24 24"><text x="12" y="16.5" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-weight="800" font-size="12" letter-spacing="-.5" fill="#141414">kit</text></svg>'
   };
   function ico(key){ var v=IC[key]||('#0b1018|'); var i=v.indexOf('|'); var bg=v.slice(0,i), svg=v.slice(i+1);
     var style = bg==='ig' ? 'background:radial-gradient(circle at 30% 110%,#fdf497 0,#fd5949 45%,#d6249f 60%,#285aeb 90%)'
@@ -398,7 +399,7 @@
       +'</div>'
       +'</div>';
     // social column
-    var soc=[['instagram','Instagram','Visual content',false],['facebook','Facebook','Community',false],['tiktok','TikTok','Short-form',false],['youtube','YouTube','Long-form',false],['x','X','Real-time',false],['substack','Substack','Newsletter · live',true],['canva','Canva','Design studio',false]];
+    var soc=[['instagram','Instagram','Visual content',false],['facebook','Facebook','Community',false],['tiktok','TikTok','Short-form',false],['youtube','YouTube','Long-form',false],['x','X','Real-time',false],['substack','Substack','Newsletter · live',true],['kit','Kit','Email · live',true],['canva','Canva','Design studio',false]];
     H+='<div class="panel social"><p class="lbl">Social publishing<span class="ln"></span></p>'
       +soc.map(function(s){return '<div class="scard">'+ico(s[0])+'<div class="nx"><div class="nn">'+s[1]+'</div><div class="nr">'+s[2]+'</div></div>'+statusTag(s[3],'social')+'</div>';}).join('')+'</div>';
     // content rail
