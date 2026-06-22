@@ -128,13 +128,27 @@ def fetch(url, timeout=8):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
-def ago(dt):
+# Relative-time wording per language (minutes / hours / days). The feed shows
+# these on every card and in the article meta, so they must match the chosen
+# language — an English "8h ago" on an Arabic board is jarring.
+AGO_FMT = {
+    'en': ('%dm ago', '%dh ago', '%dd ago'),
+    'es': ('hace %d min', 'hace %d h', 'hace %d d'),
+    'fr': ('il y a %d min', 'il y a %d h', 'il y a %d j'),
+    'ar': ('منذ %d دقيقة', 'منذ %d ساعة', 'منذ %d يوم'),
+    'ru': ('%d мин назад', '%d ч назад', '%d дн назад'),
+    'ms': ('%d min lalu', '%d j lalu', '%d hari lalu'),
+    'id': ('%d mnt lalu', '%d j lalu', '%d hari lalu'),
+}
+
+def ago(dt, lang='en'):
     if not dt: return ''
     s = (datetime.now(timezone.utc) - dt).total_seconds()
     if s < 0: s = 0
-    if s < 3600:  return '%dm ago' % max(1, s // 60)
-    if s < 86400: return '%dh ago' % (s // 3600)
-    return '%dd ago' % (s // 86400)
+    mfmt, hfmt, dfmt = AGO_FMT.get(lang, AGO_FMT['en'])
+    if s < 3600:  return mfmt % max(1, s // 60)
+    if s < 86400: return hfmt % (s // 3600)
+    return dfmt % (s // 86400)
 
 def _gdelt_call(q, days, lang='en'):
     sl = LANGS.get(lang, LANGS['en'])['gdelt']
@@ -165,7 +179,7 @@ def src_gdelt(q, days=7, lang='en'):
         except Exception:
             pass
         out.append({'title': a.get('title', ''), 'url': a.get('url', ''),
-                    'source': a.get('domain', ''), 'time': ago(dt),
+                    'source': a.get('domain', ''), 'time': ago(dt, lang),
                     'image': a.get('socialimage', '') or '',
                     'ts': dt.timestamp() if dt else 0, 'via': 'GDELT'})
     return out
@@ -187,7 +201,7 @@ def src_gnews(q, days=7, lang='en'):
         except Exception:
             pass
         title = re.sub(r'\s+-\s+[^-]+$', '', title)  # strip trailing " - Source"
-        out.append({'title': title, 'url': link, 'source': sname, 'time': ago(dt),
+        out.append({'title': title, 'url': link, 'source': sname, 'time': ago(dt, lang),
                     'image': '',
                     'ts': dt.timestamp() if dt else 0, 'via': 'GoogleNews'})
     return out[:40]
@@ -851,10 +865,10 @@ def summarize_article(title, desc, source):
     except Exception:
         return (snippet or (title or '')), grounded
 
-def related_articles(title, source, exclude_url, n=4):
+def related_articles(title, source, exclude_url, n=4, lang='en'):
     """3-4 related stories on the same topic from OTHER outlets (reuses /news)."""
     try:
-        payload = cached_aggregate(key_terms(title), 7, True)
+        payload = cached_aggregate(key_terms(title), 7, True, lang)
     except Exception:
         return []
     out, seen, src0 = [], set(), (source or '').lower()
@@ -871,19 +885,21 @@ def related_articles(title, source, exclude_url, n=4):
             break
     return out
 
-def build_article(url, title, source):
-    """Grounded summary + related coverage for one article, cached by URL so
-    re-opening the same story never re-spends AI credits."""
-    hit = ARTICLE_CACHE.get(url)
+def build_article(url, title, source, lang='en'):
+    """Grounded summary + related coverage for one article, cached by URL+lang so
+    re-opening the same story never re-spends AI credits and each language keeps
+    its own in-language summary."""
+    ckey = (url, lang)
+    hit = ARTICLE_CACHE.get(ckey)
     if hit and time.time() - hit[0] < ARTICLE_TTL:
         return hit[1]
     desc = og_desc(url) if url.startswith('http') else ''
     body = fetch_article_text(url, timeout=7) if url and url.startswith('http') else ''
     # tier-2 neighbours (with bodies) when the article body is thin/unfetchable
-    neighbors = _neighbors_with_bodies(title, source, url, budget=9) if (not body or len(body) < 400) else []
-    summary, degraded = make_summary(title, source, '', url, desc, longer=True, body=body, neighbors=neighbors)
+    neighbors = _neighbors_with_bodies(title, source, url, budget=9, lang=lang) if (not body or len(body) < 400) else []
+    summary, degraded = make_summary(title, source, '', url, desc, longer=True, body=body, neighbors=neighbors, lang=lang)
     payload = {'url': url, 'title': title, 'source': source, 'summary': summary,
-               'grounded': (not degraded), 'related': related_articles(title, source, url)}
+               'grounded': (not degraded), 'related': related_articles(title, source, url, lang=lang)}
     if summary and url:
         if len(ARTICLE_CACHE) > 500:                          # cap memory
             for k in list(ARTICLE_CACHE)[:120]:
@@ -892,7 +908,7 @@ def build_article(url, title, source):
         # ~30 min so the body / related coverage gets another try, without
         # re-spending on every open.
         offset = (ARTICLE_TTL - 1800) if degraded else 0
-        ARTICLE_CACHE[url] = (time.time() - offset, payload)
+        ARTICLE_CACHE[ckey] = (time.time() - offset, payload)
     return payload
 
 _article_hits = {}                  # ip -> recent /article timestamps (own bucket)
@@ -1035,10 +1051,10 @@ def _lede(user_content, strict=False, longer=False, lang='en'):
         data = json.loads(r.read())
     return ' '.join(b.get('text', '') for b in data.get('content', []) if b.get('type') == 'text').strip()
 
-def _neighbors_with_bodies(title, source, exclude_url, budget=9):
+def _neighbors_with_bodies(title, source, exclude_url, budget=9, lang='en'):
     """Related coverage (tier 2): fetch 2-4 neighbours' bodies in parallel under one budget."""
     try:
-        rel = related_articles(title, source, exclude_url, n=4)
+        rel = related_articles(title, source, exclude_url, n=4, lang=lang)
     except Exception:
         rel = []
     if not rel:
@@ -1127,19 +1143,20 @@ def build_brief(full=False, lang='en'):
     result is published to that language's brief store (English -> BRIEF)."""
     store = _brief_store(lang)
     prev = {s['label']: s for s in store['sections']}   # last-good cards, kept as a fallback
-    out = []
-    for cat in BRIEF_CATS:
+
+    def build_section(cat):
+        """Resolve ONE section: keep a settled previous card, re-summarize a degraded
+        one, or pick + summarize a fresh story. Returns the section dict (or the prev
+        card / None). Pure per-category work so sections can build in parallel."""
         label = cat['label']
         p = prev.get(label)
         if p and not _is_article_url(p.get('url', '')):
             p = None              # never carry forward an image-host/thumbnail link → re-pick fresh
         # Re-validate each previously-built card. Keep it only if its summary is
-        # genuinely good or we've already retried it enough; otherwise re-summarize
-        # — this flushes stale headline-restatement slop even when it was stored as
-        # non-degraded, and a truly hard story settles to a clean headline-only card.
+        # genuinely good or we've already retried it enough; otherwise re-summarize.
         if not full and p and _card_settled(p):
-            out.append(p)
-        elif not full and p:
+            return p
+        if not full and p:
             tries = (p.get('degrade_tries') or 0) + 1
             np = dict(p)
             try:
@@ -1149,26 +1166,38 @@ def build_brief(full=False, lang='en'):
                 np['degraded'] = bool(deg and tries < 3)    # stop retrying after 3 cycles
             except Exception: pass
             np['degrade_tries'] = tries
-            out.append(np)
-        else:
-            try:
-                # Use the FULL aggregate (more sources + image backfill) so each section
-                # reliably yields a thumbnailed story — the fast path comes back empty too often.
-                card = _pick_card(cat, fast=False, lang=lang)
-            except Exception:
-                card = None
-            if card:
-                a = card['a']
-                url = a.get('url', '')
-                desc = og_desc(url) if url.startswith('http') else ''
-                summ, deg = quality_summary(a.get('title', ''), a.get('source', ''), label, url, desc, lang=lang)
-                out.append({'label': label, 'title': a.get('title', ''), 'url': url,
-                            'source': a.get('source', ''), 'image': a.get('image', ''),
-                            'time': a.get('time', ''), 'summary': summ, 'degraded': deg})
-            elif p:
-                out.append(p)                           # keep the previous good story rather than drop the section
-        if out:
-            store['sections'] = list(out)               # publish progress so /brief fills in live
+            return np
+        try:
+            # Use the FULL aggregate (more sources + image backfill) so each section
+            # reliably yields a thumbnailed story — the fast path comes back empty too often.
+            card = _pick_card(cat, fast=False, lang=lang)
+        except Exception:
+            card = None
+        if card:
+            a = card['a']
+            url = a.get('url', '')
+            desc = og_desc(url) if url.startswith('http') else ''
+            summ, deg = quality_summary(a.get('title', ''), a.get('source', ''), label, url, desc, lang=lang)
+            return {'label': label, 'title': a.get('title', ''), 'url': url,
+                    'source': a.get('source', ''), 'image': a.get('image', ''),
+                    'time': a.get('time', ''), 'summary': summ, 'degraded': deg}
+        return p                                        # keep the previous good story rather than drop the section
+
+    # Build every section in parallel — a cold brief (esp. a non-English one that
+    # sources + summarizes 13 categories) used to take well over a minute when run
+    # one category at a time; concurrently it lands in roughly the time of the
+    # slowest single section. Publish in canonical order as each completes so
+    # /brief still fills in live.
+    results, order = {}, [c['label'] for c in BRIEF_CATS]
+    with ThreadPoolExecutor(max_workers=min(8, len(BRIEF_CATS))) as ex:
+        futs = {ex.submit(build_section, cat): cat['label'] for cat in BRIEF_CATS}
+        for fu in as_completed(futs):
+            label = futs[fu]
+            try: sec = fu.result()
+            except Exception: sec = prev.get(label)
+            if sec:
+                results[label] = sec
+                store['sections'] = [results[l] for l in order if l in results]
     store['t'] = time.time()               # always stamp so we don't loop full rebuilds
 
 # --- Daily Morning Brief email (Kit broadcast, teaser format) ------------------
@@ -4017,6 +4046,7 @@ class Handler(SimpleHTTPRequestHandler):
             source = (qs.get('source') or [''])[0].strip()
             day = (qs.get('day') or [''])[0].strip()       # client's LOCAL date/month for the meter
             month = (qs.get('month') or [''])[0].strip()
+            lang = norm_lang((qs.get('lang') or ['en'])[0])  # summarize + relate in the reader's language
             if not (url or title):
                 self._send_json({'error': 'missing'}, 400); return
             # ONE server-authoritative gate for every article open:
@@ -4039,7 +4069,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not article_rate_check(self._client_ip()):
                 self._send_json({'error': 'rate'}, 429); return
             try:
-                payload = build_article(url, title, source)
+                payload = build_article(url, title, source, lang=lang)
                 payload['meter'] = info
                 self._send_json(payload)
             except Exception as e:
