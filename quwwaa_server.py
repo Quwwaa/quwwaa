@@ -100,6 +100,8 @@ def _ga_configured():
     return bool(_ga_sa_raw()[0])
 JARVIS_CALENDAR_ID = os.environ.get('JARVIS_CALENDAR_ID', '')                       # Google Calendar shared with the SA — agenda + gated writes (Phase 2)
 ANTHROPIC_ADMIN_KEY = os.environ.get('ANTHROPIC_ADMIN_KEY', '')                     # sk-ant-admin… — read-only cost/usage reports (Cost Watch)
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')                                   # read-only fine-grained PAT — repo pulse on the cockpit GitHub node
+GITHUB_OWNER = os.environ.get('GITHUB_OWNER', 'Quwwaa')                             # org/user the PAT is scoped to
 OPENAI_ADMIN_KEY = os.environ.get('OPENAI_ADMIN_KEY', '')                           # OpenAI admin key — read-only org costs (Cost Watch)
 # Registration-wall meter for FREE registered members (server-enforced per profile).
 FREE_PER_DAY = int(os.environ.get('FREE_PER_DAY', '1'))
@@ -701,6 +703,15 @@ CAT_QUERIES = {
         'Culture & Entertainment': 'развлечения знаменитости', 'Science': 'наука',
         'Nature & Disasters': 'стихийное бедствие', 'Crime & Justice': 'преступность правосудие',
         'Worth Knowing': 'последние новости',
+    },
+    'ar': {
+        'US Politics': 'السياسة الأمريكية', 'World': 'أخبار العالم',
+        'Middle East': 'الشرق الأوسط', 'Sports': 'رياضة',
+        'Finance': 'اقتصاد ومال', 'Markets': 'البورصة والأسواق',
+        'Tech': 'تكنولوجيا', 'AI': 'الذكاء الاصطناعي',
+        'Culture & Entertainment': 'ترفيه ومشاهير', 'Science': 'علوم',
+        'Nature & Disasters': 'كوارث طبيعية', 'Crime & Justice': 'جريمة وعدالة',
+        'Worth Knowing': 'آخر الأخبار',
     },
 }
 
@@ -2674,6 +2685,82 @@ def jarvis_newsletter():
 JARVIS_CACHE = {'t': 0, 'data': None}
 JARVIS_TTL = 60
 
+def _gh_get(path, params=None):
+    url = 'https://api.github.com' + path
+    if params:
+        url += '?' + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={
+        'Authorization': 'Bearer ' + GITHUB_TOKEN,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'jarvis-cockpit'})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read()
+    return json.loads(raw) if raw else []
+
+_GH_CACHE = {'t': 0, 'data': None}
+def jarvis_github():
+    """Read-only repo pulse across the owner's repos: recent commit messages,
+    7-day momentum, open-PR count. Never writes. Cached ~5 min."""
+    out = {'available': False, 'latest_commit': None, 'commits_7d': None,
+           'open_prs': None, 'recent': [], 'repos_tracked': None, 'note': ''}
+    if not GITHUB_TOKEN:
+        out['note'] = 'GitHub token not configured'
+        return out
+    if _GH_CACHE['data'] and time.time() - _GH_CACHE['t'] < 300:
+        return _GH_CACHE['data']
+    try:
+        owner = GITHUB_OWNER
+        # repos — try org first, fall back to the token's own account
+        repos = []
+        for path in ('/orgs/%s/repos' % owner, '/users/%s/repos' % owner, '/user/repos'):
+            try:
+                repos = _gh_get(path, {'per_page': 100, 'sort': 'pushed', 'direction': 'desc'})
+                if isinstance(repos, list) and repos:
+                    break
+            except Exception:
+                continue
+        repos = [r for r in (repos or []) if isinstance(r, dict)][:10]   # cap cost
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        recent, commits_7d = [], 0
+        for rp in repos:
+            full = rp.get('full_name'); branch = rp.get('default_branch') or 'main'
+            if not full:
+                continue
+            try:
+                commits = _gh_get('/repos/%s/commits' % full, {'sha': branch, 'per_page': 5})
+            except Exception:
+                continue
+            for c in (commits or []):
+                cm = (c.get('commit') or {})
+                msg = ((cm.get('message') or '').splitlines() or [''])[0].strip()
+                when = ((cm.get('author') or {}).get('date')) or ''
+                if not msg:
+                    continue
+                recent.append({'repo': rp.get('name'), 'message': msg, 'when': when,
+                               'author': ((cm.get('author') or {}).get('name')) or ''})
+                try:
+                    if _parse_ts(when) and _parse_ts(when) >= cutoff:
+                        commits_7d += 1
+                except Exception:
+                    pass
+        recent.sort(key=lambda x: x.get('when') or '', reverse=True)
+        latest = recent[0] if recent else None
+        # org-wide open PR count in one search call (best-effort)
+        open_prs = None
+        try:
+            res = _gh_get('/search/issues', {'q': 'is:pr is:open org:%s' % owner, 'per_page': 1})
+            if isinstance(res, dict) and 'total_count' in res:
+                open_prs = res['total_count']
+        except Exception:
+            pass
+        out.update(available=True, latest_commit=latest, commits_7d=commits_7d,
+                   open_prs=open_prs, recent=recent[:5], repos_tracked=len(repos), note='')
+        _GH_CACHE['data'] = out; _GH_CACHE['t'] = time.time()
+    except Exception as e:
+        out['note'] = 'GitHub error: ' + _err_detail(e)
+    return out
+
 def jarvis_stats():
     if JARVIS_CACHE['data'] and time.time() - JARVIS_CACHE['t'] < JARVIS_TTL:
         return JARVIS_CACHE['data']
@@ -2681,11 +2768,13 @@ def jarvis_stats():
     def _safe(fn):
         try: return fn()
         except Exception: return {}
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=5) as ex:
         fm = ex.submit(_safe, jarvis_members); fr = ex.submit(_safe, jarvis_revenue)
         ft = ex.submit(_safe, jarvis_traffic); fn = ex.submit(_safe, jarvis_newsletter)
+        fg = ex.submit(_safe, jarvis_github)
         data = {'members': fm.result(), 'revenue': fr.result(),
                 'traffic': ft.result(), 'newsletter': fn.result(),
+                'github': fg.result(),
                 'generated_at': datetime.now(timezone.utc).isoformat()}
     JARVIS_CACHE['data'] = data; JARVIS_CACHE['t'] = time.time()
     return data

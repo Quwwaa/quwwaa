@@ -143,6 +143,10 @@
   .rcore .c{font-size:8.5px;letter-spacing:.2em;color:var(--green2);margin-top:2px}
   .rcore .a{font-size:7px;letter-spacing:.24em;color:var(--gdim);margin-top:3px;display:inline-flex;align-items:center;gap:4px}
 
+  .ghrecent{margin:5px 0 2px;display:flex;flex-direction:column}
+  .ghrow{display:flex;flex-direction:column;gap:1px;padding:4px 2px;border-top:1px solid rgba(57,255,122,.08)}
+  .ghmsg{font-size:10px;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ghmeta{font-size:8px;color:var(--dim);letter-spacing:.04em;text-transform:uppercase}
   .social .scard{display:flex;align-items:center;gap:9px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:7px 9px;margin-bottom:8px}
   .social .scard .nx{flex:1;min-width:0} .social .nn{font-size:12px;color:var(--white);font-weight:700}
   .social .nr{font-size:8.5px;color:var(--dim);margin-top:1px}
@@ -296,9 +300,11 @@
 
   function render(){
     var r=(stats&&stats.revenue)||{}, m=(stats&&stats.members)||{}, t=(stats&&stats.traffic)||{}, n=(stats&&stats.newsletter)||{};
+    var gh=(stats&&stats.github)||{};
     var ca=(costs&&costs.anthropic)||{}, co=(costs&&costs.openai)||{};
-    var okStripe=r.mrr!=null, okGA=!!t.available, okOpenAI=!!co.available, okAnthropic=!!ca.available, okCal=!!(agenda&&agenda.available);
+    var okStripe=r.mrr!=null, okGA=!!t.available, okOpenAI=!!co.available, okAnthropic=!!ca.available, okCal=!!(agenda&&agenda.available), okGithub=!!gh.available;
     var bul=[]; if(n.subscribers!=null) bul.push('Brief reaching '+num(n.subscribers)+' inboxes');
+    if(gh.latest_commit&&gh.latest_commit.message) bul.push('Shipped: '+gh.latest_commit.message);
     if(ca.credits!=null) bul.push('Anthropic credits '+ca.credits+(ca.mtd?' · '+cm(ca.mtd)+' MTD':''));
     if(co.voice!=null) bul.push('OpenAI voice spend '+cm(co.voice)+' MTD');
     if(m.total!=null) bul.push(num(m.total)+' members · '+num(m.new_today)+' new today');
@@ -345,7 +351,9 @@
     H+='<div class="panel center">'+spokesSVG()
       +'<div class="core-row">'
       +'<div class="cluster left"><p class="lbl" style="margin:0 0 2px">Business operations<span class="ln"></span></p>'
-        +nodeCard('stripe','Stripe','Payments · live',okStripe)+nodeCard('render','Render','Cloud hosting',true)+nodeCard('github','GitHub','Source control',false)
+        +nodeCard('stripe','Stripe','Payments · live',okStripe)+nodeCard('render','Render','Cloud hosting',true)
+        +nodeCard('github','GitHub',okGithub?((gh.commits_7d!=null?gh.commits_7d+' commits this week':'Source control')+(gh.open_prs?' · '+gh.open_prs+' open PR'+(gh.open_prs===1?'':'s'):'')):'Source control',okGithub)
+        +(okGithub&&gh.recent&&gh.recent.length?'<div class="ghrecent">'+gh.recent.slice(0,5).map(function(c){return '<div class="ghrow"><span class="ghmsg">'+esc(c.message)+'</span><span class="ghmeta">'+esc(c.repo||'')+(c.when?' · '+relTimeShort(c.when):'')+'</span></div>';}).join('')+'</div>':'')
         +'<p class="lbl" style="margin:6px 0 2px">Analytics<span class="ln"></span></p>'+nodeCard('ga','Google Analytics','Site traffic',okGA)+'</div>'
       +'<div class="reactor-col"><div class="reactor">'+reactorSVG()+'<div class="rcore"><div><b>JARVIS</b><div class="c">CORE</div><div class="a"><span class="dot ok" style="width:5px;height:5px"></span>ACTIVE</div></div></div></div><div id="jvCaption"></div></div>'
       +'<div class="cluster right"><p class="lbl" style="margin:0 0 2px">AI infrastructure<span class="ln"></span></p>'
@@ -422,6 +430,7 @@
 
   function relDay(iso){var d=new Date(iso),x=new Date(),tm=new Date(x.getTime()+864e5),s=function(a,b){return a.toDateString()===b.toDateString();};
     return s(d,x)?'Today':s(d,tm)?'Tomorrow':d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'});}
+  function relTimeShort(iso){var d=new Date(iso),s=(Date.now()-d.getTime())/1000; if(isNaN(s))return ''; if(s<60)return 'now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; if(s<604800)return Math.floor(s/86400)+'d ago'; return Math.floor(s/604800)+'w ago';}
   function agendaHTML(){
     if(!agenda||!agenda.available) return '<div class="ph">'+esc((agenda&&agenda.note)||'Calendar connects after the GA Secret-File fix.')+'</div>';
     if(!(agenda.events||[]).length) return '<div class="ph">Nothing scheduled in the next 7 days.</div>';
