@@ -489,6 +489,23 @@ window.QI18N = (function(){
       'a2hs.sub_native': 'One tap — no app store needed', 'a2hs.sub_keep': 'Keep it one tap away', 'a2hs.add': 'Add',
       'a2hs.hint': 'For the full app, open <b>quwwaa.com in Safari</b> → Share → Add to Home Screen.',
       'hdr.signin': 'Sign in', 'hdr.trial': 'Free trial', 'hdr.trial_title': 'Start your 7-day free trial',
+      'onb.back': 'Back', 'onb.cancel': 'Cancel', 'onb.next': 'Next', 'onb.create': 'Create account →', 'onb.creating': 'Creating…',
+      'onb.s1_h': 'QUWWAA becomes your personal news anchor.',
+      'onb.s1_p': '7 days free. I’ll greet you by name and tune the board, the morning brief, and the butler to exactly the world you care about — your topics, your city.',
+      'onb.s2_h': 'Select your news', 'onb.s2_p': 'Pick a whole category, or tap one to narrow it down. Choose as many as you like.',
+      'onb.s3_h': 'Your location', 'onb.s3_p': 'So I can bring you what’s happening close to home.',
+      'onb.city': 'City', 'onb.state': 'State / Province', 'onb.country': 'Country',
+      'onb.s4_h': 'How should I address you?', 'onb.s4_p': 'Your call, of course.',
+      'onb.addr_sir': '“Good morning, <b>sir</b>.”', 'onb.addr_madam': '“Good morning, <b>madam</b>.”',
+      'onb.addr_name': 'By my name', 'onb.call_label': 'What should I call you?',
+      'onb.s5_h': 'Create your account', 'onb.s5_p': 'Last step — then your 7-day trial begins.',
+      'onb.fn': 'First name', 'onb.ln': 'Last name',
+      'onb.disc': '7 days free, then $9.95/month. Auto-renews. Cancel anytime.',
+      'onb.legal': 'By continuing you agree to our <a href="/terms" target="_blank">Terms</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.',
+      'onb.err_fn': 'Please enter your first name.', 'onb.err_email': 'Please enter a valid email.',
+      'onb.err_pass': 'Password must be at least 6 characters.', 'onb.err_unavail': 'Membership is not available right now.',
+      'onb.email_exists': 'You already have an account — sign in to continue.',
+      'onb.checkout_soon': 'Account created. Checkout is being set up — you can subscribe shortly.', 'onb.done': 'Done',
     },
     es: {
       'tagline': 'tu mayordomo de noticias con IA — un resumen personalizado y un asistente para las historias que te importan',
@@ -533,6 +550,23 @@ window.QI18N = (function(){
       'a2hs.sub_native': 'Un toque — sin tienda de apps', 'a2hs.sub_keep': 'Tenlo a un solo toque', 'a2hs.add': 'Añadir',
       'a2hs.hint': 'Para la app completa, abre <b>quwwaa.com en Safari</b> → Compartir → Añadir a pantalla de inicio.',
       'hdr.signin': 'Iniciar sesión', 'hdr.trial': 'Prueba gratis', 'hdr.trial_title': 'Comienza tu prueba gratis de 7 días',
+      'onb.back': 'Atrás', 'onb.cancel': 'Cancelar', 'onb.next': 'Siguiente', 'onb.create': 'Crear cuenta →', 'onb.creating': 'Creando…',
+      'onb.s1_h': 'QUWWAA se convierte en tu presentador de noticias personal.',
+      'onb.s1_p': '7 días gratis. Te saludaré por tu nombre y ajustaré el tablero, el resumen matutino y el mayordomo exactamente al mundo que te importa — tus temas, tu ciudad.',
+      'onb.s2_h': 'Elige tus noticias', 'onb.s2_p': 'Elige una categoría completa, o toca una para acotarla. Elige las que quieras.',
+      'onb.s3_h': 'Tu ubicación', 'onb.s3_p': 'Para traerte lo que ocurre cerca de ti.',
+      'onb.city': 'Ciudad', 'onb.state': 'Estado / Provincia', 'onb.country': 'País',
+      'onb.s4_h': '¿Cómo debo dirigirme a ti?', 'onb.s4_p': 'Tú decides, por supuesto.',
+      'onb.addr_sir': '“Buenos días, <b>señor</b>.”', 'onb.addr_madam': '“Buenos días, <b>señora</b>.”',
+      'onb.addr_name': 'Por mi nombre', 'onb.call_label': '¿Cómo debo llamarte?',
+      'onb.s5_h': 'Crea tu cuenta', 'onb.s5_p': 'Último paso — y comienza tu prueba de 7 días.',
+      'onb.fn': 'Nombre', 'onb.ln': 'Apellido',
+      'onb.disc': '7 días gratis, luego $9.95/mes. Se renueva automáticamente. Cancela cuando quieras.',
+      'onb.legal': 'Al continuar aceptas nuestros <a href="/terms" target="_blank">Términos</a> y la <a href="/privacy" target="_blank">Política de Privacidad</a>.',
+      'onb.err_fn': 'Por favor escribe tu nombre.', 'onb.err_email': 'Por favor escribe un correo válido.',
+      'onb.err_pass': 'La contraseña debe tener al menos 6 caracteres.', 'onb.err_unavail': 'La membresía no está disponible ahora mismo.',
+      'onb.email_exists': 'Ya tienes una cuenta — inicia sesión para continuar.',
+      'onb.checkout_soon': 'Cuenta creada. El pago se está configurando — podrás suscribirte en breve.', 'onb.done': 'Listo',
     },
   };
   var NATIVE = {en:'English', es:'Español', fr:'Français', ar:'العربية', ru:'Русский', ms:'Bahasa Melayu', id:'Bahasa Indonesia'};
@@ -2476,6 +2510,7 @@ window.QI18N = (function(){
    ============================================================================ */
 (function(){
   const QP = window.QP = window.QP || {};
+  const T = (k)=> window.QI18N.t(k);
   const $=id=>document.getElementById(id);
   const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -2558,36 +2593,36 @@ window.QI18N = (function(){
     css(); shell(); dots(); msg('');
     const body=$('qpOnbBody'); body.scrollTop=0;
     const back=$('qpBack'), next=$('qpNext');
-    back.textContent = step>1?'Back':'Cancel'; next.disabled=false; next.textContent = step===STEPS?'Create account →':'Next';
+    back.textContent = step>1?T('onb.back'):T('onb.cancel'); next.disabled=false; next.textContent = step===STEPS?T('onb.create'):T('onb.next');
     if(step===1){
-      body.innerHTML='<h1>QUWWAA becomes your personal news anchor.</h1>'
-        +'<div class="sub">7 days free. I’ll greet you by name and tune the board, the morning brief, and the butler to exactly the world you care about — your topics, your city.</div>';
+      body.innerHTML='<h1>'+T('onb.s1_h')+'</h1>'
+        +'<div class="sub">'+T('onb.s1_p')+'</div>';
     } else if(step===2){
-      body.innerHTML='<h1>Select your news</h1><div class="sub">Pick a whole category, or tap one to narrow it down. Choose as many as you like.</div><div id="qpChips"></div>';
+      body.innerHTML='<h1>'+T('onb.s2_h')+'</h1><div class="sub">'+T('onb.s2_p')+'</div><div id="qpChips"></div>';
       QP.renderTopicPicker($('qpChips'), S.interests);
     } else if(step===3){
-      body.innerHTML='<h1>Your location</h1><div class="sub">So I can bring you what’s happening close to home.</div>'
-        +'<label>City</label><input id="qpCity" type="text" autocomplete="address-level2" value="'+esc(S.city)+'">'
-        +'<label>State / Province</label><input id="qpState" type="text" autocomplete="address-level1" value="'+esc(S.state)+'">'
-        +'<label>Country</label><input id="qpCountry" type="text" autocomplete="country-name" value="'+esc(S.country)+'">';
+      body.innerHTML='<h1>'+T('onb.s3_h')+'</h1><div class="sub">'+T('onb.s3_p')+'</div>'
+        +'<label>'+T('onb.city')+'</label><input id="qpCity" type="text" autocomplete="address-level2" value="'+esc(S.city)+'">'
+        +'<label>'+T('onb.state')+'</label><input id="qpState" type="text" autocomplete="address-level1" value="'+esc(S.state)+'">'
+        +'<label>'+T('onb.country')+'</label><input id="qpCountry" type="text" autocomplete="country-name" value="'+esc(S.country)+'">';
     } else if(step===4){
-      body.innerHTML='<h1>How should I address you?</h1><div class="sub">Your call, of course.</div>'
-        +'<button class="qpOpt" data-as="sir">“Good morning, <b>sir</b>.”</button>'
-        +'<button class="qpOpt" data-as="madam">“Good morning, <b>madam</b>.”</button>'
-        +'<button class="qpOpt" data-as="name">By my name</button>'
-        +'<div id="qpNameWrap" style="display:none"><label>What should I call you?</label><input id="qpDName" type="text" value="'+esc(S.display_name)+'"></div>';
+      body.innerHTML='<h1>'+T('onb.s4_h')+'</h1><div class="sub">'+T('onb.s4_p')+'</div>'
+        +'<button class="qpOpt" data-as="sir">'+T('onb.addr_sir')+'</button>'
+        +'<button class="qpOpt" data-as="madam">'+T('onb.addr_madam')+'</button>'
+        +'<button class="qpOpt" data-as="name">'+T('onb.addr_name')+'</button>'
+        +'<div id="qpNameWrap" style="display:none"><label>'+T('onb.call_label')+'</label><input id="qpDName" type="text" value="'+esc(S.display_name)+'"></div>';
       const opts=body.querySelectorAll('.qpOpt');
       const sync=()=>{ opts.forEach(o=>o.classList.toggle('sel', o.getAttribute('data-as')===S.address_style)); $('qpNameWrap').style.display = S.address_style==='name'?'block':'none'; };
       opts.forEach(o=>{ o.onclick=()=>{ S.address_style=o.getAttribute('data-as'); sync(); if(S.address_style==='name') setTimeout(()=>$('qpDName').focus(),50); }; });
       sync();
     } else if(step===5){
-      body.innerHTML='<h1>Create your account</h1><div class="sub">Last step — then your 7-day trial begins.</div>'
-        +'<label>First name</label><input id="qpFN" type="text" autocomplete="given-name" value="'+esc(S.first_name)+'">'
-        +'<label>Last name</label><input id="qpLN" type="text" autocomplete="family-name" value="'+esc(S.last_name)+'">'
-        +'<label>Email</label><input id="qpEM" type="email" autocomplete="email" value="'+esc(S.email)+'">'
-        +'<label>Password</label><input id="qpPW" type="password" autocomplete="new-password">'
-        +'<div class="disc">7 days free, then $9.95/month. Auto-renews. Cancel anytime.</div>'
-        +'<div class="legal">By continuing you agree to our <a href="/terms" target="_blank">Terms</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.</div>';
+      body.innerHTML='<h1>'+T('onb.s5_h')+'</h1><div class="sub">'+T('onb.s5_p')+'</div>'
+        +'<label>'+T('onb.fn')+'</label><input id="qpFN" type="text" autocomplete="given-name" value="'+esc(S.first_name)+'">'
+        +'<label>'+T('onb.ln')+'</label><input id="qpLN" type="text" autocomplete="family-name" value="'+esc(S.last_name)+'">'
+        +'<label>'+T('auth.email')+'</label><input id="qpEM" type="email" autocomplete="email" value="'+esc(S.email)+'">'
+        +'<label>'+T('auth.password')+'</label><input id="qpPW" type="password" autocomplete="new-password">'
+        +'<div class="disc">'+T('onb.disc')+'</div>'
+        +'<div class="legal">'+T('onb.legal')+'</div>';
     }
   }
 
@@ -2601,11 +2636,11 @@ window.QI18N = (function(){
     grab();
     if(step<STEPS){ step++; render(); return; }
     // Step 5 — validate, create account, save profile, then checkout.
-    if(!S.first_name){ msg('Please enter your first name.'); return; }
-    if(!/.+@.+\..+/.test(S.email)){ msg('Please enter a valid email.'); return; }
-    if((S.password||'').length<6){ msg('Password must be at least 6 characters.'); return; }
-    if(!QP.sb){ msg('Membership is not available right now.'); return; }
-    const btn=$('qpNext'); btn.disabled=true; btn.textContent='Creating…'; msg('');
+    if(!S.first_name){ msg(T('onb.err_fn')); return; }
+    if(!/.+@.+\..+/.test(S.email)){ msg(T('onb.err_email')); return; }
+    if((S.password||'').length<6){ msg(T('onb.err_pass')); return; }
+    if(!QP.sb){ msg(T('onb.err_unavail')); return; }
+    const btn=$('qpNext'); btn.disabled=true; btn.textContent=T('onb.creating'); msg('');
     const display = S.address_style==='name' ? (S.display_name||S.first_name) : S.first_name;
     const profileFields = { first_name:S.first_name, last_name:S.last_name, address_style:S.address_style,
       display_name:display, interests:S.interests, city:S.city, state:S.state, country:S.country };
@@ -2618,10 +2653,10 @@ window.QI18N = (function(){
           try{ localStorage.setItem('qp_after_signin_checkout', '1'); }catch(e){}
           $('qpOnb').classList.remove('open');
           try{ QP.openAuth && QP.openAuth(); }catch(e){}
-          const am=document.getElementById('qpAuthMsg'); if(am) am.textContent='You already have an account — sign in to continue.';
+          const am=document.getElementById('qpAuthMsg'); if(am) am.textContent=T('onb.email_exists');
           return;
         }
-        msg(error.message); btn.disabled=false; btn.textContent='Create account →'; return;
+        msg(error.message); btn.disabled=false; btn.textContent=T('onb.create'); return;
       }
       let user = data.user, session = data.session;
       // No session (email-confirmation flows): try to sign in so member state works
@@ -2640,8 +2675,8 @@ window.QI18N = (function(){
       // Hand off to Stripe Checkout (Phase C). Pass the profile so the server persists
       // it via the service role even if the client never got a session.
       if(QP.startCheckout){ await QP.startCheckout({ email:S.email, userId:user?user.id:null, profile:profileFields }); }
-      else { msg('Account created. Checkout is being set up — you can subscribe shortly.'); btn.disabled=false; btn.textContent='Done'; }
-    }catch(err){ msg('Something went wrong. Please try again.'); btn.disabled=false; btn.textContent='Create account →'; }
+      else { msg(T('onb.checkout_soon')); btn.disabled=false; btn.textContent=T('onb.done'); }
+    }catch(err){ msg(T('common.err')); btn.disabled=false; btn.textContent=T('onb.create'); }
   }
 
   QP.openOnboarding=function(){
@@ -2688,7 +2723,7 @@ window.QI18N = (function(){
     const email = opts.email || (QP.user && QP.user.email) || '';
     const userId = opts.userId || (QP.user && QP.user.id) || '';
     const fail = (t)=>{ const m=document.getElementById('qpOnbMsg'); if(m) m.textContent=t;
-      const b=document.getElementById('qpNext'); if(b){ b.disabled=false; b.textContent='Create account →'; } };
+      const b=document.getElementById('qpNext'); if(b){ b.disabled=false; b.textContent=T('onb.create'); } };
     try{
       try{ if(window.QUWWAA_track) window.QUWWAA_track('trial_started', {from:'onboarding'}); }catch(e){}
       const r = await fetch('/create-checkout-session', {method:'POST', headers:{'content-type':'application/json'},
