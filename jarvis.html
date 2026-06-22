@@ -970,13 +970,35 @@
            +'<button id="recoveryBtn" class="rxbtn blue">'+ringSVG('#5aa9ff','rxc')+'<span class="rxcore"><b>Recovery<br>Codes</b></span></button>'
            +'</div>');
     if(mfaNeedsEnroll){ var eb=$('#enrollMfaBtn'); if(eb) eb.onclick=function(){ gateMfaEnroll(); }; return; }
-    var rb=$('#recoveryBtn'); if(rb) rb.onclick=async function(){ var ok=await jvStepUp(); if(ok) showBackupCodes(); };
+    var rb=$('#recoveryBtn'); if(rb) rb.onclick=async function(){
+      var ok=await jvConfirm({title:'Regenerate recovery codes?',body:'This replaces your existing recovery codes with a fresh set. Old codes stop working immediately.',confirm:'Generate new codes'});
+      if(ok) showBackupCodes();
+    };
     $('#killSwitchBtn').onclick=async function(){
-      var ok=await jvStepUp(); if(!ok) return;
       var newState=!on;
+      var ok=await jvConfirm(newState
+        ? {title:'Re-enable actions?',body:'This lifts the kill switch and lets Jarvis run actions again.',confirm:'Restore actions'}
+        : {title:'NUKE IT — disable all actions?',body:'The kill switch stops Jarvis from running ANY action (send, post, deploy, spend). Read-only dashboards keep working. You can restore it here.',confirm:'NUKE IT',danger:true});
+      if(!ok) return;
       fetch('/jarvis/security/kill-switch',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({enabled:newState})})
         .then(function(r){ return r.json(); }).then(function(){ secRefreshPanels(); }).catch(function(){});
     };
+  }
+
+  // Simple confirm sheet (Confirm/Cancel) — replaces step-up for self-actions.
+  function jvConfirm(o){
+    o=o||{};
+    return new Promise(function(resolve){
+      var sheet=document.createElement('div'); sheet.className='sheet';
+      sheet.innerHTML='<div class="sheetcard"><h3>'+esc(o.title||'Are you sure?')+'</h3>'
+        +'<div class="gn">'+esc(o.body||'')+'</div>'
+        +'<button class="confirm" id="cfGo"'+(o.danger?' style="background:var(--red);color:#fff"':'')+'>'+esc(o.confirm||'Confirm')+'</button>'
+        +'<button class="cancel" id="cfNo">Cancel</button></div>';
+      document.body.appendChild(sheet); requestAnimationFrame(function(){ sheet.classList.add('open'); });
+      var close=function(ok){ sheet.classList.remove('open'); setTimeout(function(){ try{sheet.remove();}catch(e){} },220); resolve(ok); };
+      $('#cfGo',sheet).onclick=function(){ close(true); };
+      $('#cfNo',sheet).onclick=function(){ close(false); };
+    });
   }
 
   function _renderPendingPanel(){
