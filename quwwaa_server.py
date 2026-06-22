@@ -1593,7 +1593,9 @@ JARVIS_PERSONA = ("You are JARVIS — Mike's personal AI chief of staff and comm
     "Be concise and direct — 2 to 3 sentences unless depth is clearly needed. Never use markdown, lists, or emoji. "
     "You have access to live business dashboard data provided in context and can speak to QUWWAA stats, API spend, "
     "calendar events, and system health. Only state the time of day using the CURRENT LOCAL TIME provided in context; "
-    "if none is provided, greet neutrally.")
+    "if none is provided, greet neutrally. "
+    "Note on the brand name: QUWWAA is pronounced 'koo-wah'. Speech-to-text often mishears it as kua, kwa, qua, "
+    "quwa, koowa, or similar — whenever the user clearly means the product/website by one of those, treat it as QUWWAA.")
 
 def _anthropic_body(messages, extra_system, stream=False):
     return json.dumps({
@@ -1662,8 +1664,11 @@ def _multipart_audio(file_bytes, filename, content_type, fields):
     return boundary, b''.join(parts)
 
 def whisper_transcribe(file_bytes, filename, content_type):
+    # Bias the model toward the brand name (pronounced "koo-wah") so it stops
+    # transcribing it as kua/kwa/qua.
     boundary, body = _multipart_audio(file_bytes, filename, content_type,
-                                      {'model': STT_MODEL, 'response_format': 'json'})
+                                      {'model': STT_MODEL, 'response_format': 'json',
+                                       'prompt': 'QUWWAA (pronounced koo-wah), QUWWAA.com, JARVIS.'})
     req = urllib.request.Request('https://api.openai.com/v1/audio/transcriptions', data=body, headers={
         'Authorization': 'Bearer ' + OPENAI_API_KEY,
         'Content-Type': 'multipart/form-data; boundary=' + boundary})

@@ -748,8 +748,16 @@
 
   var JARVIS_PERSONA='You are JARVIS — Mike\'s personal AI chief of staff and command center, running on the JARVIS OS HUD at hq.quwwaa.com. You are not QUWWAA. QUWWAA is a separate product: a public AI news butler for subscribers. You monitor QUWWAA\'s health and business metrics as one of many systems you oversee, but you are a distinct intelligence with your own identity. You are named after and modeled on the JARVIS from Iron Man — an always-on, hyper-capable, quietly brilliant AI. Tone: calm authority, dry wit, British precision. Address Mike as "sir". Be concise and direct — 2 to 3 sentences unless depth is needed. Never use markdown, lists, or emoji. You have access to live business data provided in context and can speak to QUWWAA stats, API spend, calendar, and system health.';
 
+  // Speech-to-text hears the brand "QUWWAA" as kua/kwa/qua/etc. Rewrite those
+  // phonetic mishears to QUWWAA before the model ever sees the transcript.
+  function jvNormalizeBrand(t){
+    if(!t) return t;
+    return t.replace(/\b(qu+w*aa?h?|kw+aa?h?|ku+w*aa?h?|koo?w?aa?h?|cu+w*aa?h?|qwaa?h?|qua+h?|kua+h?|cua+h?)\b/gi, 'QUWWAA');
+  }
+
   async function jvHandleText(text){
     if(jvBusy) return;
+    text=jvNormalizeBrand(text);
     jvBusy=true; jvSetState('thinking');
     jvMsgs.push({role:'user', content:text});
     jvHideLens();
