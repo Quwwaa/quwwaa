@@ -183,6 +183,21 @@
   .sheetcard input:focus{border-color:var(--line2)}
   .sfrow{display:flex;gap:10px}.sfrow>div{flex:1}
   .sfmsg{font-size:12px;color:var(--amber);min-height:15px;margin-top:7px}
+  /* On-demand voice lens overlay */
+  #jvLens{position:fixed;inset:0;z-index:95;display:none;align-items:center;justify-content:center;padding:18px;
+    background:rgba(2,5,8,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+  #jvLens.vis{display:flex}
+  #jvLens .lenscard{width:min(560px,94vw);max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);
+    border-radius:16px;padding:18px;box-shadow:0 0 44px rgba(57,255,122,.18)}
+  #jvLens .lenshd{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  #jvLens .lenshd b{font-size:14px;letter-spacing:.1em;color:var(--white);text-transform:uppercase}
+  #jvLens .lensclose{margin-left:auto;background:none;border:1px solid rgba(57,255,122,.3);border-radius:7px;color:var(--dim2);
+    font:inherit;font-size:11px;padding:5px 11px;cursor:pointer}
+  #jvLens .lensclose:hover{border-color:var(--green2);color:var(--white)}
+  #jvLens .lenssum{font-size:11px;color:var(--green2);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+  #jvLens .lensrow{display:flex;flex-direction:column;gap:2px;padding:9px 2px;border-top:1px solid rgba(57,255,122,.1)}
+  #jvLens .lensrow .m{font-size:13px;color:var(--white);line-height:1.35}
+  #jvLens .lensrow .s{font-size:9px;color:var(--dim);letter-spacing:.07em;text-transform:uppercase}
   .confirm{width:100%;margin-top:13px;background:var(--green);color:#05140b;border:none;border-radius:9px;padding:13px;font:inherit;font-weight:700;font-size:14px;cursor:pointer}.confirm:disabled{opacity:.6}
   .cancel{width:100%;margin-top:8px;background:none;border:none;color:var(--dim2);font:inherit;font-size:12px;cursor:pointer}
 
@@ -353,7 +368,6 @@
       +'<div class="cluster left"><p class="lbl" style="margin:0 0 2px">Business operations<span class="ln"></span></p>'
         +nodeCard('stripe','Stripe','Payments · live',okStripe)+nodeCard('render','Render','Cloud hosting',true)
         +nodeCard('github','GitHub',okGithub?((gh.commits_7d!=null?gh.commits_7d+' commits this week':'Source control')+(gh.open_prs?' · '+gh.open_prs+' open PR'+(gh.open_prs===1?'':'s'):'')):'Source control',okGithub)
-        +(okGithub&&gh.recent&&gh.recent.length?'<div class="ghrecent">'+gh.recent.slice(0,5).map(function(c){return '<div class="ghrow"><span class="ghmsg">'+esc(c.message)+'</span><span class="ghmeta">'+esc(c.repo||'')+(c.when?' · '+relTimeShort(c.when):'')+'</span></div>';}).join('')+'</div>':'')
         +'<p class="lbl" style="margin:6px 0 2px">Analytics<span class="ln"></span></p>'+nodeCard('ga','Google Analytics','Site traffic',okGA)+'</div>'
       +'<div class="reactor-col"><div class="reactor">'+reactorSVG()+'<div class="rcore"><div><b>JARVIS</b><div class="c">CORE</div><div class="a"><span class="dot ok" style="width:5px;height:5px"></span>ACTIVE</div></div></div></div><div id="jvCaption"></div></div>'
       +'<div class="cluster right"><p class="lbl" style="margin:0 0 2px">AI infrastructure<span class="ln"></span></p>'
@@ -571,7 +585,28 @@
     jvStatus(states[s]||s);
   }
   function jvShowOverlay(){ var o=document.getElementById('jvOverlay'); if(o) o.classList.add('vis'); }
-  function jvHideOverlay(){ var o=document.getElementById('jvOverlay'); if(o) o.classList.remove('vis'); jvHideCaption(); jvSetState(''); }
+  function jvHideOverlay(){ var o=document.getElementById('jvOverlay'); if(o) o.classList.remove('vis'); jvHideCaption(); jvHideLens(); jvSetState(''); }
+
+  // On-demand overlay lens — Jarvis pops it up when asked, reads it aloud, then
+  // it stays for reading and dismisses on tap / next question / session end.
+  function jvShowLens(iconKey,title,summary,rows){
+    var el=document.getElementById('jvLens'); if(!el) return;
+    el.innerHTML='<div class="lenscard"><div class="lenshd">'+ico(iconKey)+'<b>'+esc(title)+'</b><button class="lensclose" id="lensX">Close</button></div>'
+      +(summary?'<div class="lenssum">'+esc(summary)+'</div>':'')
+      +(rows.length?rows.map(function(r){return '<div class="lensrow"><span class="m">'+esc(r.m)+'</span><span class="s">'+esc(r.s)+'</span></div>';}).join(''):'<div class="ph">Nothing to show.</div>')
+      +'</div>';
+    el.classList.add('vis');
+    var x=document.getElementById('lensX'); if(x) x.onclick=jvHideLens;
+    el.onclick=function(e){ if(e.target===el) jvHideLens(); };
+  }
+  function jvHideLens(){ var el=document.getElementById('jvLens'); if(el){ el.classList.remove('vis'); el.innerHTML=''; } }
+  function jvShowGithubLens(){
+    var g=(stats&&stats.github)||{};
+    if(!g.available){ jvShowLens('github','GitHub','Connect a GitHub token to see the repo pulse.',[]); return; }
+    var sum=(g.commits_7d!=null?g.commits_7d+' commits this week':'')+(g.open_prs!=null?(g.commits_7d!=null?' · ':'')+g.open_prs+' open PR'+(g.open_prs===1?'':'s'):'');
+    var rows=(g.recent||[]).slice(0,5).map(function(c){ return {m:c.message, s:(c.repo||'')+' · '+relTimeShort(c.when)}; });
+    jvShowLens('github','Latest from GitHub',sum,rows);
+  }
 
   // ---- Under-reactor typewriter caption, one line at a time, synced to audio ----
   var jvCap={segs:[],cum:[],total:1,raf:0,el:null};
@@ -651,6 +686,14 @@
       if(ca.credits!=null||ca.mtd!=null) lines.push('Anthropic credits remaining: '+(ca.credits||'unknown')+'. MTD spend: '+(ca.mtd!=null?'$'+ca.mtd:'unknown')+'. Status: '+(ca.status||'unknown')+'.');
       else lines.push('Anthropic cost: not yet set — update anthropic_cost in jarvis_settings.');
     }
+    if(stats&&stats.github){
+      var g=stats.github;
+      if(g.available){
+        var gl='GitHub repo pulse: '+(g.commits_7d!=null?g.commits_7d+' commits in the last 7 days':'recent activity')+(g.open_prs!=null?', '+g.open_prs+' open pull requests':'')+'.';
+        if(g.recent&&g.recent.length){ gl+=' Recent changes: '+g.recent.slice(0,5).map(function(c){ return c.message+' ('+c.repo+', '+relTimeShort(c.when)+')'; }).join('; ')+'.'; }
+        lines.push(gl);
+      } else { lines.push('GitHub: offline — token not configured.'); }
+    }
     if(agenda){
       if(agenda.available&&(agenda.events||[]).length){
         lines.push('Upcoming calendar: '+agenda.events.slice(0,5).map(function(e){
@@ -669,6 +712,8 @@
     if(jvBusy) return;
     jvBusy=true; jvSetState('thinking');
     jvMsgs.push({role:'user', content:text});
+    jvHideLens();
+    if(/\b(git ?hub|repo|repos|repository|commit|commits|pull request|prs?|code ?base|what.*shipped|what.*built)\b/i.test(text||'')){ jvShowGithubLens(); }
     var sysContent=JARVIS_PERSONA+'\n\nLive dashboard context:\n'+jvBuildContext();
     var body={messages:jvMsgs, stream:false};
     try{
@@ -751,6 +796,7 @@
     var ov=document.createElement('div'); ov.id='jvOverlay';
     ov.innerHTML='<span id="jvStatus">Standing by</span><button id="jvClose">End</button>';
     document.body.appendChild(ov);
+    var lens=document.createElement('div'); lens.id='jvLens'; document.body.appendChild(lens);
     // #jvCaption now lives under the reactor (rendered by render()), not on body.
     document.getElementById('jvClose').onclick=function(){ jvStopRecording(); jvStopAudio(); if(jvRec&&jvListening) jvRec.stop(); jvBusy=false; jvSetState(''); jvHideOverlay(); jvMsgs=[]; };
   }());
