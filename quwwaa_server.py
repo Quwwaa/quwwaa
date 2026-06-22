@@ -693,7 +693,9 @@ BRIEF_CATS = [
     {'label': 'Markets',            'q': 'stock market',            'days': 2},
     {'label': 'Tech',               'q': 'technology',              'days': 2},
     {'label': 'AI',                 'q': 'artificial intelligence', 'days': 3},
-    {'label': 'Culture & Entertainment', 'q': 'entertainment celebrity', 'days': 2},
+    # Culture & Entertainment intentionally removed from the board — its celebrity
+    # sourcing pulled immodest imagery that conflicts with our values. Such stories
+    # only ever surface now on an explicit user search (the lens), never curated.
     {'label': 'Science',            'q': 'science discovery',       'days': 3},
     {'label': 'Nature & Disasters', 'q': 'natural disaster',        'days': 3},
     {'label': 'Crime & Justice',    'q': 'crime police court',      'days': 2},
