@@ -62,7 +62,9 @@
   ul.bul li::marker{color:var(--green2)}
 
   /* ===== main ===== */
-  .main{display:grid;grid-template-columns:240px minmax(0,1fr) 204px 150px;gap:12px;align-items:start}
+  .main{display:grid;grid-template-columns:240px minmax(0,1fr);gap:12px;align-items:start}
+  .rightcol{display:flex;flex-direction:column;gap:12px;min-width:0}
+  .maincols{display:grid;grid-template-columns:minmax(0,1fr) 204px 150px;gap:12px;align-items:start}
   .rail{display:flex;flex-direction:column;gap:12px}
   .cmd .ico{width:26px;height:26px}
   .gaugewrap{display:flex;align-items:center;gap:14px;margin:2px 0 6px}
@@ -181,9 +183,9 @@
   .cancel{width:100%;margin-top:8px;background:none;border:none;color:var(--dim2);font:inherit;font-size:12px;cursor:pointer}
 
   /* responsive */
-  @media (max-width:1240px){ .main{grid-template-columns:1fr 1fr} .top{grid-template-columns:1fr} .intel{grid-template-columns:1fr 1fr} .bottom{grid-template-columns:1fr 1fr} }
+  @media (max-width:1240px){ .main{grid-template-columns:1fr} .maincols{grid-template-columns:1fr 1fr} .top{grid-template-columns:1fr} .intel{grid-template-columns:1fr 1fr} .bottom{grid-template-columns:1fr 1fr} }
   @media (max-width:720px){
-    .hud{padding:10px;gap:10px} .main{grid-template-columns:1fr} .intel{grid-template-columns:1fr} .perf{grid-template-columns:repeat(2,1fr)} .bottom{grid-template-columns:1fr}
+    .hud{padding:10px;gap:10px} .main{grid-template-columns:1fr} .maincols{grid-template-columns:1fr} .intel{grid-template-columns:1fr} .perf{grid-template-columns:repeat(2,1fr)} .bottom{grid-template-columns:1fr}
     .center{min-height:0} .core-row{grid-template-columns:1fr} .core-row .reactor-col{order:-1;margin:0 auto 8px} .reactor-col{width:auto} #jvCaption{position:static;transform:none;margin-top:6px;max-width:90vw} .health-corner{width:100%}
     .cluster.left .node::after,.cluster.left .node::before,.cluster.right .node::after,.cluster.right .node::before{display:none}
     .brandtop h1{font-size:28px}
@@ -333,6 +335,9 @@
         +'<div class="row"><span>4 · Optimize ad spend</span><b class="pri-m">MED</b></div>'
         +'<div class="row"><span>5 · Review analytics</span><b class="pri-l">LOW</b></div></div>'
       +'</div>';
+    // right column: the center/social/content row, then the bottom cards rise
+    // into the empty band beside the (taller) left rail.
+    H+='<div class="rightcol"><div class="maincols">';
     // center reactor + connector clusters; system health tucked into the bottom-left
     H+='<div class="panel center">'+spokesSVG()
       +'<div class="core-row">'
@@ -362,9 +367,10 @@
       +pipe.map(function(p){return '<div class="cstep"><div class="cnum">'+p[1]+'</div><div><div class="ck">'+p[0]+'</div><div class="cs">pipeline</div></div></div>';}).join('')
       +'<div class="ph">Connect a content tracker.</div></div>'
       +'<div class="panel"><p class="lbl">Top content<span class="ln"></span></p><div class="ph">Connect platform analytics to rank posts by reach.</div></div></div>';
-    H+='</div>'; // main
+    H+='</div>'; // maincols
 
-    // bottom
+    // bottom cards — inside .rightcol so they rise under the center row, filling
+    // the empty band beside the taller left rail
     H+='<div class="bottom">'
       +'<div class="panel" id="pendingPanel"><p class="lbl">Pending approvals<span class="ln"></span></p><div class="ph">No pending actions.</div></div>'
       +'<div class="panel"><p class="lbl">Task queue<span class="ln"></span></p><div class="ph">Connect Cowork tasks to populate the queue.</div></div>'
@@ -372,6 +378,8 @@
         +'<div><div class="row"><span>Needs reply</span><b>—</b></div><div class="row"><span>Resolved / FYI</span><b>—</b></div><div class="row"><span>Promotions</span><b>—</b></div><div class="row"><span>Gmail connector</span>'+statusTag(false,'infra')+'</div></div></div></div>'
       +'<div class="panel"><p class="lbl">Calendar agenda · 7d<button class="addbtn" id="addEvent">+ New</button></p>'+agendaHTML()+'</div>'
       +'</div>';
+    H+='</div>'; // rightcol
+    H+='</div>'; // main
 
     H+='<div class="legend"><span><span class="dot ok"></span>operational · connected</span><span><span class="dot" style="background:var(--red);box-shadow:0 0 5px rgba(255,90,90,.5)"></span>offline · needs attention</span></div>';
     H+='</div>';
