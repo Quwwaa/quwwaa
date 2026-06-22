@@ -767,7 +767,11 @@
   async function showBackupCodes(){
     app.innerHTML='<div class="hud"><div class="gate"><h1>JARVIS OS</h1><span class="j" style="font-size:11px;letter-spacing:.2em">GENERATING RECOVERY CODES…</span></div></div>';
     var codes=[];
-    try{ var r=await fetch('/jarvis/mfa/backup-codes',{method:'POST',headers:{'Authorization':'Bearer '+token}}); var d=await r.json(); codes=(d&&d.codes)||[]; }catch(e){}
+    try{
+      try{ var rs=await sb.auth.refreshSession(); if(rs&&rs.data&&rs.data.session&&rs.data.session.access_token){ token=rs.data.session.access_token; } }catch(e){}
+      var r=await fetch('/jarvis/mfa/backup-codes',{method:'POST',headers:{'Authorization':'Bearer '+token}});
+      var d=await r.json(); codes=(d&&d.codes)||[];
+    }catch(e){}
     var cont=function(){ sb.auth.mfa.getAuthenticatorAssuranceLevel().then(function(lvl){
         if(((lvl&&lvl.data&&lvl.data.currentLevel)||'aal1')==='aal2'){ refresh(false); } else { gateMfaChallenge(); }
       }).catch(function(){ refresh(false); }); };
@@ -866,6 +870,14 @@
 
   async function jvStepUp(){ // Returns true if step-up satisfied (fresh or just completed)
     if(stepUpFresh()) return true;
+    // If the session is ALREADY AAL2 (the admin passed MFA at login), that IS a
+    // strong auth — accept it without a fragile re-verify (TOTP re-entry was
+    // failing on code timing/reuse and stranding the action). Only AAL1 sessions
+    // fall through to the modal below.
+    try{
+      var lvl=await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+      if(((lvl&&lvl.data&&lvl.data.currentLevel)||'aal1')==='aal2'){ _stepUpAt=Date.now(); return true; }
+    }catch(e){}
     return new Promise(function(resolve){
       var sheet=document.createElement('div'); sheet.className='sheet';
       sheet.innerHTML='<div class="sheetcard"><h3>Step-up required</h3><div class="gn">This action requires a fresh authentication. Enter your TOTP code to continue.</div>'
