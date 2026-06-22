@@ -5,9 +5,10 @@
      - static assets (icons, manifest) -> cache-first (fast, offline-friendly)
      - the page / HTML -> network-first, falling back to cache only when offline
    Bump CACHE on any shell change to retire old caches. */
-const CACHE = 'quwwaa-v63';
+const CACHE = 'quwwaa-v64';
 const SHELL = ['/', '/quwwaa-console.html', '/manifest.json',
-               '/icon-192.png', '/icon-512.png', '/icon-180.png', '/logo-q.png'];
+               '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png',
+               '/favicon.ico', '/icon-48.png', '/logo-q.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

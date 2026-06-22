@@ -3274,6 +3274,18 @@ def jarvis_set_kill_switch(enabled):
         return {'ok': False, 'error': str(e)}
 
 
+def build_sitemap():
+    """Sitemap of the real, crawlable pages with a current lastmod. Home carries a
+    trailing slash to match the canonical URL."""
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    pages = [('/', 'daily', '1.0'), ('/privacy', 'monthly', '0.5'), ('/terms', 'monthly', '0.5')]
+    rows = ''.join(
+        '<url><loc>%s%s</loc><lastmod>%s</lastmod><changefreq>%s</changefreq><priority>%s</priority></url>'
+        % (SITE_URL, ('/' if p == '/' else p), today, freq, prio)
+        for p, freq, prio in pages)
+    return ('<?xml version="1.0" encoding="UTF-8"?>'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + rows + '</urlset>')
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=os.path.dirname(os.path.abspath(__file__)), **kw)
@@ -3289,6 +3301,16 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_text(self, text, content_type='text/plain; charset=utf-8', status=200, max_age=3600):
+        body = text.encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Cache-Control', 'public, max-age=%d' % max_age)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(body)
 
     def _client_ip(self):
         fwd = self.headers.get('X-Forwarded-For', '')
@@ -3974,6 +3996,10 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({'ok': True, 'service': 'quwwaa', 'brain': bool(ANTHROPIC_API_KEY),
                              'stt': bool(OPENAI_API_KEY), 'tts': bool(OPENAI_API_KEY),
                              'premium': PREMIUM_ENABLED})
+        elif self.path == '/robots.txt':
+            self._send_text('User-agent: *\nAllow: /\nSitemap: %s/sitemap.xml\n' % SITE_URL)
+        elif self.path == '/sitemap.xml':
+            self._send_text(build_sitemap(), content_type='application/xml; charset=utf-8')
         elif self.path.startswith('/config'):
             # public config only — the page boots Supabase + Stripe.js from these
             self._send_json({'supabaseUrl': SUPABASE_URL, 'supabaseAnonKey': SUPABASE_ANON_KEY,
