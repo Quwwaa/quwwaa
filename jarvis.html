@@ -978,6 +978,7 @@
     var el=document.getElementById('secPanel'); if(!el||!_secStatus) return;
     var on=_secStatus.actions_enabled;
     el.innerHTML='<p class="lbl">Security<span class="ln"></span></p>'
+      +(mfaNeedsEnroll ? '' : '<div class="row"><span>Recovery codes</span><b id="recoveryBtn" style="color:var(--green2);cursor:pointer">Create</b></div>')
       +'<div class="row"><span>Actions</span><b style="color:'+(on?'var(--green2)':'var(--amber)')+'">'+(on?'Enabled':'KILL SWITCH ON')+'</b></div>'
       +'<div class="row"><span>Pending approvals</span><b>'+(_secStatus.pending_count||0)+'</b></div>'
       +'<div class="row"><span>Session AAL</span><b style="color:'+(mfaNeedsEnroll?'var(--amber)':'var(--green2)')+'">'+(mfaNeedsEnroll?'AAL1 · no MFA':'AAL2 ✓')+'</b></div>'
@@ -988,7 +989,6 @@
            +(on
              ? '<button id="killSwitchBtn" class="pushbtn">'+pushButtonInner('Push the<br>Button')+'</button>'
              : '<button id="killSwitchBtn" class="rxbtn blue">'+ringSVG('#39ff7a','rxk')+'<span class="rxcore"><b>Restore</b></span></button>')
-           +'<button id="recoveryBtn" class="rxbtn blue">'+ringSVG('#5aa9ff','rxc')+'<span class="rxcore"><b>Recovery<br>Codes</b></span></button>'
            +'</div>');
     if(mfaNeedsEnroll){ var eb=$('#enrollMfaBtn'); if(eb) eb.onclick=function(){ gateMfaEnroll(); }; return; }
     var rb=$('#recoveryBtn'); if(rb) rb.onclick=async function(){
