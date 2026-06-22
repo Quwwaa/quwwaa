@@ -1595,7 +1595,10 @@ JARVIS_PERSONA = ("You are JARVIS — Mike's personal AI chief of staff and comm
     "calendar events, and system health. Only state the time of day using the CURRENT LOCAL TIME provided in context; "
     "if none is provided, greet neutrally. "
     "Note on the brand name: QUWWAA is pronounced 'koo-wah'. Speech-to-text often mishears it as kua, kwa, qua, "
-    "quwa, koowa, or similar — whenever the user clearly means the product/website by one of those, treat it as QUWWAA.")
+    "quwa, koowa, or similar — whenever the user clearly means the product/website by one of those, treat it as QUWWAA. "
+    "When the user asks about the calendar/agenda/day, read out TODAY'S EVENTS, and proactively surface any UPCOMING "
+    "PRIORITY ITEMS from context (e.g. 'And don't forget, sir — your 9 AM flight to DC next Monday.'). Mention a "
+    "future item early only if it is flagged priority; otherwise mention items on their own day.")
 
 def _anthropic_body(messages, extra_system, stream=False):
     return json.dumps({
@@ -2805,31 +2808,35 @@ def _cal_api(method, path, body=None, params=None):
 
 def _slim_event(e):
     s = e.get('start', {}) or {}; en = e.get('end', {}) or {}
+    pri = (((e.get('extendedProperties') or {}).get('private') or {}).get('priority') or '')
     return {'id': e.get('id'), 'summary': e.get('summary') or '(no title)',
             'start': s.get('dateTime') or s.get('date'), 'end': en.get('dateTime') or en.get('date'),
             'all_day': bool(s.get('date') and not s.get('dateTime')),
             'location': e.get('location') or '',
+            'priority': pri == 'high',
             'attendees': [a.get('email') for a in e.get('attendees', []) if a.get('email')],
             'html_link': e.get('htmlLink')}
 
-_AGENDA = {'t': 0, 'data': None}
+_AGENDA = {}   # days -> {'t', 'data'}
 def jarvis_agenda(days=7):
+    days = max(1, min(int(days or 7), 62))
     out = {'available': False, 'events': [], 'note': ''}
     if not (_ga_configured() and JARVIS_CALENDAR_ID):
         out['note'] = 'Calendar not configured'
         return out
-    if _AGENDA['data'] and time.time() - _AGENDA['t'] < 30:
-        return _AGENDA['data']
+    cached = _AGENDA.get(days)
+    if cached and time.time() - cached['t'] < 30:
+        return cached['data']
     try:
         now = datetime.now(timezone.utc)
         data = _cal_api('GET', 'calendars/' + urllib.parse.quote(JARVIS_CALENDAR_ID) + '/events',
                         params={'timeMin': now.isoformat(), 'timeMax': (now + timedelta(days=days)).isoformat(),
-                                'singleEvents': 'true', 'orderBy': 'startTime', 'maxResults': 25})
+                                'singleEvents': 'true', 'orderBy': 'startTime', 'maxResults': 100})
         out['events'] = [_slim_event(e) for e in data.get('items', []) if e.get('status') != 'cancelled']
         out['available'] = True
     except Exception as ex:
         out['note'] = 'Calendar error: ' + _err_detail(ex)
-    _AGENDA['data'] = out; _AGENDA['t'] = time.time()
+    _AGENDA[days] = {'data': out, 't': time.time()}
     return out
 
 def jarvis_cal_write(action, p):
@@ -2847,7 +2854,8 @@ def jarvis_cal_write(action, p):
         if p.get('location'):    ev['location'] = p['location']
         if p.get('description'): ev['description'] = p['description']
         if p.get('attendees'):   ev['attendees'] = [{'email': a} for a in p['attendees'] if a]  # consumer-Gmail invite caveat
-        _AGENDA['t'] = 0
+        if p.get('priority'):    ev['extendedProperties'] = {'private': {'priority': 'high'}}
+        _AGENDA.clear()
         return {'ok': True, 'event': _slim_event(_cal_api('POST', 'calendars/' + cal + '/events', body=ev))}, 200
     if action == 'move':
         eid, start, end = p.get('event_id'), p.get('start'), p.get('end')
@@ -2855,7 +2863,9 @@ def jarvis_cal_write(action, p):
             return {'error': 'missing_fields'}, 400
         patch = {'start': {'dateTime': start, 'timeZone': CAL_TZ}, 'end': {'dateTime': end, 'timeZone': CAL_TZ}}
         if p.get('summary'): patch['summary'] = p['summary']
-        _AGENDA['t'] = 0
+        if p.get('priority') is not None:
+            patch['extendedProperties'] = {'private': {'priority': 'high' if p.get('priority') else ''}}
+        _AGENDA.clear()
         return {'ok': True, 'event': _slim_event(
             _cal_api('PATCH', 'calendars/' + cal + '/events/' + urllib.parse.quote(eid), body=patch))}, 200
     return {'error': 'unknown_action'}, 400
@@ -3938,7 +3948,9 @@ class Handler(SimpleHTTPRequestHandler):
             if not jarvis_authed(self):
                 self._send_json({'error': 'unauthorized'}, 401); return
             try:
-                self._send_json(jarvis_agenda())
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                days = int((qs.get('days') or ['7'])[0])
+                self._send_json(jarvis_agenda(days))
             except Exception as e:
                 self._send_json({'error': type(e).__name__}, 500)
         elif self.path.startswith('/jarvis/costs'):

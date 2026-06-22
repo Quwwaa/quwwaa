@@ -198,6 +198,19 @@
   #jvLens .lensrow{display:flex;flex-direction:column;gap:2px;padding:9px 2px;border-top:1px solid rgba(57,255,122,.1)}
   #jvLens .lensrow .m{font-size:13px;color:var(--white);line-height:1.35}
   #jvLens .lensrow .s{font-size:9px;color:var(--dim);letter-spacing:.07em;text-transform:uppercase}
+  /* calendar lens */
+  #jvLens .calhd{text-align:center;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--green2);margin:2px 0 8px}
+  #jvLens .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+  #jvLens .cawd{font-size:8px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);text-align:center;padding:2px 0}
+  #jvLens .caday{position:relative;min-height:42px;border:1px solid rgba(57,255,122,.08);border-radius:7px;padding:3px 4px;font-size:11px;color:var(--dim2)}
+  #jvLens .caday.out{opacity:.25}
+  #jvLens .caday.today{border-color:var(--green2);box-shadow:0 0 10px rgba(57,255,122,.35);color:var(--white)}
+  #jvLens .caday .cn{font-weight:700}
+  #jvLens .caev{margin-top:2px;font-size:8px;line-height:1.25;color:var(--green2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #jvLens .caev.pri{color:var(--amber)}
+  #jvLens .caev.more{color:var(--dim)}
+  #jvLens .catoday{margin-top:12px}
+  #jvLens .caempty{font-size:12px;color:var(--dim);padding:8px 2px}
   .confirm{width:100%;margin-top:13px;background:var(--green);color:#05140b;border:none;border-radius:9px;padding:13px;font:inherit;font-weight:700;font-size:14px;cursor:pointer}.confirm:disabled{opacity:.6}
   .cancel{width:100%;margin-top:8px;background:none;border:none;color:var(--dim2);font:inherit;font-size:12px;cursor:pointer}
 
@@ -497,6 +510,7 @@
       +'<label>Title</label><input id="sfTitle" type="text" value="'+esc(ev?ev.summary:'')+'"'+(mode==='move'?'':' placeholder="Block focus time"')+'>'
       +'<label>Date</label><input id="sfDate" type="date" value="'+dv(start)+'">'
       +'<div class="sfrow"><div><label>Start</label><input id="sfStart" type="time" value="'+tv(start)+'"></div><div><label>End</label><input id="sfEnd" type="time" value="'+tv(end)+'"></div></div>'
+      +'<label style="display:flex;align-items:center;gap:9px;margin-top:12px;cursor:pointer"><input type="checkbox" id="sfPriority"'+(ev&&ev.priority?' checked':'')+' style="width:auto;margin:0"><span style="text-transform:none;letter-spacing:0;font-size:12px;color:var(--white)">Flag as priority — Jarvis reminds you ahead of time</span></label>'
       +'<div class="sfmsg" id="sfMsg"></div><button class="confirm" id="sfGo">'+(mode==='move'?'Confirm move':'Confirm & add')+'</button><button class="cancel" id="sfCancel">Cancel</button></div>';
     document.body.appendChild(sheet); document.body.classList.add('jv-sheeted'); requestAnimationFrame(function(){ sheet.classList.add('open'); });
     var close=function(){ sheet.classList.remove('open'); document.body.classList.remove('jv-sheeted'); setTimeout(function(){ try{sheet.remove();}catch(e){} },220); jvMaybeListen(); };
@@ -507,7 +521,7 @@
       if(!date||!st||!en){ msg.textContent='Pick a date and times.'; return; }
       var sI=date+'T'+st+':00', eI=date+'T'+en+':00'; if(eI<=sI){ msg.textContent='End must be after start.'; return; }
       var label=go.textContent; go.disabled=true; go.textContent='Saving…';
-      var body={confirm:true,summary:title||'Untitled',start:sI,end:eI}; var url='/jarvis/calendar/create'; if(mode==='move'){ url='/jarvis/calendar/move'; body.event_id=ev.id; }
+      var body={confirm:true,summary:title||'Untitled',start:sI,end:eI,priority:!!($('#sfPriority',sheet)&&$('#sfPriority',sheet).checked)}; var url='/jarvis/calendar/create'; if(mode==='move'){ url='/jarvis/calendar/move'; body.event_id=ev.id; }
       fetch(url,{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify(body)})
         .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
         .then(function(res){ if(!res.ok||(res.j&&res.j.error)){ msg.textContent='Could not save'+(res.j&&res.j.error?' ('+res.j.error+')':'')+'.'; go.disabled=false; go.textContent=label; return; } close(); refresh(true); })
@@ -623,6 +637,51 @@
     var sum=(g.commits_7d!=null?g.commits_7d+' commits this week':'')+(g.open_prs!=null?(g.commits_7d!=null?' · ':'')+g.open_prs+' open PR'+(g.open_prs===1?'':'s'):'');
     var rows=(g.recent||[]).slice(0,5).map(function(c){ return {m:c.message, s:(c.repo||'')+' · '+relTimeShort(c.when)}; });
     jvShowLens('github','Latest from GitHub',sum,rows);
+  }
+
+  // Calendar overlay lens — a month grid with today highlighted and every event
+  // marked, plus today's events listed. Pulls a wide agenda window on demand.
+  function jvSameDay(a,b){ return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate(); }
+  function jvRenderCalendarLens(events){
+    var el=document.getElementById('jvLens'); if(!el) return;
+    var now=new Date(), y=now.getFullYear(), mo=now.getMonth();
+    var first=new Date(y,mo,1), startDow=first.getDay(), daysIn=new Date(y,mo+1,0).getDate();
+    var monthName=now.toLocaleDateString([],{month:'long',year:'numeric'});
+    // bucket events by yyyy-m-d
+    var byDay={}; (events||[]).forEach(function(e){ if(!e.start) return; var d=new Date(e.start);
+      var k=d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate(); (byDay[k]=byDay[k]||[]).push(e); });
+    var wd=['S','M','T','W','T','F','S'].map(function(w){return '<div class="cawd">'+w+'</div>';}).join('');
+    var cells='';
+    for(var i=0;i<startDow;i++){ cells+='<div class="caday out"></div>'; }
+    for(var d=1;d<=daysIn;d++){
+      var cur=new Date(y,mo,d), k=y+'-'+mo+'-'+d, evs=byDay[k]||[], isToday=jvSameDay(cur,now);
+      var inner='<span class="cn">'+d+'</span>';
+      evs.slice(0,2).forEach(function(e){ inner+='<div class="caev'+(e.priority?' pri':'')+'">'+(e.priority?'★ ':'')+esc(e.summary)+'</div>'; });
+      if(evs.length>2){ inner+='<div class="caev more">+'+(evs.length-2)+' more</div>'; }
+      cells+='<div class="caday'+(isToday?' today':'')+'">'+inner+'</div>';
+    }
+    var tk=y+'-'+mo+'-'+now.getDate(), todays=(byDay[tk]||[]).slice().sort(function(a,b){return (a.start||'')<(b.start||'')?-1:1;});
+    var todayHtml='<div class="catoday"><div class="lenssum">Today · '+now.toLocaleDateString([],{weekday:'long',month:'short',day:'numeric'})+'</div>';
+    if(todays.length){ todayHtml+=todays.map(function(e){
+        var t=e.all_day?'All day':new Date(e.start).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+        return '<div class="lensrow"><span class="m">'+(e.priority?'★ ':'')+esc(e.summary)+'</span><span class="s">'+t+(e.location?' · '+esc(e.location):'')+'</span></div>';
+      }).join(''); }
+    else { todayHtml+='<div class="caempty">Nothing scheduled today.</div>'; }
+    todayHtml+='</div>';
+    el.innerHTML='<div class="lenscard"><div class="lenshd">'+ico('calendar')+'<b>Calendar</b><button class="lensclose" id="lensX">Close</button></div>'
+      +'<div class="calhd">'+monthName+'</div><div class="calgrid">'+wd+cells+'</div>'+todayHtml+'</div>';
+    el.classList.add('vis');
+    var x=document.getElementById('lensX'); if(x) x.onclick=jvHideLens;
+    el.onclick=function(e){ if(e.target===el) jvHideLens(); };
+  }
+  function jvShowCalendarLens(){
+    if(!(agenda&&agenda.available)){ jvShowLens('calendar','Calendar','Calendar is offline.',[]); return; }
+    jvRenderCalendarLens(agenda.events||[]);   // show immediately from the 7-day agenda
+    // then widen to the rest of the month so later events appear too
+    fetch('/jarvis/agenda?days=45',{cache:'no-store',headers:{'Authorization':'Bearer '+token}})
+      .then(function(r){ return r.ok?r.json():null; })
+      .then(function(d){ if(d&&d.available&&document.getElementById('jvLens').classList.contains('vis')){ jvRenderCalendarLens(d.events||[]); } })
+      .catch(function(){});
   }
 
   // ---- Under-reactor typewriter caption, one line at a time, synced to audio ----
@@ -753,10 +812,15 @@
     }
     if(agenda){
       if(agenda.available&&(agenda.events||[]).length){
-        lines.push('Upcoming calendar: '+agenda.events.slice(0,5).map(function(e){
-          var dt=e.all_day?'all day':new Date(e.start).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
-          return e.summary+' ('+dt+')'+(e.id?' [id: '+e.id+']':'');
-        }).join('; ')+'.');
+        var nowD=new Date();
+        var sameDay=function(a,b){ return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate(); };
+        var fmt=function(e){ var d=new Date(e.start); return e.summary+' ('+(e.all_day?'all day':d.toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}))+')'+(e.id?' [id: '+e.id+']':''); };
+        lines.push('Upcoming calendar: '+agenda.events.slice(0,8).map(fmt).join('; ')+'.');
+        // Proactive reminders: TODAY's events (any priority) + FUTURE priority items only.
+        var todays=agenda.events.filter(function(e){ return e.start&&sameDay(new Date(e.start),nowD); });
+        var futurePri=agenda.events.filter(function(e){ return e.priority&&e.start&&new Date(e.start)>nowD&&!sameDay(new Date(e.start),nowD); });
+        if(todays.length) lines.push("TODAY'S EVENTS (remind Mike of these now): "+todays.map(fmt).join('; ')+'.');
+        if(futurePri.length) lines.push('UPCOMING PRIORITY ITEMS (proactively remind Mike of these ahead of time): '+futurePri.map(fmt).join('; ')+'.');
       } else if(agenda.available){ lines.push('Calendar: nothing scheduled in the next 7 days.'); }
       else { lines.push('Calendar: offline — GA service account key needed.'); }
     }
@@ -779,6 +843,7 @@
     jvMsgs.push({role:'user', content:text});
     jvHideLens();
     if(/\b(git ?hub|repo|repos|repository|commit|commits|pull request|prs?|code ?base|what.*shipped|what.*built)\b/i.test(text||'')){ jvShowGithubLens(); }
+    else if(/\b(calendar|agenda|schedule|my day|what.*(on|today|tomorrow|this week|coming up)|appointments?|events?|meetings?)\b/i.test(text||'')){ jvShowCalendarLens(); }
     var sysContent=JARVIS_PERSONA+'\n\nLive dashboard context:\n'+jvBuildContext();
     var body={messages:jvMsgs, stream:false};
     try{
