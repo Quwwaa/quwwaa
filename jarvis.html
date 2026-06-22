@@ -416,7 +416,7 @@
       +'<div class="panel"><p class="lbl">Task queue<span class="ln"></span></p><div class="ph">Connect Cowork tasks to populate the queue.</div></div>'
       +'<div class="panel"><p class="lbl">Inbox triage<span class="ln"></span></p><div class="triage"><div style="text-align:center"><div class="num">—</div><div style="font-size:9px;color:var(--dim)">NEW · 7d</div></div>'
         +'<div><div class="row"><span>Needs reply</span><b>—</b></div><div class="row"><span>Resolved / FYI</span><b>—</b></div><div class="row"><span>Promotions</span><b>—</b></div><div class="row"><span>Gmail connector</span>'+statusTag(false,'infra')+'</div></div></div></div>'
-      +'<div class="panel"><p class="lbl">Calendar agenda · 7d<button class="addbtn" id="addEvent">+ New</button></p>'+agendaHTML()+'</div>'
+      +'<div class="panel"><p class="lbl">Calendar agenda<button class="addbtn" id="addEvent">+ New</button></p>'+agendaHTML()+'</div>'
       +'</div>';
     H+='</div>'; // rightcol
     H+='</div>'; // main
@@ -462,7 +462,7 @@
   function relTimeShort(iso){var d=new Date(iso),s=(Date.now()-d.getTime())/1000; if(isNaN(s))return ''; if(s<60)return 'now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; if(s<604800)return Math.floor(s/86400)+'d ago'; return Math.floor(s/604800)+'w ago';}
   function agendaHTML(){
     if(!agenda||!agenda.available) return '<div class="ph">'+esc((agenda&&agenda.note)||'Calendar connects after the GA Secret-File fix.')+'</div>';
-    if(!(agenda.events||[]).length) return '<div class="ph">Nothing scheduled in the next 7 days.</div>';
+    if(!(agenda.events||[]).length) return '<div class="ph">Nothing scheduled ahead.</div>';
     return agenda.events.slice(0,5).map(function(ev){
       var tm=ev.all_day?'all day':new Date(ev.start).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
       return '<div class="tq"><button data-id="'+esc(ev.id)+'"><span>'+esc(relDay(ev.start)+' · '+ev.summary)+'</span><b>'+esc(tm)+'</b></button></div>';
@@ -541,7 +541,7 @@
       }
       if(!r.ok) throw {code:'err'}; return r.json();
     });
-    var gA=fetch('/jarvis/agenda',{cache:'no-store',headers:Hd}).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; });
+    var gA=fetch('/jarvis/agenda?days=35',{cache:'no-store',headers:Hd}).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; });
     var gC=fetch('/jarvis/costs',{cache:'no-store',headers:Hd}).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; });
     return Promise.all([gS,gA,gC]).then(function(res){ stats=res[0]; agenda=res[1]; costs=res[2]; render(); })
       .catch(function(e){ if(e&&e.code==='mfa'){ gateMfaChallenge(); }
