@@ -280,6 +280,7 @@
     // left rail
     H+='<div class="rail">'
       +'<div class="panel cmd" style="display:flex;align-items:center;gap:10px">'+ico('render')+'<div><div class="nn" style="font-size:14px;font-weight:800">QUWWAA</div><div class="nr" style="font-size:8.5px;color:var(--green2);letter-spacing:.15em">COMMAND SUITE</div></div><span class="tag ok" style="margin-left:auto"><span class="dot ok"></span>Online</span></div>'
+      +'<div class="panel" id="secPanel"><p class="lbl">Security<span class="ln"></span></p><div class="ph" style="font-size:10px">Loading…</div></div>'
       +'<div class="panel"><p class="lbl">Core directives<span class="ln"></span></p><ul class="bul" style="font-size:11.5px;color:var(--dim2)">'
         +['Scale impact','Maximize leverage','Automate everything','Compound growth','Serve the Ummah'].map(function(x){return '<li>'+x+'</li>';}).join('')+'</ul></div>'
       +'<div class="panel"><p class="lbl">Today\'s priorities<span class="ln"></span></p>'
@@ -322,6 +323,7 @@
 
     // bottom
     H+='<div class="bottom">'
+      +'<div class="panel" id="pendingPanel"><p class="lbl">Pending approvals<span class="ln"></span></p><div class="ph">No pending actions.</div></div>'
       +'<div class="panel"><p class="lbl">Task queue<span class="ln"></span></p><div class="ph">Connect Cowork tasks to populate the queue.</div></div>'
       +'<div class="panel"><p class="lbl">Inbox triage<span class="ln"></span></p><div class="triage"><div style="text-align:center"><div class="num">—</div><div style="font-size:9px;color:var(--dim)">NEW · 7d</div></div>'
         +'<div><div class="row"><span>Needs reply</span><b>—</b></div><div class="row"><span>Resolved / FYI</span><b>—</b></div><div class="row"><span>Promotions</span><b>—</b></div><div class="row"><span>Gmail connector</span>'+statusTag(false,'infra')+'</div></div></div></div>'
@@ -441,8 +443,23 @@
       if(!cfg||!cfg.supabaseUrl){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Backend not configured.</p></div></div>'; return; }
       loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2').then(function(){
         sb=window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-        sb.auth.getSession().then(function(res){ var session=res&&res.data&&res.data.session; if(!session){ gateSignIn(); return; } user=session.user; token=session.access_token; refresh(false); });
-        sb.auth.onAuthStateChange(function(_e,session){ if(session){ user=session.user; token=session.access_token; if(!stats) refresh(false); } });
+        sb.auth.getSession().then(function(res){
+          var session=res&&res.data&&res.data.session;
+          if(!session){ gateSignIn(); return; }
+          user=session.user; token=session.access_token;
+          // MFA gate — require AAL2 before opening the cockpit
+          sb.auth.mfa.getAuthenticatorAssuranceLevel().then(function(lvl){
+            var cur=(lvl&&lvl.data&&lvl.data.currentLevel)||'aal1';
+            var nxt=(lvl&&lvl.data&&lvl.data.nextLevel)||'aal1';
+            if(cur==='aal2'){ refresh(false); }
+            else if(nxt==='aal2'){ gateMfaChallenge(); }
+            else { gateMfaEnroll(); }
+          }).catch(function(){ refresh(false); }); // if MFA API unavailable, let through (graceful)
+        });
+        sb.auth.onAuthStateChange(function(_e,session){
+          if(session){ user=session.user; token=session.access_token;
+            if(!stats){ refresh(false); } }
+        });
       }).catch(function(){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Couldn\'t start. Retry.</p></div></div>'; });
     }).catch(function(){ app.innerHTML='<div class="hud"><div class="gate"><p class="err">Offline.</p></div></div>'; }); }
   if('serviceWorker' in navigator && location.hostname.indexOf('hq.')===0){ window.addEventListener('load', function(){ navigator.serviceWorker.register('/jarvis-sw.js').catch(function(){}); }); }
@@ -591,9 +608,149 @@
     if(!reactor) return;
     reactor.onclick=function(e){ e.stopPropagation(); jvShowOverlay(); jvToggleMic(); };
   }
-  // Patch render to also wire reactor
+  // Patch render to also wire reactor + security panels
   var _origRender=render;
-  render=function(){ _origRender(); jvWireReactor(); };
+  render=function(){ _origRender(); jvWireReactor(); secRefreshPanels(); };
+
+  // ===== SECURITY FOUNDATION =====
+  var _stepUpAt=0;
+  function stepUpFresh(){ return (Date.now()-_stepUpAt)<5*60*1000; }
+
+  // MFA gates — replace the whole app view until aal2 satisfied
+  function gateMfaEnroll(){
+    app.innerHTML='<div class="hud"><div class="gate"><h1>JARVIS OS</h1><span class="j" style="font-size:11px;letter-spacing:.2em">SECURITY SETUP REQUIRED</span>'
+      +'<p style="color:var(--dim2);max-width:320px">Two-factor authentication is required to access the command center. Open your authenticator app and scan the QR code below.</p>'
+      +'<div id="mfaQr" style="background:#fff;padding:12px;border-radius:10px;display:inline-block;margin:8px 0"></div>'
+      +'<p style="font-size:10px;color:var(--dim);margin:4px 0">Can\'t scan? Manual key: <code id="mfaSecret" style="color:var(--green2)"></code></p>'
+      +'<input id="mfaCode" type="text" inputmode="numeric" maxlength="6" placeholder="Enter 6-digit code" style="width:200px;text-align:center;font-size:22px;letter-spacing:.2em;background:var(--panel2);border:1px solid var(--line2);color:var(--white);border-radius:8px;padding:10px;font-family:inherit;margin:8px 0">'
+      +'<div id="mfaErr" style="color:var(--amber);font-size:12px;min-height:16px"></div>'
+      +'<button class="gbtn" id="mfaVerify" style="background:var(--green);color:#05140b;border:none">Activate MFA</button>'
+      +'<button style="all:unset;color:var(--dim);font-size:11px;cursor:pointer;margin-top:10px" id="mfaSignOut">Sign out</button></div></div>';
+    var factorId='';
+    sb.auth.mfa.enroll({factorType:'totp',issuer:'JARVIS OS'}).then(function(res){
+      if(res.error){ $('#mfaErr').textContent='Enroll error: '+res.error.message; return; }
+      factorId=res.data.id;
+      var qr=res.data.totp.qr_code;
+      if(qr.startsWith('<svg')){  $('#mfaQr').innerHTML=qr; }
+      else { var img=document.createElement('img'); img.src=qr; img.style.width='180px'; $('#mfaQr').appendChild(img); }
+      $('#mfaSecret').textContent=res.data.totp.secret;
+    });
+    $('#mfaVerify').onclick=async function(){
+      var code=($('#mfaCode').value||'').replace(/\s/g,'');
+      if(code.length!==6){ $('#mfaErr').textContent='Enter the 6-digit code.'; return; }
+      var ch=await sb.auth.mfa.challenge({factorId:factorId});
+      if(ch.error){ $('#mfaErr').textContent=ch.error.message; return; }
+      var v=await sb.auth.mfa.verify({factorId:factorId,challengeId:ch.data.id,code:code});
+      if(v.error){ $('#mfaErr').textContent='Invalid code — try again.'; return; }
+      token=v.data.session.access_token; _stepUpAt=Date.now();
+      refresh(false);
+    };
+    $('#mfaSignOut').onclick=function(){ sb.auth.signOut().then(function(){ location.reload(); }); };
+  }
+
+  function gateMfaChallenge(){
+    app.innerHTML='<div class="hud"><div class="gate"><h1>JARVIS OS</h1><span class="j" style="font-size:11px;letter-spacing:.2em">TWO-FACTOR REQUIRED</span>'
+      +'<p style="color:var(--dim2)">Enter the 6-digit code from your authenticator app.</p>'
+      +'<input id="mfaCode" type="text" inputmode="numeric" maxlength="6" placeholder="000000" style="width:200px;text-align:center;font-size:28px;letter-spacing:.3em;background:var(--panel2);border:1px solid var(--line2);color:var(--white);border-radius:8px;padding:10px;font-family:inherit;margin:8px 0">'
+      +'<div id="mfaErr" style="color:var(--amber);font-size:12px;min-height:16px"></div>'
+      +'<button class="gbtn" id="mfaGo" style="background:var(--green);color:#05140b;border:none">Authenticate</button>'
+      +'<button style="all:unset;color:var(--dim);font-size:11px;cursor:pointer;margin-top:10px" id="mfaSignOut">Sign out</button></div></div>';
+    var doAuth=async function(){
+      var code=($('#mfaCode').value||'').replace(/\s/g,'');
+      if(code.length!==6){ $('#mfaErr').textContent='Enter the 6-digit code.'; return; }
+      var factors=await sb.auth.mfa.listFactors();
+      var fid=(((factors.data||{}).totp)||[])[0] && factors.data.totp[0].id;
+      if(!fid){ $('#mfaErr').textContent='No factor found — contact admin.'; return; }
+      var ch=await sb.auth.mfa.challenge({factorId:fid});
+      if(ch.error){ $('#mfaErr').textContent=ch.error.message; return; }
+      var v=await sb.auth.mfa.verify({factorId:fid,challengeId:ch.data.id,code:code});
+      if(v.error){ $('#mfaErr').textContent='Incorrect code.'; return; }
+      token=v.data.session.access_token; _stepUpAt=Date.now();
+      refresh(false);
+    };
+    $('#mfaGo').onclick=doAuth;
+    $('#mfaCode').addEventListener('keydown',function(e){ if(e.key==='Enter') doAuth(); });
+    $('#mfaSignOut').onclick=function(){ sb.auth.signOut().then(function(){ location.reload(); }); };
+  }
+
+  async function jvStepUp(){ // Returns true if step-up satisfied (fresh or just completed)
+    if(stepUpFresh()) return true;
+    return new Promise(function(resolve){
+      var sheet=document.createElement('div'); sheet.className='sheet';
+      sheet.innerHTML='<div class="sheetcard"><h3>Step-up required</h3><div class="gn">This action requires a fresh authentication. Enter your TOTP code to continue.</div>'
+        +'<input id="suCode" type="text" inputmode="numeric" maxlength="6" placeholder="000000" style="font-size:22px;letter-spacing:.3em;text-align:center">'
+        +'<div id="suErr" style="color:var(--amber);font-size:12px;min-height:14px;margin-top:6px"></div>'
+        +'<button class="confirm" id="suGo">Confirm</button><button class="cancel" id="suCancel">Cancel</button></div>';
+      document.body.appendChild(sheet); requestAnimationFrame(function(){ sheet.classList.add('open'); });
+      var close=function(ok){ sheet.classList.remove('open'); setTimeout(function(){ try{sheet.remove();}catch(e){} },220); resolve(ok); };
+      $('#suCancel',sheet).onclick=function(){ close(false); };
+      var doStepUp=async function(){
+        var code=($('#suCode',sheet).value||'').replace(/\s/g,'');
+        if(code.length!==6){ $('#suErr',sheet).textContent='Enter 6 digits.'; return; }
+        var factors=await sb.auth.mfa.listFactors();
+        var fid=(((factors.data||{}).totp)||[])[0] && factors.data.totp[0].id;
+        if(!fid){ $('#suErr',sheet).textContent='No factor found.'; return; }
+        var ch=await sb.auth.mfa.challenge({factorId:fid});
+        if(ch.error){ $('#suErr',sheet).textContent=ch.error.message; return; }
+        var v=await sb.auth.mfa.verify({factorId:fid,challengeId:ch.data.id,code:code});
+        if(v.error){ $('#suErr',sheet).textContent='Incorrect code.'; return; }
+        token=v.data.session.access_token; _stepUpAt=Date.now(); close(true);
+      };
+      $('#suGo',sheet).onclick=doStepUp;
+      $('#suCode',sheet).addEventListener('keydown',function(e){ if(e.key==='Enter') doStepUp(); });
+    });
+  }
+
+  // Security + pending panels — refresh after each render()
+  var _secStatus=null, _pendingActions=[];
+  function secRefreshPanels(){
+    fetch('/jarvis/security/status',{headers:{'Authorization':'Bearer '+token}})
+      .then(function(r){ return r.ok?r.json():null; })
+      .then(function(d){ if(d){ _secStatus=d; _renderSecPanel(); } }).catch(function(){});
+    fetch('/jarvis/actions/pending',{headers:{'Authorization':'Bearer '+token}})
+      .then(function(r){ return r.ok?r.json():null; })
+      .then(function(d){ if(d){ _pendingActions=d.actions||[]; _renderPendingPanel(); } }).catch(function(){});
+  }
+
+  function _renderSecPanel(){
+    var el=document.getElementById('secPanel'); if(!el||!_secStatus) return;
+    var on=_secStatus.actions_enabled;
+    el.innerHTML='<p class="lbl">Security<span class="ln"></span></p>'
+      +'<div class="row"><span>Actions</span><b style="color:'+(on?'var(--green2)':'var(--amber)')+'">'+(on?'Enabled':'KILL SWITCH ON')+'</b></div>'
+      +'<div class="row"><span>Pending approvals</span><b>'+(_secStatus.pending_count||0)+'</b></div>'
+      +'<div class="row"><span>Session AAL</span><b style="color:var(--green2)">AAL2 ✓</b></div>'
+      +'<button class="btn" id="killSwitchBtn" style="margin-top:8px;width:100%;justify-content:center;color:'+(on?'var(--amber)':'var(--green2)')+'">'+
+        (on?'Disable actions':'Enable actions')+'</button>';
+    $('#killSwitchBtn').onclick=async function(){
+      var ok=await jvStepUp(); if(!ok) return;
+      var newState=!on;
+      fetch('/jarvis/security/kill-switch',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({enabled:newState})})
+        .then(function(r){ return r.json(); }).then(function(){ secRefreshPanels(); }).catch(function(){});
+    };
+  }
+
+  function _renderPendingPanel(){
+    var el=document.getElementById('pendingPanel'); if(!el) return;
+    if(!_pendingActions.length){ el.innerHTML='<p class="lbl">Pending approvals<span class="ln"></span></p><div class="ph">No pending actions.</div>'; return; }
+    el.innerHTML='<p class="lbl">Pending approvals<span class="ln"></span></p>'
+      +_pendingActions.map(function(a){
+        return '<div class="row" style="flex-direction:column;align-items:flex-start;gap:4px;border-bottom:1px solid rgba(255,255,255,.04);padding:7px 0">'
+          +'<span style="font-size:11px;color:var(--white)">'+esc(a.preview_text)+'</span>'
+          +'<span style="font-size:9px;color:var(--dim)">Tier '+a.tier+' · '+a.type+'</span>'
+          +'<div style="display:flex;gap:6px;margin-top:2px">'
+          +'<button class="btn" style="color:var(--green)" data-id="'+esc(a.id)+'" data-act="approve">Approve</button>'
+          +'<button class="btn" style="color:var(--red)" data-id="'+esc(a.id)+'" data-act="deny">Deny</button>'
+          +'</div></div>';
+      }).join('');
+    Array.prototype.forEach.call(el.querySelectorAll('[data-act]'),function(btn){
+      btn.onclick=async function(){
+        var act=btn.getAttribute('data-act'), id=btn.getAttribute('data-id');
+        if(act==='approve'){ var ok=await jvStepUp(); if(!ok) return; }
+        fetch('/jarvis/actions/'+act,{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({action_id:id})})
+          .then(function(){ secRefreshPanels(); }).catch(function(){});
+      };
+    });
+  }
 })();
 </script>
 </body>

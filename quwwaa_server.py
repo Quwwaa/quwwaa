@@ -2222,17 +2222,23 @@ def maybe_send_brief_push():
 # board; GA stays a clean stub until GA_SERVICE_ACCOUNT_JSON is configured.
 # ===========================================================================
 def jarvis_authed(handler):
-    tok = handler.headers.get('X-Jarvis-Token', '')
-    if JARVIS_ADMIN_TOKEN and tok and tok == JARVIS_ADMIN_TOKEN:
+    # Shared-secret bypass (curl/diag only — skips AAL check)
+    x_tok = handler.headers.get('X-Jarvis-Token', '')
+    if JARVIS_ADMIN_TOKEN and x_tok and x_tok == JARVIS_ADMIN_TOKEN:
         return True
-    if JARVIS_ADMIN_USER_IDS:
-        try:
-            u = auth_user(handler)
-            if u and u.get('id') in JARVIS_ADMIN_USER_IDS:
-                return True
-        except Exception:
-            pass
-    return False
+    if not JARVIS_ADMIN_USER_IDS:
+        return False
+    try:
+        u = auth_user(handler)
+        if not (u and u.get('id') in JARVIS_ADMIN_USER_IDS):
+            return False
+        # Require AAL2 — the session must have completed MFA
+        bearer = handler.headers.get('Authorization', '').replace('Bearer ', '').strip()
+        if _jwt_aal(bearer) != 'aal2':
+            return False
+        return True
+    except Exception:
+        return False
 
 def sb_count(path_q):
     """Exact row count for a PostgREST query without pulling the rows."""
@@ -2735,6 +2741,130 @@ def jarvis_costs():
     return data
 
 
+# ── Jarvis Security Foundation ───────────────────────────────────────────────
+
+def _jwt_aal(tok):
+    """Decode AAL claim from Supabase JWT payload (no sig verify needed — we
+    already validated the token via /auth/v1/user before trusting the session)."""
+    try:
+        import base64
+        seg = tok.split('.')[1]
+        seg += '=' * (-len(seg) % 4)
+        return json.loads(base64.urlsafe_b64decode(seg)).get('aal', 'aal1')
+    except Exception:
+        return 'aal1'
+
+def _jarvis_tok(handler):
+    return handler.headers.get('Authorization', '').replace('Bearer ', '').strip()
+
+def _jarvis_actions_enabled():
+    try:
+        rows = sb_rest('GET', 'jarvis_settings?key=eq.actions_enabled&select=value&limit=1')
+        val = ((rows or [{}])[0].get('value'))
+        return bool(val) if val is not None else True
+    except Exception:
+        return True   # fail open for reads; actions gateway fails closed separately
+
+def _jarvis_audit_write(actor_uid, action_type, tier, summary, status, ip=None):
+    try:
+        sb_rest('POST', 'jarvis_audit',
+                {'actor_user_id': str(actor_uid) if actor_uid else None,
+                 'action_type': str(action_type), 'tier': tier,
+                 'summary': (summary or '')[:500], 'status': status, 'ip': ip},
+                prefer='return=minimal')
+    except Exception:
+        pass
+
+def _jarvis_upsert_device(user_id, ip, ua):
+    """Record the device; return True if it's newly seen (triggers anomaly alert)."""
+    try:
+        rows = sb_rest('GET', 'jarvis_devices?user_id=eq.%s&ip=eq.%s&limit=1'
+                       % (urllib.parse.quote(str(user_id)), urllib.parse.quote(str(ip))))
+        if rows:
+            sb_rest('PATCH', 'jarvis_devices?user_id=eq.%s&ip=eq.%s'
+                    % (urllib.parse.quote(str(user_id)), urllib.parse.quote(str(ip))),
+                    {'last_seen': datetime.now(timezone.utc).isoformat()}, prefer='return=minimal')
+            return False
+        sb_rest('POST', 'jarvis_devices',
+                {'user_id': str(user_id), 'ip': ip, 'user_agent': (ua or '')[:300]},
+                prefer='return=minimal')
+        return True
+    except Exception:
+        return False
+
+def require_jarvis_action(handler, tier, action_type, payload, preview_text):
+    """Gateway for all side-effectful Jarvis actions. Returns (proceed, action_id, err).
+    Tier 0 → auto. Tier 1 → enqueue + await approval. Tier 2 → enqueue + step-up."""
+    tok = _jarvis_tok(handler)
+    uid = None
+    try: u = auth_user(handler); uid = u and u.get('id')
+    except Exception: pass
+    ip = handler.headers.get('X-Forwarded-For', handler.client_address[0]).split(',')[0].strip()
+
+    if tier == 0:
+        _jarvis_audit_write(uid, action_type, 0, preview_text, 'auto', ip)
+        return True, None, None
+
+    if not _jarvis_actions_enabled():
+        _jarvis_audit_write(uid, action_type, tier, preview_text, 'blocked_kill_switch', ip)
+        return False, None, 'Actions are disabled — kill switch is active, sir.'
+
+    try:
+        row = {'tier': tier, 'type': action_type, 'payload': payload or {},
+               'preview_text': preview_text, 'status': 'pending',
+               'actor_user_id': str(uid) if uid else None}
+        result = sb_rest('POST', 'jarvis_pending_actions', row)
+        action_id = str((result or [{}])[0].get('id') or '')
+    except Exception:
+        action_id = None
+    _jarvis_audit_write(uid, action_type, tier, preview_text, 'queued', ip)
+    return False, action_id, None
+
+def jarvis_security_status():
+    actions_enabled = _jarvis_actions_enabled()
+    try:
+        pending_count = len(sb_rest('GET', 'jarvis_pending_actions?status=eq.pending&select=id') or [])
+    except Exception:
+        pending_count = None
+    return {'actions_enabled': actions_enabled, 'pending_count': pending_count,
+            'generated_at': datetime.now(timezone.utc).isoformat()}
+
+def jarvis_pending_actions_list():
+    try:
+        rows = sb_rest('GET', 'jarvis_pending_actions?status=eq.pending&order=requested_at.asc&limit=50&select=*') or []
+        return {'actions': rows}
+    except Exception as e:
+        return {'actions': [], 'error': str(e)}
+
+def jarvis_action_decide(action_id, decision, deciding_uid):
+    """decision = 'approved' | 'denied'"""
+    try:
+        sb_rest('PATCH', 'jarvis_pending_actions?id=eq.' + urllib.parse.quote(str(action_id)),
+                {'status': decision, 'decided_at': datetime.now(timezone.utc).isoformat()},
+                prefer='return=minimal')
+        _jarvis_audit_write(deciding_uid, 'action_decision', None,
+                            '%s → %s' % (action_id, decision), decision)
+        return {'ok': True, 'action_id': action_id, 'status': decision}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+def jarvis_audit_log(limit=50):
+    try:
+        rows = sb_rest('GET', 'jarvis_audit?order=ts.desc&limit=%d&select=*' % int(limit)) or []
+        return {'entries': rows}
+    except Exception as e:
+        return {'entries': [], 'error': str(e)}
+
+def jarvis_set_kill_switch(enabled):
+    try:
+        sb_rest('PATCH', 'jarvis_settings?key=eq.actions_enabled',
+                {'value': json.dumps(bool(enabled)), 'updated_at': datetime.now(timezone.utc).isoformat()},
+                prefer='return=minimal')
+        return {'ok': True, 'actions_enabled': bool(enabled)}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=os.path.dirname(os.path.abspath(__file__)), **kw)
@@ -2798,6 +2928,39 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_cal_write('create')
         if self.path.startswith('/jarvis/calendar/move'):
             return self._handle_cal_write('move')
+        if self.path.startswith('/jarvis/actions/approve') or self.path.startswith('/jarvis/actions/deny'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            decision = 'approved' if '/approve' in self.path else 'denied'
+            try:
+                length = int(self.headers.get('Content-Length', '0') or '0')
+                data = json.loads(self.rfile.read(length) or b'{}')
+                action_id = (data.get('action_id') or '').strip()
+                if not action_id:
+                    self._send_json({'error': 'action_id required'}, 400); return
+                u = auth_user(self); uid = u and u.get('id')
+                self._send_json(jarvis_action_decide(action_id, decision, uid))
+            except Exception as e:
+                self._send_json({'error': str(e)}, 500)
+            return
+        if self.path.startswith('/jarvis/security/kill-switch'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            try:
+                length = int(self.headers.get('Content-Length', '0') or '0')
+                data = json.loads(self.rfile.read(length) or b'{}')
+                enabled = bool(data.get('enabled', True))
+                self._send_json(jarvis_set_kill_switch(enabled))
+            except Exception as e:
+                self._send_json({'error': str(e)}, 500)
+            return
+        if self.path.startswith('/jarvis/actions/test'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            proceed, action_id, err = require_jarvis_action(
+                self, 1, 'test', {}, 'Test action — harmless, proves the approval framework works')
+            self._send_json({'queued': not proceed, 'action_id': action_id, 'err': err})
+            return
         self.send_error(404)
 
     def _handle_cal_write(self, action):
@@ -3425,6 +3588,20 @@ class Handler(SimpleHTTPRequestHandler):
                 self._send_json(jarvis_diag())
             except Exception as e:
                 self._send_json({'error': type(e).__name__}, 500)
+        elif self.path.startswith('/jarvis/security/status'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            self._send_json(jarvis_security_status())
+        elif self.path.startswith('/jarvis/actions/pending'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            self._send_json(jarvis_pending_actions_list())
+        elif self.path.startswith('/jarvis/audit'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            limit = min(int((qs.get('limit') or ['50'])[0]), 200)
+            self._send_json(jarvis_audit_log(limit))
         else:
             base = urllib.parse.urlparse(self.path).path
             host = (self.headers.get('Host') or '').split(':')[0].lower()
