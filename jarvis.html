@@ -1007,14 +1007,21 @@
     };
     $('#killSwitchBtn').onclick=async function(){
       var newState=!on;
+      if(!newState) jvAlarmStart();   // arming the nuke (disabling) → emergency alarm until decided
       var ok=await jvConfirm(newState
         ? {title:'Re-enable actions?',body:'This lifts the kill switch and lets Jarvis run actions again.',confirm:'Restore actions'}
         : {title:'NUKE IT — disable all actions?',body:'The kill switch stops Jarvis from running ANY action (send, post, deploy, spend). Read-only dashboards keep working. You can restore it here.',confirm:'NUKE IT',danger:true});
+      jvAlarmStop();                  // stops on either Confirm or Cancel
       if(!ok) return;
       fetch('/jarvis/security/kill-switch',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({enabled:newState})})
         .then(function(r){ return r.json(); }).then(function(){ secRefreshPanels(); }).catch(function(){});
     };
   }
+
+  // Emergency alarm for the red NUKE button — loops until the confirm is decided.
+  var jvAlarm=null;
+  function jvAlarmStart(){ try{ if(!jvAlarm){ jvAlarm=new Audio('/alarm.MP3'); jvAlarm.loop=true; } jvAlarm.currentTime=0; jvAlarm.play().catch(function(){}); }catch(e){} }
+  function jvAlarmStop(){ try{ if(jvAlarm){ jvAlarm.pause(); jvAlarm.currentTime=0; } }catch(e){} }
 
   // Simple confirm sheet (Confirm/Cancel) — replaces step-up for self-actions.
   function jvConfirm(o){
