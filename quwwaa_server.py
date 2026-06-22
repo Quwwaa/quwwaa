@@ -556,7 +556,7 @@ def aggregate(q, days=7, fast=False, lang='en'):
             continue
         if not _is_article_url(a.get('url', '')):     # drop image-host / thumbnail links
             continue
-        key = re.sub(r'[^a-z0-9]+', '', (a['title'] or '').lower())[:60]
+        key = re.sub(r'[\W_]+', '', (a['title'] or '').lower())[:60]   # Unicode-aware: keep Cyrillic/Arabic/accented letters, not just a-z0-9
         if not key or key in seen:
             continue
         seen.add(key)
@@ -683,6 +683,24 @@ CAT_QUERIES = {
         'Culture & Entertainment': 'entretenimiento famosos', 'Science': 'ciencia',
         'Nature & Disasters': 'desastres naturales', 'Crime & Justice': 'crimen justicia',
         'Worth Knowing': 'últimas noticias',
+    },
+    'fr': {
+        'US Politics': 'politique américaine', 'World': 'actualité internationale',
+        'Middle East': 'Moyen-Orient', 'Sports': 'sport',
+        'Finance': 'économie finance', 'Markets': 'bourse marchés',
+        'Tech': 'technologie', 'AI': 'intelligence artificielle',
+        'Culture & Entertainment': 'divertissement célébrités', 'Science': 'science',
+        'Nature & Disasters': 'catastrophe naturelle', 'Crime & Justice': 'crime justice',
+        'Worth Knowing': 'dernières nouvelles',
+    },
+    'ru': {
+        'US Politics': 'политика США', 'World': 'мировые новости',
+        'Middle East': 'Ближний Восток', 'Sports': 'спорт',
+        'Finance': 'экономика финансы', 'Markets': 'фондовый рынок',
+        'Tech': 'технологии', 'AI': 'искусственный интеллект',
+        'Culture & Entertainment': 'развлечения знаменитости', 'Science': 'наука',
+        'Nature & Disasters': 'стихийное бедствие', 'Crime & Justice': 'преступность правосудие',
+        'Worth Knowing': 'последние новости',
     },
 }
 
