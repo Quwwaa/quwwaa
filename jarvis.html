@@ -104,6 +104,23 @@
   .rcore{width:118px;height:118px;border-radius:50%;display:grid;place-items:center;text-align:center;z-index:2;
     background:radial-gradient(circle at 50% 45%, #0a1f13 0%, #061009 70%, #03070a 100%);
     border:1px solid rgba(57,255,122,.55);box-shadow:0 0 26px rgba(57,255,122,.35), inset 0 0 22px rgba(57,255,122,.18)}
+  /* Mini reactor buttons (NUKE IT / RECOVERY CODES) — same cues, scaled + tinted */
+  .rxrow{display:flex;justify-content:center;gap:14px;margin-top:8px}
+  .rxcap{margin-top:12px;text-align:center;color:#fff;font-size:9px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;line-height:1.5}
+  .rxbtn{position:relative;width:98px;height:98px;padding:0;border:none;background:none;cursor:pointer;display:grid;place-items:center;border-radius:50%}
+  .rxbtn svg{position:absolute;inset:0;width:100%;height:100%}
+  .rxbtn .ringspin{animation:spin 26s linear infinite;transform-origin:50% 50%}
+  .rxbtn .ringspin.rev{animation:spin 38s linear infinite reverse}
+  .rxbtn .pulse{animation:rpulse 1.7s ease-in-out infinite;transform-origin:50% 50%}
+  .rxbtn .pulse.p2{animation-duration:2.3s;animation-delay:-.6s}
+  .rxbtn .flick{animation:flick 3.4s steps(1) infinite}
+  .rxbtn .rxcore{position:relative;z-index:2;width:62px;height:62px;border-radius:50%;display:grid;place-items:center;text-align:center;transition:transform .12s,box-shadow .2s}
+  .rxbtn .rxcore b{font-size:10px;font-weight:800;letter-spacing:.08em;color:#fff;line-height:1.18;text-transform:uppercase}
+  .rxbtn:active .rxcore{transform:scale(.93)}
+  .rxbtn.red .rxcore{background:radial-gradient(circle at 50% 45%, #2a0808 0%, #160404 70%, #0a0203 100%);border:1px solid rgba(255,90,90,.6);box-shadow:0 0 24px rgba(255,90,90,.4), inset 0 0 18px rgba(255,90,90,.22)}
+  .rxbtn.red:hover .rxcore{box-shadow:0 0 32px rgba(255,90,90,.65), inset 0 0 20px rgba(255,90,90,.3)}
+  .rxbtn.blue .rxcore{background:radial-gradient(circle at 50% 45%, #07172a 0%, #040d16 70%, #02060a 100%);border:1px solid rgba(90,170,255,.6);box-shadow:0 0 24px rgba(90,170,255,.4), inset 0 0 18px rgba(90,170,255,.22)}
+  .rxbtn.blue:hover .rxcore{box-shadow:0 0 32px rgba(90,170,255,.65), inset 0 0 20px rgba(90,170,255,.3)}
   .rcore b{display:block;font-size:14px;letter-spacing:.16em;color:var(--white)}
   .rcore .c{font-size:8.5px;letter-spacing:.2em;color:var(--green2);margin-top:2px}
   .rcore .a{font-size:7px;letter-spacing:.24em;color:var(--gdim);margin-top:3px;display:inline-flex;align-items:center;gap:4px}
@@ -232,22 +249,24 @@
     var fill=area?('<polygon points="0,'+h+' '+poly+' '+w+','+h+'" fill="url(#ag)"/>'):'';
     return '<svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"><defs><linearGradient id="ag" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#39ff7a" stop-opacity=".28"/><stop offset="1" stop-color="#39ff7a" stop-opacity="0"/></linearGradient></defs>'+fill+'<polyline points="'+poly+'" fill="none" stroke="#39ff7a" stroke-width="1.5"/></svg>'; }
 
-  function reactorSVG(){
-    // concentric glowing rings + radial ticks, dark center
+  function ringSVG(color, fid){
+    // concentric glowing rings + radial ticks, dark center — the reactor's look,
+    // parametrized by colour so smaller "reactor buttons" can reuse it.
     var ticks='';
     for(var a=0;a<360;a+=6){ var r1=128,r2=(a%30===0?116:122); var rad=a*Math.PI/180;
-      ticks+='<line x1="'+(150+r1*Math.cos(rad)).toFixed(1)+'" y1="'+(150+r1*Math.sin(rad)).toFixed(1)+'" x2="'+(150+r2*Math.cos(rad)).toFixed(1)+'" y2="'+(150+r2*Math.sin(rad)).toFixed(1)+'" stroke="#39ff7a" stroke-width="'+(a%30===0?1.4:.7)+'" opacity="'+(a%30===0?.8:.4)+'"/>'; }
-    return '<svg viewBox="0 0 300 300"><defs><filter id="g1" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3.2"/></filter></defs>'
-      +'<g fill="none" stroke="#39ff7a">'
+      ticks+='<line x1="'+(150+r1*Math.cos(rad)).toFixed(1)+'" y1="'+(150+r1*Math.sin(rad)).toFixed(1)+'" x2="'+(150+r2*Math.cos(rad)).toFixed(1)+'" y2="'+(150+r2*Math.sin(rad)).toFixed(1)+'" stroke="'+color+'" stroke-width="'+(a%30===0?1.4:.7)+'" opacity="'+(a%30===0?.8:.4)+'"/>'; }
+    return '<svg viewBox="0 0 300 300"><defs><filter id="'+fid+'" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3.2"/></filter></defs>'
+      +'<g fill="none" stroke="'+color+'">'
       +'<circle cx="150" cy="150" r="138" stroke-width="1" opacity=".18"/>'
       +'<g class="ringspin"><circle cx="150" cy="150" r="128" stroke-width="1" stroke-dasharray="2 7" opacity=".55"/></g>'
-      +'<circle class="pulse" cx="150" cy="150" r="108" stroke-width="2.5" opacity=".55" filter="url(#g1)"/>'
+      +'<circle class="pulse" cx="150" cy="150" r="108" stroke-width="2.5" opacity=".55" filter="url(#'+fid+')"/>'
       +'<circle class="flick" cx="150" cy="150" r="108" stroke-width="1" opacity=".9"/>'
       +'<g class="ringspin rev"><circle cx="150" cy="150" r="92" stroke-width="1" stroke-dasharray="1 5" opacity=".5"/></g>'
-      +'<circle class="pulse p2" cx="150" cy="150" r="78" stroke-width="3" opacity=".7" filter="url(#g1)"/>'
+      +'<circle class="pulse p2" cx="150" cy="150" r="78" stroke-width="3" opacity=".7" filter="url(#'+fid+')"/>'
       +'<circle class="flick" cx="150" cy="150" r="78" stroke-width="1.2" opacity="1"/>'
       +'<circle cx="150" cy="150" r="62" stroke-width="1" opacity=".4"/>'
       +'</g><g>'+ticks+'</g></svg>'; }
+  function reactorSVG(){ return ringSVG('#39ff7a','g1'); }
   function spokesSVG(){ var s=''; for(var a=0;a<360;a+=15){ var rad=a*Math.PI/180; s+='<line x1="50%" y1="50%" x2="'+(50+60*Math.cos(rad))+'%" y2="'+(50+60*Math.sin(rad))+'%" stroke="#39ff7a" stroke-width="1" opacity=".06"/>'; }
     return '<svg class="bgspokes" preserveAspectRatio="none">'+s+'</svg>'; }
 
@@ -945,14 +964,11 @@
       +'<div class="row"><span>Session AAL</span><b style="color:'+(mfaNeedsEnroll?'var(--amber)':'var(--green2)')+'">'+(mfaNeedsEnroll?'AAL1 · no MFA':'AAL2 ✓')+'</b></div>'
       +(mfaNeedsEnroll
          ? '<button class="btn" id="enrollMfaBtn" style="margin-top:8px;width:100%;justify-content:center;color:var(--amber)">Secure your account — enable MFA</button>'
-         : (on
-             ? '<div style="margin-top:10px;text-align:center;color:#fff;font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;line-height:1.5">Never ever ever touch the red button</div>'
-               +'<div style="display:flex;gap:8px;margin-top:6px">'
-               +'<button id="killSwitchBtn" style="flex:1;justify-content:center;display:flex;align-items:center;background:var(--red);color:#fff;border:none;border-radius:8px;padding:11px 8px;font:inherit;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer">Nuke It</button>'
-               +'<button id="recoveryBtn" style="flex:1;justify-content:center;display:flex;align-items:center;background:var(--green);color:#fff;border:none;border-radius:8px;padding:11px 8px;font:inherit;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer">Recovery Codes</button>'
-               +'</div>'
-             : '<button id="killSwitchBtn" style="margin-top:10px;width:100%;justify-content:center;display:flex;align-items:center;background:var(--green);color:#fff;border:none;border-radius:8px;padding:11px 8px;font:inherit;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer">Restore Actions</button>'
-               +'<button id="recoveryBtn" style="margin-top:6px;width:100%;justify-content:center;display:flex;align-items:center;background:var(--green);color:#fff;border:none;border-radius:8px;padding:11px 8px;font:inherit;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer">Recovery Codes</button>'));
+         : '<div class="rxcap">Never ever ever touch the red button</div>'
+           +'<div class="rxrow">'
+           +'<button id="killSwitchBtn" class="rxbtn '+(on?'red':'blue')+'">'+ringSVG(on?'#ff5a5a':'#39ff7a','rxk')+'<span class="rxcore"><b>'+(on?'Nuke<br>It':'Restore')+'</b></span></button>'
+           +'<button id="recoveryBtn" class="rxbtn blue">'+ringSVG('#5aa9ff','rxc')+'<span class="rxcore"><b>Recovery<br>Codes</b></span></button>'
+           +'</div>');
     if(mfaNeedsEnroll){ var eb=$('#enrollMfaBtn'); if(eb) eb.onclick=function(){ gateMfaEnroll(); }; return; }
     var rb=$('#recoveryBtn'); if(rb) rb.onclick=async function(){ var ok=await jvStepUp(); if(ok) showBackupCodes(); };
     $('#killSwitchBtn').onclick=async function(){
