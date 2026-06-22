@@ -501,6 +501,35 @@
       openSheet('create', {summary:p.summary||'', start:p.start, end:p.end||(p.start)});
     }
   }
+
+  // Voice action: Jarvis drafted a newsletter broadcast → preview + one-tap approve.
+  // Nothing sends until Mike taps Send. Shows the recipient count (mass, irreversible).
+  function jvProposeBroadcast(p){
+    if(!p) return;
+    var recips=(p.recipients!=null)?p.recipients:((stats&&stats.newsletter&&stats.newsletter.subscribers)||null);
+    var sheet=document.createElement('div'); sheet.className='sheet';
+    var bodyText=(p.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+    sheet.innerHTML='<div class="sheetcard"><h3>Send broadcast?</h3>'
+      +'<div class="gn">Nothing sends until you tap Send. This goes to the whole list.</div>'
+      +'<label>Subject</label><input id="bcSubj" type="text" value="'+esc(p.subject||'')+'">'
+      +'<label>Body</label><div id="bcBody" style="max-height:34vh;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12.5px;line-height:1.5;color:var(--white);white-space:pre-wrap">'+esc(bodyText)+'</div>'
+      +'<div style="margin-top:10px;font-size:12px;color:var(--amber);font-weight:700">→ '+(recips!=null?('~'+num(recips)+' recipients'):'the full subscriber list')+'</div>'
+      +'<div class="sfmsg" id="bcMsg"></div>'
+      +'<button class="confirm" id="bcGo" style="background:var(--amber);color:#1a1206">Send to list</button><button class="cancel" id="bcCancel">Cancel</button></div>';
+    document.body.appendChild(sheet); document.body.classList.add('jv-sheeted'); requestAnimationFrame(function(){ sheet.classList.add('open'); });
+    var close=function(){ sheet.classList.remove('open'); document.body.classList.remove('jv-sheeted'); setTimeout(function(){ try{sheet.remove();}catch(e){} },220); jvMaybeListen(); };
+    $('#bcCancel',sheet).onclick=close; sheet.addEventListener('click',function(e){ if(e.target===sheet) close(); });
+    $('#bcGo',sheet).onclick=function(){
+      var go=$('#bcGo',sheet), msg=$('#bcMsg',sheet), subj=$('#bcSubj',sheet).value.trim();
+      if(!subj){ msg.textContent='Subject required.'; return; }
+      go.disabled=true; go.textContent='Sending…';
+      fetch('/jarvis/kit/broadcast',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+token},
+        body:JSON.stringify({confirm:true,subject:subj,content:p.content||'',preview_text:p.preview_text||''})})
+        .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+        .then(function(res){ if(!res.ok||(res.j&&res.j.error)){ msg.textContent='Could not send'+(res.j&&res.j.error?' ('+res.j.error+')':'')+'.'; go.disabled=false; go.textContent='Send to list'; return; } close(); refresh(true); })
+        .catch(function(){ msg.textContent='Network error.'; go.disabled=false; go.textContent='Send to list'; });
+    };
+  }
   function openSheet(mode, ev){
     var now=new Date(); var start=ev?new Date(ev.start):new Date(Math.ceil(now.getTime()/18e5)*18e5);
     var end=ev?new Date(ev.end||start.getTime()+36e5):new Date(start.getTime()+36e5);
@@ -685,6 +714,20 @@
       .catch(function(){});
   }
 
+  function jvShowKitLens(){
+    var k=(stats&&stats.newsletter)||{};
+    if(!k.available){ jvShowLens('kit','Kit','Newsletter is offline.',[]); return; }
+    var pct=function(x){ return x==null?'—':(Math.round(x*100)/100)+'%'; };
+    var sum=(k.subscribers!=null?num(k.subscribers)+' subscribers':'')
+      +(k.new_today!=null?' · +'+k.new_today+' today':'')+(k.new_this_week!=null?' · +'+k.new_this_week+' / 7d':'');
+    var rows=(k.recent||[]).slice(0,5).map(function(b){
+      var s=[]; if(b.open_rate!=null) s.push('open '+pct(b.open_rate)); if(b.click_rate!=null) s.push('click '+pct(b.click_rate));
+      if(b.recipients!=null) s.push(num(b.recipients)+' sent');
+      return {m:b.subject||'(untitled)', s:s.join(' · ')||(b.sent_at?relTimeShort(b.sent_at):'')};
+    });
+    jvShowLens('kit','Newsletter · Kit',sum,rows);
+  }
+
   // ---- Under-reactor typewriter caption, one line at a time, synced to audio ----
   var jvCap={segs:[],cum:[],total:1,raf:0,el:null};
   function jvCapEl(){ return document.getElementById('jvCaption'); }
@@ -792,7 +835,7 @@
       var m=stats.members||{}, r=stats.revenue||{}, t=stats.traffic||{}, n=stats.newsletter||{};
       if(r.mrr!=null) lines.push('MRR: $'+r.mrr+' ('+r.currency+') — paying-only, comped excluded. Paying subscribers: '+(r.paying||0)+'. Trialing: '+(r.trialing||0)+'. Family-free (100%-off-forever): '+(r.comped||0)+'. New customers this week: '+(r.new_customers_week||0)+'.');
       if(m.total!=null) lines.push('Total QUWWAA members: '+m.total+'. New today: '+(m.new_today||0)+'.');
-      if(n.subscribers!=null) lines.push('Newsletter subscribers (Kit): '+n.subscribers+'.'+(n.new_subscribers_week!=null?' New this week: '+n.new_subscribers_week+'.':''));
+      if(n.subscribers!=null) lines.push('Newsletter (Kit): '+n.subscribers+' subscribers'+(n.new_today!=null?', '+n.new_today+' new today':'')+(n.new_this_week!=null?', '+n.new_this_week+' new this week':'')+'.'+(n.last_broadcast&&n.last_broadcast.subject?' Last broadcast "'+n.last_broadcast.subject+'"'+(n.last_broadcast.open_rate!=null?', open rate '+n.last_broadcast.open_rate+'%':'')+'.':''));
       if(t.available){
         if(t.users_today!=null) lines.push('GA visitors today: '+t.users_today+'.'+(t.users_week!=null?' This week: '+t.users_week+'.':'')+(t.sessions_today!=null?' Sessions today: '+t.sessions_today+'.':'')+(t.pageviews_today!=null?' Pageviews today: '+t.pageviews_today+'.':''));
       } else { lines.push('Google Analytics: offline — GA service account key not yet configured.'); }
@@ -845,6 +888,7 @@
     jvHideLens();
     if(/\b(git ?hub|repo|repos|repository|commit|commits|pull request|prs?|code ?base|what.*shipped|what.*built)\b/i.test(text||'')){ jvShowGithubLens(); }
     else if(/\b(calendar|agenda|schedule|my day|what.*(on|today|tomorrow|this week|coming up)|appointments?|events?|meetings?)\b/i.test(text||'')){ jvShowCalendarLens(); }
+    else if(/\b(kit|newsletter|broadcast|subscribers?|open rate|click rate|email list|mailing list)\b/i.test(text||'')){ jvShowKitLens(); }
     var sysContent=JARVIS_PERSONA+'\n\nLive dashboard context:\n'+jvBuildContext();
     var body={messages:jvMsgs, stream:false};
     try{
@@ -859,7 +903,7 @@
         proposal=d.proposal||null;
       } else { reply='I\'m having trouble reaching the server, sir.'; }
       jvMsgs.push({role:'assistant',content:reply});
-      if(proposal){ jvProposeCalendar(proposal); }   // Jarvis proposes → Mike confirms on screen
+      if(proposal){ if(proposal.action==='broadcast'){ jvProposeBroadcast(proposal); } else { jvProposeCalendar(proposal); } }   // Jarvis proposes → Mike confirms on screen
       jvSetState('speaking');
       jvCancelSpeak=false;
       var spoke=await jvSpeakChunks(reply);   // starts talking after the FIRST sentence

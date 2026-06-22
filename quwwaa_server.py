@@ -2663,30 +2663,43 @@ def _kit_get(path):
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read() or b'{}')
 
+def _kit_count(query):
+    try:
+        return (_kit_get(query).get('pagination') or {}).get('total_count')
+    except Exception:
+        return None
+
 def jarvis_newsletter():
-    out = {'available': False, 'subscribers': None, 'new_this_week': None, 'last_broadcast': None, 'note': ''}
+    out = {'available': False, 'subscribers': None, 'new_today': None, 'new_this_week': None,
+           'last_broadcast': None, 'recent': [], 'note': ''}
     if not KIT_API_KEY:
         out['note'] = 'Kit not configured'
         return out
     try:
         subs = _kit_get('subscribers?status=active&per_page=1')
         out['subscribers'] = (subs.get('pagination') or {}).get('total_count')
-        since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
-        recent = _kit_get('subscribers?status=active&created_after=' + urllib.parse.quote(since) + '&per_page=1')
-        out['new_this_week'] = (recent.get('pagination') or {}).get('total_count')
-        bl = _kit_get('broadcasts?per_page=1')
-        bcs = bl.get('broadcasts') or []
-        if bcs:
-            b = bcs[0]
+        now = datetime.now(timezone.utc)
+        day0 = now.replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y-%m-%dT%H:%M:%SZ')
+        wk = (now - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        out['new_today'] = _kit_count('subscribers?status=active&created_after=' + urllib.parse.quote(day0) + '&per_page=1')
+        out['new_this_week'] = _kit_count('subscribers?status=active&created_after=' + urllib.parse.quote(wk) + '&per_page=1')
+
+        def _stats(bid):
             try:
-                st = _kit_get('broadcasts/%s/stats' % b.get('id'))
-                s = (st.get('broadcast') or {}).get('stats') or st.get('stats') or {}
+                st = _kit_get('broadcasts/%s/stats' % bid)
+                return (st.get('broadcast') or {}).get('stats') or st.get('stats') or {}
             except Exception:
-                s = {}
-            out['last_broadcast'] = {'subject': b.get('subject'),
-                                     'sent_at': b.get('send_at') or b.get('published_at'),
-                                     'recipients': s.get('recipients'),
-                                     'open_rate': s.get('open_rate'), 'click_rate': s.get('click_rate')}
+                return {}
+        bl = _kit_get('broadcasts?per_page=5')
+        bcs = [b for b in (bl.get('broadcasts') or []) if b.get('id')]
+        for i, b in enumerate(bcs[:5]):
+            s = _stats(b.get('id')) if i < 3 else {}     # full stats only for the latest 3 (bound cost)
+            row = {'subject': b.get('subject'), 'sent_at': b.get('send_at') or b.get('published_at'),
+                   'recipients': s.get('recipients'), 'open_rate': s.get('open_rate'),
+                   'click_rate': s.get('click_rate')}
+            out['recent'].append(row)
+            if i == 0:
+                out['last_broadcast'] = row
         out['available'] = True
     except Exception as e:
         out['note'] = 'Kit error: ' + type(e).__name__
@@ -2838,6 +2851,30 @@ def jarvis_agenda(days=7):
         out['note'] = 'Calendar error: ' + _err_detail(ex)
     _AGENDA[days] = {'data': out, 't': time.time()}
     return out
+
+def jarvis_kit_send(subject, content, preview_text=''):
+    """Create AND send a Kit broadcast immediately (send_at = now). Returns
+    (json, status). Tier-1 action — the caller MUST have surfaced the approval
+    preview + recipient count first."""
+    if not KIT_API_KEY:
+        return {'error': 'kit_not_configured'}, 503
+    subject = (subject or '').strip()
+    content = (content or '').strip()
+    if not (subject and content):
+        return {'error': 'missing_subject_or_content'}, 400
+    try:
+        send_at = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        res = create_kit_broadcast(subject, content, preview_text=preview_text or subject,
+                                   send_at=send_at, description='Jarvis broadcast')
+        bid = ((res or {}).get('broadcast') or {}).get('id') or (res or {}).get('id')
+        return {'ok': True, 'broadcast_id': bid, 'subject': subject, 'send_at': send_at}, 200
+    except urllib.error.HTTPError as e:
+        detail = ''
+        try: detail = e.read().decode('utf-8', 'ignore')[:200]
+        except Exception: pass
+        return {'error': 'kit_upstream_%d' % e.code, 'detail': detail}, 502
+    except Exception as e:
+        return {'error': _err_detail(e)}, 502
 
 def jarvis_cal_write(action, p):
     """Create or move an event on the shared calendar. Returns (json, status)."""
@@ -3215,6 +3252,25 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_cal_write('create')
         if self.path.startswith('/jarvis/calendar/move'):
             return self._handle_cal_write('move')
+        if self.path.startswith('/jarvis/kit/broadcast'):
+            if not jarvis_authed(self):
+                self._send_json({'error': 'unauthorized'}, 401); return
+            d = self._read_json()
+            if not d.get('confirm'):                   # gated: Jarvis proposes, Mike approves
+                self._send_json({'error': 'confirm_required'}, 400); return
+            u = auth_user(self); uid = u and u.get('id')
+            subj = (d.get('subject') or '').strip()
+            try:
+                res, code = jarvis_kit_send(subj, d.get('content'), d.get('preview_text'))
+                try: _jarvis_audit_write(uid, 'kit.broadcast', 1, subj,
+                                         'done' if code == 200 else 'failed', self._client_ip())
+                except Exception: pass
+                self._send_json(res, code)
+            except Exception as e:
+                try: _jarvis_audit_write(uid, 'kit.broadcast', 1, subj, 'error', self._client_ip())
+                except Exception: pass
+                self._send_json({'error': _err_detail(e)}, 502)
+            return
         if self.path.startswith('/jarvis/actions/approve') or self.path.startswith('/jarvis/actions/deny'):
             if not jarvis_authed(self):
                 self._send_json({'error': 'unauthorized'}, 401); return
@@ -3748,7 +3804,11 @@ class Handler(SimpleHTTPRequestHandler):
                       "Default an event to 30 minutes if no end/duration is given. If the title, day, or time is "
                       "genuinely ambiguous, ask one brief clarifying question instead of calling the tool. For a move, "
                       "use the event_id from the calendar context. You never write directly — the tool only proposes; "
-                      "Mike confirms on screen before anything is saved.")
+                      "Mike confirms on screen before anything is saved. "
+                      "You can also draft a newsletter broadcast to the Kit email list with create_broadcast: write a "
+                      "complete subject and full body in QUWWAA's voice. It only proposes — Mike sees a preview with the "
+                      "recipient count and must tap approve before it sends to the whole list, so never claim it's sent "
+                      "until he approves.")
             tools = [
                 {'name': 'create_calendar_event',
                  'description': "Propose a new calendar event for Mike to confirm. Does not write until he confirms.",
@@ -3766,6 +3826,14 @@ class Handler(SimpleHTTPRequestHandler):
                      'start': {'type': 'string', 'description': 'Local start, YYYY-MM-DDTHH:MM:SS'},
                      'end': {'type': 'string', 'description': 'Local end, YYYY-MM-DDTHH:MM:SS'}},
                      'required': ['event_id', 'start', 'end']}},
+                {'name': 'create_broadcast',
+                 'description': "Draft a newsletter broadcast to the Kit email list for Mike to approve and send. "
+                                "Does NOT send until he taps approve. Write the full content; keep it on-brand.",
+                 'input_schema': {'type': 'object', 'properties': {
+                     'subject': {'type': 'string', 'description': 'Email subject line'},
+                     'content': {'type': 'string', 'description': 'Full email body (HTML or plain text)'},
+                     'preview_text': {'type': 'string', 'description': 'Inbox preview snippet (optional)'}},
+                     'required': ['subject', 'content']}},
             ]
             # Use JARVIS_PERSONA instead of the QUWWAA PERSONA
             body = json.dumps({
@@ -3785,20 +3853,30 @@ class Handler(SimpleHTTPRequestHandler):
             # actual write goes through the gated /jarvis/calendar/* endpoints.
             proposal = None
             for b in blocks:
-                if b.get('type') == 'tool_use' and b.get('name') in ('create_calendar_event', 'move_calendar_event'):
-                    inp = b.get('input') or {}
-                    if b['name'] == 'create_calendar_event':
-                        proposal = {'action': 'create', 'summary': inp.get('summary') or 'Untitled',
-                                    'start': inp.get('start'), 'end': inp.get('end'),
-                                    'all_day': bool(inp.get('all_day'))}
-                    else:
-                        proposal = {'action': 'move', 'event_id': inp.get('event_id'),
-                                    'summary': inp.get('summary'),
-                                    'start': inp.get('start'), 'end': inp.get('end')}
+                if b.get('type') != 'tool_use':
+                    continue
+                nm = b.get('name'); inp = b.get('input') or {}
+                if nm == 'create_calendar_event':
+                    proposal = {'action': 'create', 'summary': inp.get('summary') or 'Untitled',
+                                'start': inp.get('start'), 'end': inp.get('end'),
+                                'all_day': bool(inp.get('all_day'))}
+                elif nm == 'move_calendar_event':
+                    proposal = {'action': 'move', 'event_id': inp.get('event_id'),
+                                'summary': inp.get('summary'),
+                                'start': inp.get('start'), 'end': inp.get('end')}
+                elif nm == 'create_broadcast':
+                    recips = None
+                    try: recips = (jarvis_newsletter() or {}).get('subscribers')
+                    except Exception: pass
+                    proposal = {'action': 'broadcast', 'subject': inp.get('subject') or '',
+                                'content': inp.get('content') or '',
+                                'preview_text': inp.get('preview_text') or '', 'recipients': recips}
+                if proposal:
                     break
             if proposal and not reply:
-                reply = ('Shall I move that, sir?' if proposal['action'] == 'move'
-                         else 'Shall I add that to your calendar, sir?')
+                reply = {'move': 'Shall I move that, sir?',
+                         'broadcast': 'Shall I send this broadcast, sir?'}.get(
+                             proposal['action'], 'Shall I add that to your calendar, sir?')
             out = {'reply': reply or 'Standing by, sir.'}
             if proposal:
                 out['proposal'] = proposal
