@@ -121,6 +121,22 @@
   .rxbtn.red:hover .rxcore{box-shadow:0 0 32px rgba(255,90,90,.65), inset 0 0 20px rgba(255,90,90,.3)}
   .rxbtn.blue .rxcore{background:radial-gradient(circle at 50% 45%, #07172a 0%, #040d16 70%, #02060a 100%);border:1px solid rgba(90,170,255,.6);box-shadow:0 0 24px rgba(90,170,255,.4), inset 0 0 18px rgba(90,170,255,.22)}
   .rxbtn.blue:hover .rxcore{box-shadow:0 0 32px rgba(90,170,255,.65), inset 0 0 20px rgba(90,170,255,.3)}
+  /* Glossy red dome push-button in a chrome bezel (the kill switch) */
+  .pushbtn{position:relative;width:104px;height:104px;padding:0;border:none;background:none;cursor:pointer;border-radius:50%}
+  .pushbtn .bezel{position:absolute;inset:0;border-radius:50%;
+    background:radial-gradient(circle at 50% 32%, #eef2f6 0%, #c2cbd3 26%, #8c959d 52%, #5a626a 74%, #353a40 100%);
+    box-shadow:0 5px 11px rgba(0,0,0,.55), inset 0 2px 3px rgba(255,255,255,.7), inset 0 -4px 8px rgba(0,0,0,.55)}
+  .pushbtn .bolt{position:absolute;left:50%;top:50%;width:7px;height:7px;margin:-3.5px;border-radius:50%;
+    background:radial-gradient(circle at 40% 35%, #f4f7fa 0%, #9aa3ab 55%, #4c535a 100%);box-shadow:inset 0 -1px 1px rgba(0,0,0,.5)}
+  .pushbtn .dome{position:absolute;inset:15px;border-radius:50%;display:grid;place-items:center;text-align:center;
+    background:radial-gradient(circle at 50% 30%, #ff8f8f 0%, #ff3d3d 30%, #e00000 64%, #9c0000 100%);
+    box-shadow:inset 0 3px 9px rgba(255,255,255,.6), inset 0 -7px 13px rgba(0,0,0,.5), 0 0 16px rgba(255,40,40,.5);
+    transition:transform .08s, box-shadow .12s}
+  .pushbtn:hover .dome{box-shadow:inset 0 3px 9px rgba(255,255,255,.65), inset 0 -7px 13px rgba(0,0,0,.5), 0 0 26px rgba(255,55,55,.75)}
+  .pushbtn:active .dome{transform:scale(.94);box-shadow:inset 0 6px 14px rgba(0,0,0,.45), 0 0 10px rgba(255,40,40,.5)}
+  .pushbtn .dome b{color:#fff;font-weight:800;font-size:11px;line-height:1.12;letter-spacing:.03em;text-transform:uppercase;text-shadow:0 1px 2px rgba(0,0,0,.55)}
+  .pushbtn .gloss{position:absolute;top:7%;left:18%;width:64%;height:38%;border-radius:50%;pointer-events:none;
+    background:linear-gradient(to bottom, rgba(255,255,255,.6), rgba(255,255,255,0))}
   .rcore b{display:block;font-size:14px;letter-spacing:.16em;color:var(--white)}
   .rcore .c{font-size:8.5px;letter-spacing:.2em;color:var(--green2);margin-top:2px}
   .rcore .a{font-size:7px;letter-spacing:.24em;color:var(--gdim);margin-top:3px;display:inline-flex;align-items:center;gap:4px}
@@ -267,6 +283,9 @@
       +'<circle cx="150" cy="150" r="62" stroke-width="1" opacity=".4"/>'
       +'</g><g>'+ticks+'</g></svg>'; }
   function reactorSVG(){ return ringSVG('#39ff7a','g1'); }
+  function pushButtonInner(label){
+    var bolts=''; for(var i=0;i<6;i++){ bolts+='<span class="bolt" style="transform:rotate('+(i*60)+'deg) translateY(-42px)"></span>'; }
+    return '<span class="bezel"></span>'+bolts+'<span class="dome"><span class="gloss"></span><b>'+label+'</b></span>'; }
   function spokesSVG(){ var s=''; for(var a=0;a<360;a+=15){ var rad=a*Math.PI/180; s+='<line x1="50%" y1="50%" x2="'+(50+60*Math.cos(rad))+'%" y2="'+(50+60*Math.sin(rad))+'%" stroke="#39ff7a" stroke-width="1" opacity=".06"/>'; }
     return '<svg class="bgspokes" preserveAspectRatio="none">'+s+'</svg>'; }
 
@@ -966,7 +985,9 @@
          ? '<button class="btn" id="enrollMfaBtn" style="margin-top:8px;width:100%;justify-content:center;color:var(--amber)">Secure your account — enable MFA</button>'
          : '<div class="rxcap">Never ever ever touch the red button</div>'
            +'<div class="rxrow">'
-           +'<button id="killSwitchBtn" class="rxbtn '+(on?'red':'blue')+'">'+ringSVG(on?'#ff5a5a':'#39ff7a','rxk')+'<span class="rxcore"><b>'+(on?'Nuke<br>It':'Restore')+'</b></span></button>'
+           +(on
+             ? '<button id="killSwitchBtn" class="pushbtn">'+pushButtonInner('Push the<br>Button')+'</button>'
+             : '<button id="killSwitchBtn" class="rxbtn blue">'+ringSVG('#39ff7a','rxk')+'<span class="rxcore"><b>Restore</b></span></button>')
            +'<button id="recoveryBtn" class="rxbtn blue">'+ringSVG('#5aa9ff','rxc')+'<span class="rxcore"><b>Recovery<br>Codes</b></span></button>'
            +'</div>');
     if(mfaNeedsEnroll){ var eb=$('#enrollMfaBtn'); if(eb) eb.onclick=function(){ gateMfaEnroll(); }; return; }
