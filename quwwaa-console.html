@@ -935,6 +935,7 @@ window.QI18N = (function(){
     const c={};
     try{ c.tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }catch(e){}
     try{ c.clientTime = new Date().toLocaleString(undefined,{weekday:'long',year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(e){}
+    try{ c.lang = (window.QI18N && window.QI18N.get()) || 'en'; }catch(e){ c.lang='en'; }   // butler replies in the user's language
     return c;
   }
   function timeSys(){   // for the direct (BYO-key) path, which has no server to inject it
@@ -1668,13 +1669,16 @@ window.QI18N = (function(){
     let d=null; try{ d = await briefInFlight; }catch(e){} finally { briefInFlight = null; }
     if(d && Array.isArray(d.rumble)) lastRumble = d.rumble;   // folded into the board on paint (varying top-5 slot)
     const sections = (d && d.sections) || [];
-    if(!sections.length){
-      if(homeRendered < 0) setStatus(T('status.assembling'));
-      if(boardRetries < 8){ boardRetries++; setTimeout(()=>loadHome(true), 4000); }
-      return;
+    const building = !!(d && d.building);                     // server still assembling this language's brief
+    if(sections.length){ boardRetries = 0; lastBrief = sections; paintBrief(); }
+    else if(homeRendered < 0){ setStatus(T('status.assembling')); }
+    // A non-English brief is built cold in the background and fills in story by story.
+    // Keep polling (and repainting via the flicker-free reconcile) until the server
+    // says it's done — otherwise the board freezes at the first card, or empty.
+    if(building || (!sections.length && boardRetries < 8)){
+      boardRetries++;
+      if(boardRetries < 45) setTimeout(()=>loadHome(true), 3500);
     }
-    boardRetries = 0; lastBrief = sections;
-    paintBrief();
   }
   async function addMemberLocal(){
     const p = (window.QP && QP.profile) || {};
@@ -1867,7 +1871,10 @@ window.QI18N = (function(){
   document.addEventListener('q:lang', function(){
     const lb=$('langBtn'); if(lb) lb.textContent='🌐 '+window.QI18N.get().toUpperCase();
     applyChrome();
-    try{ loadHome(true); }catch(e){}     // re-fetch the board in the new language
+    // Full board reset for the new language: drop old-language cards and restart the
+    // progressive poll cycle (a non-English brief builds cold and fills in over ~1-2 min).
+    lastBrief = []; boardRetries = 0; homeRendered = -1;
+    try{ loadHome(true); }catch(e){}
   });
   applyChrome();
   buildLangSwitcher();

@@ -899,7 +899,10 @@ _SUMSTOP = set(("the a an and or but of to in on for with from by at as is are w
     "has been have been will be").split())
 
 def _sig_tokens(s):
-    return set(w for w in re.findall(r"[a-z0-9']+", (s or '').lower()) if w not in _SUMSTOP and len(w) > 2)
+    # Unicode-aware: keep Cyrillic/Arabic/accented letters too, not just a-z0-9 —
+    # otherwise non-Latin summaries tokenize to nothing and every quality check
+    # (headline-restatement, specificity) misfires and rejects them.
+    return set(w for w in re.findall(r"[^\W_]+", (s or '').lower()) if w not in _SUMSTOP and len(w) > 2)
 
 def _banned_summary(s):
     low = (s or '').lower()
@@ -1056,7 +1059,10 @@ def make_summary(title, source='', section='', url='', desc='', longer=False, bo
                   'this event using the headline, snippet and your knowledge of it. Name the who/what/where. Do '
                   'not apologize or say you lack information.'
                   % (section, source, title, desc or '(none)'), strict=True, longer=longer, lang=lang)
-        if _ok_summary(s, title): return s, True
+        # The specificity floor is an English-biased hallucination guard (it looks for
+        # Latin proper nouns / digits), so it rejects almost all non-Latin summaries.
+        # For non-English, trust the banned-phrase + headline-restatement gates instead.
+        if _ok_summary(s, title, require_specifics=(lang == 'en')): return s, True
         attempts.append(s)
     except Exception: pass
     # Safety net — best attempt that is at least a real, non-restatement sentence;
@@ -3531,6 +3537,13 @@ class Handler(SimpleHTTPRequestHandler):
             if not msgs:
                 self._send_json({'error': 'empty', 'reply': 'I received an empty transmission, sir.'}, 400); return
             extra = ''
+            lang = norm_lang(data.get('lang') or 'en')
+            if lang != 'en':
+                pl = LANGS.get(lang, {}).get('plang', 'the user\'s language')
+                extra += (" LANGUAGE: The user's language is %s. You MUST reply ENTIRELY in %s — every sentence, "
+                          "including greetings and your butler courtesies; address the user politely in %s (not 'sir'). "
+                          "Never switch to English. Keep the final [LENS: keywords] tag in that exact bracket format; "
+                          "the keywords may be written in %s." % (pl, pl, pl, pl))
             ct = (data.get('clientTime') or '').strip()[:80]
             tz = (data.get('tz') or '').strip()[:60]
             if ct:
@@ -3651,7 +3664,8 @@ class Handler(SimpleHTTPRequestHandler):
             if lang != 'en':
                 ensure_brief_lang(lang)          # lazy background build; fills on subsequent fetches
             self._send_json({'sections': store['sections'], 't': store['t'],
-                             'rumble': RUMBLE['items'], 'lang': lang})
+                             'rumble': RUMBLE['items'], 'lang': lang,
+                             'building': (lang != 'en' and lang in BRIEF_BUILDING)})
         elif self.path.startswith('/sponsors'):
             try: items = get_sponsors()
             except Exception: items = []
