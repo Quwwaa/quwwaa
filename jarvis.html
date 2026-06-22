@@ -797,18 +797,33 @@
       +'<button class="gbtn" id="mfaGo" style="background:var(--green);color:#05140b;border:none">Authenticate</button>'
       +'<button style="all:unset;color:var(--amber);font-size:11px;cursor:pointer;margin-top:12px" id="mfaRecover">Lost your authenticator? Use a recovery code</button>'
       +'<button style="all:unset;color:var(--dim);font-size:11px;cursor:pointer;margin-top:8px" id="mfaSignOut">Sign out</button></div></div>';
+    var authing=false;
     var doAuth=async function(){
-      var code=($('#mfaCode').value||'').replace(/\s/g,'');
+      if(authing) return;
+      var code=($('#mfaCode').value||'').replace(/\D/g,'');
+      var btn=$('#mfaGo');
       if(code.length!==6){ $('#mfaErr').textContent='Enter the 6-digit code.'; return; }
-      var factors=await sb.auth.mfa.listFactors();
-      var fid=(((factors.data||{}).totp)||[])[0] && factors.data.totp[0].id;
-      if(!fid){ $('#mfaErr').textContent='No factor found — contact admin.'; return; }
-      var ch=await sb.auth.mfa.challenge({factorId:fid});
-      if(ch.error){ $('#mfaErr').textContent=ch.error.message; return; }
-      var v=await sb.auth.mfa.verify({factorId:fid,challengeId:ch.data.id,code:code});
-      if(v.error){ $('#mfaErr').textContent='Incorrect code.'; return; }
-      token=v.data.session.access_token; _stepUpAt=Date.now(); mfaNeedsEnroll=false;
-      refresh(false);
+      authing=true; btn.disabled=true; btn.textContent='Authenticating…'; $('#mfaErr').textContent='';
+      var fail=function(m){ authing=false; btn.disabled=false; btn.textContent='Authenticate'; $('#mfaErr').textContent=m||'Couldn\'t authenticate — try again.'; };
+      try{
+        try{ await sb.auth.refreshSession(); }catch(e){}
+        var factors=await sb.auth.mfa.listFactors();
+        if(factors.error) throw factors.error;
+        var totp=((factors.data||{}).totp)||[];
+        var fid=totp[0] && totp[0].id;
+        if(!fid){ fail('No authenticator enrolled — use a recovery code.'); return; }
+        var ch=await sb.auth.mfa.challenge({factorId:fid});
+        if(ch.error){ fail(ch.error.message||'Could not start a challenge.'); return; }
+        var v=await sb.auth.mfa.verify({factorId:fid,challengeId:ch.data.id,code:code});
+        if(v.error){
+          var m=((v.error.message||'')+'').toLowerCase();
+          fail(m.indexOf('expired')>=0 ? 'That code expired — wait for the next one and retry.'
+                                       : 'Incorrect code. Check your authenticator app\'s clock is synced, then retry.');
+          return;
+        }
+        if(v.data&&v.data.session&&v.data.session.access_token){ token=v.data.session.access_token; }
+        _stepUpAt=Date.now(); mfaNeedsEnroll=false; refresh(false);
+      }catch(e){ fail((e&&e.message)||'Authentication error — try again, or use a recovery code.'); }
     };
     $('#mfaGo').onclick=doAuth;
     $('#mfaCode').addEventListener('keydown',function(e){ if(e.key==='Enter') doAuth(); });
@@ -860,17 +875,38 @@
       document.body.appendChild(sheet); requestAnimationFrame(function(){ sheet.classList.add('open'); });
       var close=function(ok){ sheet.classList.remove('open'); setTimeout(function(){ try{sheet.remove();}catch(e){} },220); resolve(ok); };
       $('#suCancel',sheet).onclick=function(){ close(false); };
+      var busy=false;
       var doStepUp=async function(){
-        var code=($('#suCode',sheet).value||'').replace(/\s/g,'');
-        if(code.length!==6){ $('#suErr',sheet).textContent='Enter 6 digits.'; return; }
-        var factors=await sb.auth.mfa.listFactors();
-        var fid=(((factors.data||{}).totp)||[])[0] && factors.data.totp[0].id;
-        if(!fid){ $('#suErr',sheet).textContent='No factor found.'; return; }
-        var ch=await sb.auth.mfa.challenge({factorId:fid});
-        if(ch.error){ $('#suErr',sheet).textContent=ch.error.message; return; }
-        var v=await sb.auth.mfa.verify({factorId:fid,challengeId:ch.data.id,code:code});
-        if(v.error){ $('#suErr',sheet).textContent='Incorrect code.'; return; }
-        token=v.data.session.access_token; _stepUpAt=Date.now(); close(true);
+        if(busy) return;
+        var code=($('#suCode',sheet).value||'').replace(/\D/g,'');
+        var err=$('#suErr',sheet), btn=$('#suGo',sheet);
+        if(code.length!==6){ err.textContent='Enter the 6-digit code.'; return; }
+        busy=true; btn.disabled=true; btn.textContent='Verifying…'; err.textContent='';
+        var fail=function(m){ busy=false; btn.disabled=false; btn.textContent='Confirm'; err.textContent=m||'Verification failed — try again.'; };
+        try{
+          // The session token can be expired (autorefresh may lag in a PWA) — a
+          // throw here used to silently no-op the button. Refresh first, then verify.
+          try{ await sb.auth.refreshSession(); }catch(e){}
+          var factors=await sb.auth.mfa.listFactors();
+          if(factors.error) throw factors.error;
+          var totp=((factors.data||{}).totp)||[];
+          var fid=totp[0] && totp[0].id;
+          if(!fid){ fail('No authenticator enrolled.'); return; }
+          var ch=await sb.auth.mfa.challenge({factorId:fid});
+          if(ch.error){ fail(ch.error.message||'Could not start a challenge.'); return; }
+          var v=await sb.auth.mfa.verify({factorId:fid,challengeId:ch.data.id,code:code});
+          if(v.error){
+            // Already stepped up? Accept a strong session rather than blocking.
+            var lvl=await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+            if(((lvl.data||{}).currentLevel)==='aal2'){ _stepUpAt=Date.now(); close(true); return; }
+            var m=((v.error.message||'')+'').toLowerCase();
+            fail(m.indexOf('expired')>=0 ? 'That code expired — wait for the next one and retry.'
+                                         : 'Incorrect code. Check your authenticator app\'s clock is synced, then retry.');
+            return;
+          }
+          if(v.data&&v.data.session&&v.data.session.access_token){ token=v.data.session.access_token; }
+          _stepUpAt=Date.now(); close(true);
+        }catch(e){ fail((e&&e.message)||'Verification error — try again.'); }
       };
       $('#suGo',sheet).onclick=doStepUp;
       $('#suCode',sheet).addEventListener('keydown',function(e){ if(e.key==='Enter') doStepUp(); });
