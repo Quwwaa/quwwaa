@@ -544,10 +544,19 @@ def _is_article_url(u):
 # whether the brand is in the headline, the outlet, the URL, or the blurb.
 BLOCKED_TERMS = ('polymarket', 'kalshi')
 
+# Outlets barred for repeated misinformation — never surfaced anywhere the feed is
+# built. Matched against the article's SOURCE name and URL only (not its body), so we
+# drop stories FROM the outlet, not stories that merely mention it. Add lowercase
+# source-name and/or domain fragments here to block another outlet.
+BLOCKED_SOURCES = ('cleveland jewish news', 'clevelandjewishnews.com')
+
 def _is_blocked_article(a):
-    """True if a story is about a blocked gambling market (case-insensitive,
-    matches brand in title / source / url / any blurb field)."""
+    """True if a story is about a blocked topic (gambling markets, matched in any
+    field) or comes FROM a blocked outlet (matched on source name / URL)."""
     try:
+        src = (str(a.get('source') or '') + ' ' + str(a.get('url') or '')).lower()
+        if any(s in src for s in BLOCKED_SOURCES):
+            return True
         hay = ' '.join(str(a.get(k) or '') for k in
                        ('title', 'source', 'url', 'snippet', 'summary', 'desc', 'description')).lower()
     except Exception:
