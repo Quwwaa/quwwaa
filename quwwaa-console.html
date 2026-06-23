@@ -3882,22 +3882,39 @@ window.QI18N = (function(){
         setInterval(function(){ items[i].style.opacity='0'; i=(i+1)%items.length; items[i].style.opacity='1'; }, 5000);
       }
     } else {
-      var build=function(){ list.forEach(function(s){ trackEl.appendChild(itemEl(s)); }); };
-      build(); build();                                     // duplicate so translateX(-50%) loops seamlessly
-      trackEl.classList.add('run');
+      var addPass=function(){ list.forEach(function(s){ trackEl.appendChild(itemEl(s)); }); };
+      addPass();                                            // one base pass, just to measure its width
       requestAnimationFrame(function(){
-        var w=trackEl.scrollWidth/2;                        // one copy's width (incl trailing margin)
-        trackEl.style.animationDuration=Math.max(14, Math.round(w/40))+'s';   // ~40px/s, calm
+        var viewW=(view.getBoundingClientRect().width)||strip.getBoundingClientRect().width||0;
+        var baseW=trackEl.scrollWidth||1;
+        // Repeat the list until ONE copy spans the full viewport, so the ticker fills
+        // the whole screen (no empty gap on wide desktops); then duplicate that copy so
+        // the -50% loop stays seamless. With few sponsors on a wide screen this is the
+        // difference between "bunched on the left" and "scrolls across the screen".
+        var perCopy=Math.min(20, Math.max(1, Math.ceil((viewW+80)/baseW)));
+        trackEl.innerHTML='';
+        for(var k=0;k<perCopy*2;k++){ addPass(); }
+        var copyW=trackEl.scrollWidth/2;                    // one copy's width
+        trackEl.style.animationDuration=Math.max(14, Math.round(copyW/40))+'s';   // ~40px/s, calm
+        trackEl.classList.add('run');
       });
       // Intentionally no hover/touch pause — the ticker scrolls constantly.
     }
     list.forEach(function(s){ if(s && s.id && !alreadyImpressed(s.id)) track(s.id,'impression'); });
   }
 
+  var currentList=null;
   fetch('/sponsors',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
     var list=(d&&d.sponsors)||[];
-    if(list.length) render(list);
+    if(list.length){ currentList=list; render(list); }
   }).catch(function(){});
+  // Re-fill on resize so the ticker keeps spanning the full width after a window
+  // resize / orientation change (debounced).
+  var rzT=null;
+  window.addEventListener('resize', function(){
+    if(!currentList) return;
+    clearTimeout(rzT); rzT=setTimeout(function(){ render(currentList); }, 250);
+  });
 })();
 </script>
 </body>
