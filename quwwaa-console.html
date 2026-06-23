@@ -329,6 +329,14 @@
   .qartback { background:none; border:1px solid rgba(217,128,38,.4); color:#ffce9a; border-radius:8px;
               padding:7px 14px; font:inherit; font-size:13px; cursor:pointer; }
   .qartback:hover { background:rgba(217,128,38,.14); }
+  .qartactions { display:flex; align-items:center; gap:8px; }
+  .qartshare { background:none; border:1px solid rgba(217,128,38,.4); color:#ffce9a; border-radius:8px;
+               padding:7px 14px; font:inherit; font-size:13px; cursor:pointer; }
+  .qartshare:hover { background:rgba(217,128,38,.14); }
+  #qShareToast { position:fixed; left:50%; bottom:calc(26px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+                 background:#000; color:#ffe9d6; border:1px solid rgba(217,128,38,.5); border-radius:999px;
+                 padding:9px 16px; font-size:13px; z-index:60; opacity:0; transition:opacity .2s; pointer-events:none; }
+  #qShareToast.show { opacity:1; }
   .qartscroll { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
   .qartinner { max-width:760px; margin:0 auto; padding:6px 22px calc(150px + env(safe-area-inset-bottom)); }
   .qarthero { border-radius:14px; overflow:hidden; margin-bottom:16px; }
@@ -1710,7 +1718,8 @@ window.QI18N = (function(){
     artEl=document.createElement('div'); artEl.id='qart';
     artEl.innerHTML =
       '<div class="qartbar"><button class="qartback" aria-label="Back">‹ '+T('art.back')+'</button>'
-      +'<button class="qarttrack" style="display:none">★ '+T('art.track')+'</button></div>'
+      +'<div class="qartactions"><button class="qartshare" style="display:none" aria-label="Share">↗ Share</button>'
+      +'<button class="qarttrack" style="display:none">★ '+T('art.track')+'</button></div></div>'
       +'<div class="qartscroll"><div class="qartinner">'
       +'<div class="qarthero"></div><div class="qartlabel"></div><h1 class="qarttitle"></h1>'
       +'<div class="qartmeta"></div>'
@@ -1719,10 +1728,40 @@ window.QI18N = (function(){
       +'<div class="qartbody"></div></div></div>';
     document.body.appendChild(artEl);
     artEl.querySelector('.qartback').onclick=closeArticle;
+    artEl.querySelector('.qartshare').onclick=shareStory;
     artEl.querySelectorAll('.qtab').forEach(b=> b.onclick=()=> setArtTab(b.getAttribute('data-t')) );
     return artEl;
   }
   function closeArticle(){ artReq++; if(artEl) artEl.classList.remove('open'); }
+  // ---------- share (login-gated; Phase 1 of story permalinks) ----------
+  function loggedIn(){ try{ return !!(window.QP && QP.token); }catch(e){ return false; } }
+  function shareToast(m){
+    let t=document.getElementById('qShareToast');
+    if(!t){ t=document.createElement('div'); t.id='qShareToast'; document.body.appendChild(t); }
+    t.textContent=m; t.classList.add('show'); clearTimeout(t._h);
+    t._h=setTimeout(()=>t.classList.remove('show'), 2200);
+  }
+  function updateShareBtn(){
+    const b = artEl && artEl.querySelector('.qartshare'); if(!b) return;
+    b.style.display = (curArt && curArt.story_id) ? '' : 'none';   // appears once the story has a permalink id
+  }
+  function shareStory(){
+    if(!curArt || !curArt.story_id) return;
+    if(!loggedIn()){                       // engaging requires an account — this is the growth funnel
+      trk('share_login_prompt', {});
+      try{ QP.openFreeSignup ? QP.openFreeSignup() : (QP.openAuth && QP.openAuth()); }catch(e){}
+      return;
+    }
+    const url = location.origin + '/story/' + curArt.story_id;
+    const title = curArt.title || 'QUWWAA';
+    // record once per user (idempotent server-side) — fire and forget
+    try{ fetch('/story/share', {method:'POST', headers:{'content-type':'application/json','Authorization':'Bearer '+QP.token},
+         body: JSON.stringify({story_id: curArt.story_id})}).catch(()=>{}); }catch(e){}
+    trk('story_share', {story_id: curArt.story_id});
+    if(navigator.share){ navigator.share({title:title, url:url}).catch(()=>{}); }
+    else if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(url).then(()=>shareToast('Link copied')).catch(()=>shareToast(url)); }
+    else { shareToast(url); }
+  }
   function setArtTab(t){
     curTab=t;
     artEl.querySelectorAll('.qtab').forEach(b=> b.classList.toggle('active', b.getAttribute('data-t')===t));
@@ -1754,6 +1793,7 @@ window.QI18N = (function(){
   function lockShell(inner){
     artEl.querySelector('.qarttabs').style.display='none';   // can't open the article
     const tb=artEl.querySelector('.qarttrack'); if(tb) tb.style.display='none';
+    const sb=artEl.querySelector('.qartshare'); if(sb) sb.style.display='none';
     const snip=esc(curArt.summary||curArt.title||'');
     artEl.querySelector('.qartbody').innerHTML=
       '<div class="qartlock"><div class="qartfade"><p>'+snip+'</p><p>'+snip+'</p></div>'
@@ -1802,6 +1842,7 @@ window.QI18N = (function(){
     artEl.querySelector('.qarttitle').textContent = x.title||'';
     artEl.querySelector('.qartmeta').textContent = (x.source||'')+(x.time?' · '+x.time:'');
     artEl.querySelector('.qarttabs').style.display='';
+    updateShareBtn();                                   // hidden until the story's permalink id arrives
     const tb=artEl.querySelector('.qarttrack');
     tb.style.display = isMemberNow() ? '' : 'none';     // Track is a Gold feature
     tb.onclick = ()=>{ if(window.QUWWAA_trackPriority) window.QUWWAA_trackPriority(curArt); };
@@ -1817,6 +1858,7 @@ window.QI18N = (function(){
     setArtTab('summary');                                            // shows the "reading…" placeholder
     const reqId=++artReq;
     const qs='?url='+encodeURIComponent(x.url||'')+'&title='+encodeURIComponent(x.title||'')+'&source='+encodeURIComponent(x.source||'')
+      +'&image='+encodeURIComponent(x.image||'')
       +'&day='+encodeURIComponent(localDay())+'&month='+encodeURIComponent(localMonth())+'&lang='+window.QI18N.get();
     const headers={}; try{ if(window.QP && QP.token) headers['Authorization']='Bearer '+QP.token; }catch(e){}
     fetch('/article'+qs, {cache:'no-store', headers}).then(r=> r.ok ? r.json() : null).then(d=>{
@@ -1827,6 +1869,8 @@ window.QI18N = (function(){
         return;
       }
       curData = (d && !d.error) ? d : {summary:(x.summary||''), grounded:false, related:[]};
+      if(d && d.story_id) curArt.story_id = d.story_id;       // stable permalink id for the share button
+      updateShareBtn();
       renderArtBody();
       try{ document.dispatchEvent(new CustomEvent('quwwaa:engaged')); }catch(e){}   // read an article → A2HS may prompt (engagement gate)
     }).catch(()=>{ if(reqId!==artReq) return; curData={summary:(x.summary||''), grounded:false, related:[]}; renderArtBody(); });

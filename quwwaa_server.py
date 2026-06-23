@@ -997,7 +997,64 @@ def related_articles(title, source, exclude_url, n=4, lang='en'):
             break
     return out
 
-def build_article(url, title, source, lang='en'):
+# --- Story permalink persistence (Phase 1) ---------------------------------
+# Every opened story gets a stable, shareable home at /story/<id>. The id is
+# DETERMINISTIC from the canonical source URL, so the same story shown on the
+# board and inside a lens resolves to one row (no read-before-write dedupe).
+STORY_INDEX_POLICY = os.environ.get('STORY_INDEX_POLICY', 'all').strip().lower()   # 'all' | 'engaged'
+STORY_ENGAGED_MIN = int(os.environ.get('STORY_ENGAGED_MIN', '3'))                  # 'engaged': index once score >= this
+_TRACK_PARAM = re.compile(r'^(utm_|fbclid$|gclid$|mc_|mc_eid$|ref$|ref_|igshid$|si$|spm$|cmpid$|ncid$|_hsenc|_hsmi)', re.I)
+_B62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+
+def _b62(n):
+    s = ''
+    while n:
+        n, r = divmod(n, 62); s = _B62[r] + s
+    return s or '0'
+
+def _canon_story_url(url):
+    """Working outbound URL, canonicalized: lowercase host, drop fragment + tracking params."""
+    try:
+        p = urllib.parse.urlsplit((url or '').strip())
+        if not p.scheme.lower().startswith('http'):
+            return (url or '').strip()
+        q = [(k, v) for (k, v) in urllib.parse.parse_qsl(p.query, keep_blank_values=True)
+             if not _TRACK_PARAM.match(k)]
+        path = p.path.rstrip('/') or '/'
+        return urllib.parse.urlunsplit((p.scheme.lower(), p.netloc.lower(), path, urllib.parse.urlencode(q), ''))
+    except Exception:
+        return (url or '').strip()
+
+def story_id_for(url):
+    """Short opaque id derived from the canonical URL (same story → same id)."""
+    canon = _canon_story_url(url)
+    return _b62(int.from_bytes(hashlib.sha1(canon.encode('utf-8')).digest()[:8], 'big'))[:11]
+
+def _slugify(s):
+    return re.sub(r'[^a-z0-9]+', '-', (s or '').lower()).strip('-')[:60].rstrip('-')
+
+def persist_story(url, title, source, summary, image='', lang='en', lens=''):
+    """Upsert one canonical news_stories row when a story's summary is generated.
+    Returns the short story id, or None if the url isn't a real article. Best-effort:
+    the id is deterministic, so it's returned even if the DB write fails. Does NOT
+    touch is_indexed (the nightly job owns that) so it can't clobber the SEO flag."""
+    canon = _canon_story_url(url)
+    if not canon.lower().startswith('http'):
+        return None
+    sid = story_id_for(url)
+    row = {'id': sid, 'slug': _slugify(title), 'source_url': canon, 'source_name': source or '',
+           'headline': title or '', 'summary': summary or '', 'image_url': image or '',
+           'lang': lang or 'en', 'updated_at': datetime.now(timezone.utc).isoformat()}
+    if lens:
+        row['lenses'] = [lens]
+    try:
+        sb_rest('POST', 'news_stories?on_conflict=id', row,
+                prefer='resolution=merge-duplicates,return=minimal')
+    except Exception:
+        pass
+    return sid
+
+def build_article(url, title, source, lang='en', image=''):
     """Grounded summary + related coverage for one article, cached by URL+lang so
     re-opening the same story never re-spends AI credits and each language keeps
     its own in-language summary."""
@@ -1012,6 +1069,10 @@ def build_article(url, title, source, lang='en'):
     summary, degraded = make_summary(title, source, '', url, desc, longer=True, body=body, neighbors=neighbors, lang=lang)
     payload = {'url': url, 'title': title, 'source': source, 'summary': summary,
                'grounded': (not degraded), 'related': related_articles(title, source, url, lang=lang)}
+    # Give the opened story a permanent home (/story/<id>) + an id for the share button.
+    if summary and url and url.startswith('http'):
+        try: payload['story_id'] = persist_story(url, title, source, summary, image=image, lang=lang)
+        except Exception: pass
     if summary and url:
         if len(ARTICLE_CACHE) > 500:                          # cap memory
             for k in list(ARTICLE_CACHE)[:120]:
@@ -2531,15 +2592,145 @@ def maybe_send_brief_push():
         pass
 
 
+def story_index_recompute():
+    """Recompute is_indexed per STORY_INDEX_POLICY. 'all' (Phase-1 default) keeps every
+    story indexed — a no-op since the column defaults true. 'engaged' indexes only
+    stories whose buzz score crosses STORY_ENGAGED_MIN (the lever to avoid thin-content
+    dilution as volume grows). Never deletes anything."""
+    if STORY_INDEX_POLICY != 'engaged':
+        return
+    try:
+        sb_rest('PATCH', 'news_stories?score=gte.%d&is_indexed=eq.false' % STORY_ENGAGED_MIN,
+                {'is_indexed': True}, prefer='return=minimal')
+        sb_rest('PATCH', 'news_stories?score=lt.%d&is_indexed=eq.true' % STORY_ENGAGED_MIN,
+                {'is_indexed': False}, prefer='return=minimal')
+    except Exception:
+        pass
+
+def story_index_loop():
+    while True:
+        try: story_index_recompute()
+        except Exception: pass
+        time.sleep(int(os.environ.get('STORY_INDEX_POLL_SEC', '86400')))   # nightly
+
+def get_story(sid):
+    """Fetch one persisted story row by short id (None if missing)."""
+    try:
+        rows = sb_rest('GET', 'news_stories?id=eq.%s&limit=1' % urllib.parse.quote(sid or ''))
+        return (rows or [None])[0]
+    except Exception:
+        return None
+
+def story_canonical_path(s):
+    slug = s.get('slug') or _slugify(s.get('headline') or '')
+    return '/story/' + s['id'] + (('/' + slug) if slug else '')
+
+def render_story_page(s):
+    """Server-rendered permalink page: real HTML + per-story canonical/OG/Twitter meta
+    so share-preview bots and Google see the content without running JS. Public (no
+    paywall). Shows QUWWAA's own summary and links out to the source — not the source's
+    article text — so it isn't thin/duplicate content."""
+    e = html.escape
+    sid = s['id']
+    headline = (s.get('headline') or 'Story').strip()
+    summary = (s.get('summary') or '').strip()
+    source = (s.get('source_name') or 'the source').strip()
+    src_url = s.get('source_url') or '#'
+    image = s.get('image_url') or ''
+    canon = SITE_URL + '/story/' + sid
+    robots = 'index,follow' if s.get('is_indexed', True) else 'noindex,follow'
+    desc = re.sub(r'\s+', ' ', summary).strip()[:200]
+    pub = s.get('published_at') or s.get('first_seen_at') or ''
+    try:
+        dt = datetime.fromisoformat(str(pub).replace('Z', '+00:00'))
+        date_disp = dt.strftime('%B %d, %Y'); date_iso = dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+    except Exception:
+        date_disp = ''; date_iso = ''
+    paras = ''.join('<p>' + e(p.strip()) + '</p>' for p in re.split(r'\n+', summary) if p.strip()) or ('<p>' + e(headline) + '</p>')
+    ld = json.dumps({'@context': 'https://schema.org', '@type': 'NewsArticle', 'headline': headline,
+                     'description': desc, 'image': ([image] if image else []), 'datePublished': date_iso,
+                     'mainEntityOfPage': canon, 'publisher': {'@type': 'Organization', 'name': 'QUWWAA',
+                     'logo': {'@type': 'ImageObject', 'url': SITE_URL + '/icon-512.png'}}})
+    H = []
+    H.append('<!DOCTYPE html><html lang="' + e(s.get('lang') or 'en') + '"><head><meta charset="UTF-8">')
+    H.append('<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">')
+    H.append('<title>' + e(headline) + ' · QUWWAA</title>')
+    H.append('<meta name="description" content="' + e(desc) + '">')
+    H.append('<meta name="robots" content="' + robots + '">')
+    H.append('<link rel="canonical" href="' + e(canon) + '">')
+    H.append('<link rel="icon" href="/favicon.ico" sizes="any"><link rel="apple-touch-icon" href="/apple-touch-icon.png">')
+    H.append('<meta property="og:type" content="article"><meta property="og:site_name" content="QUWWAA">')
+    H.append('<meta property="og:title" content="' + e(headline) + '">')
+    H.append('<meta property="og:description" content="' + e(desc) + '">')
+    H.append('<meta property="og:url" content="' + e(canon) + '">')
+    if image: H.append('<meta property="og:image" content="' + e(image) + '">')
+    if date_iso: H.append('<meta property="article:published_time" content="' + date_iso + '">')
+    H.append('<meta name="twitter:card" content="' + ('summary_large_image' if image else 'summary') + '">')
+    H.append('<meta name="twitter:title" content="' + e(headline) + '"><meta name="twitter:description" content="' + e(desc) + '">')
+    if image: H.append('<meta name="twitter:image" content="' + e(image) + '">')
+    H.append('<script type="application/ld+json">' + ld + '</script>')
+    H.append('<style>'
+        ':root{color-scheme:dark}*{box-sizing:border-box}'
+        'body{margin:0;background:#141414;color:#e7d3c0;font-family:Inter,-apple-system,BlinkMacSystemFont,system-ui,sans-serif;line-height:1.6}'
+        'a{color:#e89a5a}.wrap{max-width:680px;margin:0 auto;padding:0 22px 80px}'
+        'header{padding:18px 0;border-bottom:1px solid rgba(217,128,38,.22);text-align:center}'
+        'header a{font:500 30px Georgia,serif;color:#e08a32;text-decoration:none;letter-spacing:1px}'
+        '.label{font:600 12px Inter,sans-serif;color:#e08a32;letter-spacing:.5px;margin:26px 0 8px}'
+        'h1{font-family:Georgia,"Times New Roman",serif;font-weight:600;color:#fff3e9;font-size:30px;line-height:1.2;margin:0 0 10px}'
+        '.meta{font-size:13px;color:#a06a3a;margin-bottom:18px}'
+        '.hero{display:block;width:100%;max-height:380px;object-fit:cover;border-radius:14px;margin:0 0 18px}'
+        '.sum p{font-size:17px;color:#e7d3c0;margin:0 0 14px}'
+        '.src{margin:22px 0;padding:14px 16px;border:1px solid rgba(217,128,38,.28);border-radius:12px;background:rgba(217,128,38,.06);font-size:14px}'
+        '.src a{font-weight:600}'
+        '.row{display:flex;gap:10px;align-items:center;margin:22px 0}'
+        '.btn{cursor:pointer;border:1px solid rgba(217,128,38,.5);background:rgba(217,128,38,.10);color:#ffce9a;border-radius:10px;padding:11px 16px;font:600 14px Inter,sans-serif}'
+        '.cta{margin-top:30px;padding:22px;border:1px solid rgba(217,128,38,.4);border-radius:16px;text-align:center;background:linear-gradient(180deg,rgba(40,28,18,.5),rgba(18,13,9,.9))}'
+        '.cta h3{font-family:Georgia,serif;color:#ffd9c4;margin:0 0 6px}.cta p{color:#e7c4a6;font-size:14px;margin:0 0 14px}'
+        '.go{display:inline-block;background:linear-gradient(135deg,#e89a4a,#c06a18);color:#1c1206;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:11px}'
+        '.foot{margin-top:30px;font-size:12px;color:#6a4a2a;text-align:center}'
+        '#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#000;color:#ffe9d6;border:1px solid rgba(217,128,38,.5);border-radius:999px;padding:9px 16px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}'
+        '</style></head><body><div class="wrap">')
+    H.append('<header><a href="' + SITE_URL + '/">quwwaa</a></header>')
+    H.append('<div class="label">◈ QUWWAA NEWS LENS</div>')
+    H.append('<h1>' + e(headline) + '</h1>')
+    H.append('<div class="meta">' + e(source) + (' · ' + date_disp if date_disp else '') + '</div>')
+    if image: H.append('<img class="hero" src="' + e(image) + '" alt="">')
+    H.append('<div class="sum">' + paras + '</div>')
+    H.append('<div class="src">QUWWAA\'s summary, drawn from reporting by ' + e(source) + '. '
+             '<a href="' + e(src_url) + '" rel="nofollow noopener" target="_blank">Read the full story at ' + e(source) + ' &rarr;</a></div>')
+    H.append('<div class="row"><button class="btn" id="shareBtn">Share</button></div>')
+    H.append('<!-- Phase 2: reaction buttons / counts mount here -->')
+    H.append('<div class="cta"><h3>The world, made simple.</h3><p>QUWWAA is your AI news butler — a personalized brief and assistant for the stories you care about.</p>'
+             '<a class="go" href="' + SITE_URL + '/">See more on QUWWAA — create a free account</a></div>')
+    H.append('<div class="foot"><a href="' + SITE_URL + '/">QUWWAA</a> · <a href="' + SITE_URL + '/privacy">Privacy</a> · <a href="' + SITE_URL + '/terms">Terms</a></div>')
+    H.append('<div id="toast"></div>')
+    H.append('<script>(function(){var u=' + json.dumps(canon) + ',t=' + json.dumps(headline) + ';'
+             'function toast(m){var x=document.getElementById("toast");x.textContent=m;x.style.opacity="1";setTimeout(function(){x.style.opacity="0";},2200);}'
+             'document.getElementById("shareBtn").onclick=function(){'
+             'if(navigator.share){navigator.share({title:t,url:u}).catch(function(){});}'
+             'else if(navigator.clipboard){navigator.clipboard.writeText(u).then(function(){toast("Link copied — create a free QUWWAA account to react & track stories");});}'
+             'else{toast(u);}};})();</script>')
+    H.append('</div></body></html>')
+    return ''.join(H)
+
 def build_sitemap():
     """Sitemap of the real, crawlable pages with a current lastmod. Home carries a
-    trailing slash to match the canonical URL."""
+    trailing slash to match the canonical URL. Indexed story permalinks are appended."""
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     pages = [('/', 'daily', '1.0'), ('/privacy', 'monthly', '0.5'), ('/terms', 'monthly', '0.5')]
     rows = ''.join(
         '<url><loc>%s%s</loc><lastmod>%s</lastmod><changefreq>%s</changefreq><priority>%s</priority></url>'
         % (SITE_URL, ('/' if p == '/' else p), today, freq, prio)
         for p, freq, prio in pages)
+    try:
+        stories = sb_rest('GET', 'news_stories?is_indexed=eq.true&select=id,updated_at'
+                                 '&order=updated_at.desc&limit=5000') or []
+    except Exception:
+        stories = []
+    for st in stories:
+        lm = str(st.get('updated_at') or '')[:10] or today
+        rows += ('<url><loc>%s/story/%s</loc><lastmod>%s</lastmod><changefreq>weekly</changefreq>'
+                 '<priority>0.6</priority></url>' % (SITE_URL, st['id'], lm))
     return ('<?xml version="1.0" encoding="UTF-8"?>'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + rows + '</urlset>')
 
@@ -2610,6 +2801,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._handle_sponsor_event()
         if self.path.startswith('/rumble-event'):
             return self._handle_rumble_event()
+        if self.path.startswith('/story/share'):
+            return self._handle_story_share()
         self.send_error(404)
 
     def _handle_sponsor_event(self):
@@ -2633,6 +2826,31 @@ class Handler(SimpleHTTPRequestHandler):
             try: rumble_bump(url, d.get('title') or '', kind)
             except Exception: pass
         self._send_json({'ok': True})
+
+    def _handle_story_share(self):
+        """Record a login-gated share once per (user, story). Sets up Phase-2 scoring
+        (share = 3 pts, counted once/user) with no rework; bumps the share count on a
+        genuinely new share. Requires a signed-in user — engagement needs an account."""
+        u = auth_user(self)
+        uid = u and u.get('id')
+        if not uid:
+            self._send_json({'error': 'login_required'}, 401); return
+        d = self._read_json()
+        sid = (d.get('story_id') or '').strip()
+        if not sid:
+            self._send_json({'error': 'missing_story'}, 400); return
+        try:
+            # Idempotent: unique index on (user_id, story_id, type) for non-comment types.
+            # return=representation → a row comes back only on a genuinely new insert.
+            rows = sb_rest('POST', 'story_engagement?on_conflict=user_id,story_id,type',
+                           {'user_id': uid, 'story_id': sid, 'type': 'share'},
+                           prefer='resolution=ignore-duplicates,return=representation')
+            if rows:                                  # first share by this user → bump the counter
+                try: sb_rest('POST', 'rpc/story_bump_share', {'p_story_id': sid})
+                except Exception: pass
+            self._send_json({'ok': True})
+        except Exception as e:
+            self._send_json({'error': type(e).__name__}, 500)
 
     def _handle_sync_account(self):
         """Keep downstream services on the account's current login email — used
@@ -3092,6 +3310,19 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_text('User-agent: *\nAllow: /\nSitemap: %s/sitemap.xml\n' % SITE_URL)
         elif self.path == '/sitemap.xml':
             self._send_text(build_sitemap(), content_type='application/xml; charset=utf-8')
+        elif self.path.startswith('/story/'):
+            # Public, server-rendered story permalink (no paywall). Look up by id only;
+            # redirect to the canonical id+slug path if the request's slug differs.
+            base = urllib.parse.urlparse(self.path).path
+            parts = [p for p in base.split('/') if p]      # ['story', '<id>', '<slug?>']
+            sid = parts[1] if len(parts) >= 2 else ''
+            story = get_story(sid) if sid else None
+            if not story:
+                self.send_error(404); return
+            canonical = story_canonical_path(story)
+            if base.rstrip('/') != canonical.rstrip('/'):
+                self.send_response(301); self.send_header('Location', canonical); self.end_headers(); return
+            self._send_text(render_story_page(story), content_type='text/html; charset=utf-8', max_age=300)
         elif self.path.startswith('/config'):
             # public config only — the page boots Supabase + Stripe.js from these
             self._send_json({'supabaseUrl': SUPABASE_URL, 'supabaseAnonKey': SUPABASE_ANON_KEY,
@@ -3165,6 +3396,7 @@ class Handler(SimpleHTTPRequestHandler):
             day = (qs.get('day') or [''])[0].strip()       # client's LOCAL date/month for the meter
             month = (qs.get('month') or [''])[0].strip()
             lang = norm_lang((qs.get('lang') or ['en'])[0])  # summarize + relate in the reader's language
+            image = (qs.get('image') or [''])[0].strip()     # card thumbnail → story OG image
             if not (url or title):
                 self._send_json({'error': 'missing'}, 400); return
             # ONE server-authoritative gate for every article open:
@@ -3187,7 +3419,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not article_rate_check(self._client_ip()):
                 self._send_json({'error': 'rate'}, 429); return
             try:
-                payload = build_article(url, title, source, lang=lang)
+                payload = build_article(url, title, source, lang=lang, image=image)
                 payload['meter'] = info
                 self._send_json(payload)
             except Exception as e:
@@ -3242,5 +3474,6 @@ if __name__ == '__main__':
     threading.Thread(target=prewarm, daemon=True).start()
     threading.Thread(target=priorities_loop, daemon=True).start()
     threading.Thread(target=brief_email_loop, daemon=True).start()
+    threading.Thread(target=story_index_loop, daemon=True).start()
     print('QUWWAA server on http://%s:%d (news lens active, prewarming home)' % (HOST, PORT))
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
