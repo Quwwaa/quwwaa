@@ -2621,10 +2621,6 @@ def get_story(sid):
     except Exception:
         return None
 
-def story_canonical_path(s):
-    slug = s.get('slug') or _slugify(s.get('headline') or '')
-    return '/story/' + s['id'] + (('/' + slug) if slug else '')
-
 def render_story_page(s):
     """Server-rendered permalink page: real HTML + per-story canonical/OG/Twitter meta
     so share-preview bots and Google see the content without running JS. Public (no
@@ -3319,8 +3315,8 @@ class Handler(SimpleHTTPRequestHandler):
             story = get_story(sid) if sid else None
             if not story:
                 self.send_error(404); return
-            canonical = story_canonical_path(story)
-            if base.rstrip('/') != canonical.rstrip('/'):
+            canonical = '/story/' + sid                    # canonical is slug-less; any slug 301s here
+            if base.rstrip('/') != canonical:
                 self.send_response(301); self.send_header('Location', canonical); self.end_headers(); return
             self._send_text(render_story_page(story), content_type='text/html; charset=utf-8', max_age=300)
         elif self.path.startswith('/config'):
