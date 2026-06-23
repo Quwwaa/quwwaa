@@ -1998,11 +1998,19 @@ window.QI18N = (function(){
     const tts = voiceOn ? makeTtsQueue() : null;
     const lensTag=/\[LENS:/;
     const visible=s=>{ const i=s.indexOf('[LENS:'); return i>=0 ? s.slice(0,i) : s; };
-    let full='', firstSpoken=false, spokenLen=0;
-    function maybeFirst(){
-      if(firstSpoken || !tts) return;
-      const v=visible(full); const m=v.match(/^[\s\S]*?[.!?](\s|$)/);
-      if(m && m[0].trim().length>1){ firstSpoken=true; spokenLen=m[0].length; tts.push(m[0]); }
+    let full='', spokenLen=0;
+    // Speak each COMPLETE sentence as it streams (not just the first). This lets the
+    // server's gap-filling line play the instant it arrives, and the grounded brief
+    // then flows sentence-by-sentence as it's generated.
+    function pumpTTS(finalize){
+      if(!tts) return;
+      const v=visible(full), rest=v.slice(spokenLen);
+      if(finalize){ const t=rest.trim(); if(t) tts.push(t); spokenLen=v.length; return; }
+      const m=rest.match(/^[\s\S]*[.!?]["'’)\]]?(?=\s|$)/);   // up to the last COMPLETE sentence
+      if(!m) return;
+      const seg=m[0], t=seg.trim();
+      if(t) tts.push(t);
+      spokenLen+=seg.length;
     }
     try{
       while(true){
@@ -2010,7 +2018,7 @@ window.QI18N = (function(){
         if(done) break;
         full += dec.decode(value, {stream:true});
         Caption.feed(visible(full));
-        maybeFirst();
+        pumpTTS(false);
       }
     }catch(e){ Caption.stop(); mode(''); return false; }
     if(!full.trim()){ Caption.stop(); mode(''); return false; }   // empty → fallback
@@ -2019,11 +2027,7 @@ window.QI18N = (function(){
     if(lm){ reply=reply.replace(lm[0],'').trim(); openLens(lm[1].trim(), lm[2]); }
     Caption.endStream();
     addMsg('jarvis', reply);
-    if(tts){
-      if(firstSpoken){ const rest=reply.slice(spokenLen).trim(); if(rest) tts.push(rest); }
-      else if(reply) tts.push(reply);
-      tts.done();
-    } else { speakDone(); }
+    if(tts){ pumpTTS(true); tts.done(); } else { speakDone(); }
     return true;
   }
 

@@ -3,7 +3,7 @@
 Sources: GDELT (tens of thousands of global outlets, keyless), Google News RSS,
 and Reddit. Results are fetched live, held in memory only, and never written
 to disk or any server."""
-import json, os, re, email.utils, html, base64, time
+import json, os, re, email.utils, html, base64, time, random
 import urllib.request, urllib.parse, urllib.error
 import xml.etree.ElementTree as ET
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -913,6 +913,41 @@ def butler_live_news(query, max_n=6):
             sources.append(src)
     block = "LIVE NEWS — retrieved just now, treat as current ground truth:\n" + "\n".join(lines)
     return block, sources[:4]
+
+# Reading the live coverage before answering adds a multi-second pause. To fill it,
+# the streaming butler speaks one of these warm, varied "working on it" lines FIRST
+# (personalized for a signed-in member, generic otherwise) while the retrieval runs —
+# so there's natural conversation instead of dead air. Varied so it never feels canned.
+_FILLER_TEMPLATES = [
+    "Absolutely%s — let me pull those up for you, and while I do, how's your day going?",
+    "Right away%s. Give me a moment to read through the reporting — how are you doing today?",
+    "Of course%s. I'm bringing the coverage up now; how's everything on your end?",
+    "On it%s — fetching the latest. This'll take just a few seconds, so bear with me.",
+    "Happy to%s. Let me get across the details first — how has your day been treating you?",
+    "Certainly%s — pulling the stories up now. Won't be a moment.",
+    "Good question%s. Let me gather what's being reported; how are you keeping today?",
+    "Let me bring up what's out there%s. One moment while I read through it properly.",
+    "Sure thing%s — the coverage is coming up on screen while I get across the details.",
+    "Let's have a look%s. Give me a few seconds to read the reporting before I weigh in.",
+    "Pulling that up now%s. How's your day shaping up so far?",
+    "Right then%s — let me dig into the latest. Won't keep you a moment.",
+    "Gladly%s. I'm reading through the coverage now; anything else on your mind today?",
+    "One moment%s while I bring up the reporting and get the details straight.",
+    "Looking into it now%s. How are things with you today?",
+    "Let me get into it%s — bringing the stories up and reading through them now.",
+]
+
+def _butler_filler(member):
+    """A short, warm, varied line to cover the news-retrieval pause. Uses the member's
+    first name only for a signed-in member who's chosen name-style; generic otherwise
+    (no 'sir'/'ma'am')."""
+    name = ''
+    try:
+        if member and (member.get('address_style') or 'name') == 'name':
+            name = (member.get('display_name') or '').split(' ')[0].strip()
+    except Exception:
+        name = ''
+    return random.choice(_FILLER_TEMPLATES) % ((', ' + name) if name else '')
 
 def summarize_article(title, desc, source):
     """A genuine, transformative 2-3 paragraph summary grounded strictly in the
@@ -2960,31 +2995,43 @@ class Handler(SimpleHTTPRequestHandler):
                 if ints:
                     extra += (" They follow these interests: %s. Let these WEIGHT your suggestions, but never narrow what "
                               "you will discuss - help with any topic they raise." % ints)
-            # --- Retrieval grounding: when the user asks about news, pull live coverage
-            # and inject it as ground truth so the butler answers FROM the reporting it
-            # just fetched (not its training memory) — killing false "I have no knowledge
-            # of that" disclaimers AND hallucinations. English live path only.
+            # --- Retrieval grounding (+ gap-filling chit-chat). For a news question we must
+            # read the live coverage before answering, which adds a multi-second pause. On
+            # the streaming path we first stream a short, warm, varied acknowledgment to
+            # fill that gap, THEN retrieve, THEN stream the grounded brief (and tell the
+            # model to skip its own ack since the filler covered it). English live path only.
             q = next((m['content'] for m in reversed(msgs) if m['role'] == 'user'), '')
-            if lang == 'en' and q and _looks_like_news(q):
+            is_news = bool(lang == 'en' and q and _looks_like_news(q))
+
+            def add_grounding(base, skip_ack):
+                """Retrieve live coverage for q and append grounding rules. `skip_ack` when a
+                filler line was already streamed (so the model shouldn't re-acknowledge)."""
+                if not is_news:
+                    return base
                 block, srcs = butler_live_news(q)
-                if block:
-                    extra += (
-                        "\n\n" + block +
-                        "\n\nGROUNDING — you have a training cutoff but are augmented with the LIVE NEWS above, "
-                        "retrieved in real time. For anything recent, rely ONLY on the provided articles, not your "
-                        "memory. NEVER tell the user you have no knowledge of, cannot verify, or are unsure an event "
-                        "happened when it appears in the provided articles — summarize it. Attribute claims to their "
-                        "source (e.g. 'According to AP…', 'Reuters reports…'). If coverage is thin or sources conflict, "
-                        "say what is confirmed versus still unclear, but do not deny the event. Do NOT mention your "
-                        "training cutoff or 'making assumptions' when articles are present. Only assert facts present in "
-                        "these articles. Open with a brief, warm, VARIED acknowledgment (never a fixed phrase), give the "
-                        "grounded spoken brief, then name the sources you drew on (e.g. 'Sources: %s' — the on-screen "
-                        "News Lens carries the clickable links). Still end with the [LENS: keywords] tag." % ', '.join(srcs))
-                else:
-                    extra += (
+                if not block:
+                    return base + (
                         "\n\nNO LIVE COVERAGE was retrieved for this query just now. If the user is asking about a "
                         "current event, tell them you don't see reporting on it yet and offer to pull the News Lens — "
-                        "do NOT invent details, and do NOT deny it from memory. Still end with the [LENS: keywords] tag.")
+                        "do NOT invent details, and do NOT deny it from memory. " +
+                        ("" if skip_ack else "Acknowledge briefly first. ") + "End with the [LENS: keywords] tag.")
+                ack_rule = ("The interface has ALREADY greeted the user and told them you're pulling up the coverage, so "
+                            "do NOT open with a greeting, 'let me pull that up', or any acknowledgment — begin directly "
+                            "with the substance."
+                            if skip_ack else
+                            "Open with a brief, warm, VARIED acknowledgment (never a fixed phrase).")
+                return base + (
+                    "\n\n" + block +
+                    "\n\nGROUNDING — you have a training cutoff but are augmented with the LIVE NEWS above, retrieved in "
+                    "real time. For anything recent, rely ONLY on the provided articles, not your memory. NEVER tell the "
+                    "user you have no knowledge of, cannot verify, or are unsure an event happened when it appears in the "
+                    "provided articles — summarize it. Attribute claims to their source (e.g. 'According to AP…', "
+                    "'Reuters reports…'). If coverage is thin or sources conflict, say what is confirmed versus still "
+                    "unclear, but do not deny the event. Do NOT mention your training cutoff or 'making assumptions' when "
+                    "articles are present. Only assert facts present in these articles. " + ack_rule + " Give the grounded "
+                    "spoken brief, then name the sources you drew on (e.g. 'Sources: %s' — the on-screen News Lens carries "
+                    "the clickable links). End with the [LENS: keywords] tag." % ', '.join(srcs))
+
             if data.get('stream'):                       # stream tokens for a snappy butler
                 # HTTP/1.1 chunked so the proxy forwards each token immediately
                 # (a plain HTTP/1.0 body gets buffered until close → no streaming).
@@ -3003,19 +3050,26 @@ class Handler(SimpleHTTPRequestHandler):
                     b = t.encode('utf-8')
                     self.wfile.write(b'%X\r\n' % len(b) + b + b'\r\n'); self.wfile.flush()
                     wrote[0] += len(t)
+                # Speak the gap-filling line FIRST (instant), THEN do the slow retrieval.
+                if is_news:
+                    try: _w(_butler_filler(member) + '\n\n')
+                    except Exception: pass
+                extra2 = add_grounding(extra, skip_ack=is_news)
                 try:
-                    full = anthropic_stream(msgs, extra, _w)
+                    full = anthropic_stream(msgs, extra2, _w)
                     if not full.strip() and wrote[0] == 0:
                         _w('I received an empty transmission.')
                 except Exception:
                     if wrote[0] == 0:
                         # streaming failed before any token → serve the full reply non-streamed
-                        try: _w(anthropic_chat(msgs, extra) or 'I received an empty transmission.')
+                        try: _w(anthropic_chat(msgs, extra2) or 'I received an empty transmission.')
                         except Exception: _w('I encountered a fault processing that.')
                 try: self.wfile.write(b'0\r\n\r\n'); self.wfile.flush()   # terminating chunk
                 except Exception: pass
                 return
-            reply = anthropic_chat(msgs, extra) or 'I received an empty transmission.'
+            # Non-stream (BYO-key / ElevenLabs / no-stream): one reply, model does its own ack.
+            extra2 = add_grounding(extra, skip_ack=False)
+            reply = anthropic_chat(msgs, extra2) or 'I received an empty transmission.'
             self._send_json({'reply': reply})
         except urllib.error.HTTPError as e:
             detail = ''
