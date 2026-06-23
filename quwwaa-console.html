@@ -1523,10 +1523,11 @@ window.QI18N = (function(){
     const arts = (d.articles || [])
       .map(a => Object.assign({}, a, {summary: a.summary || a.snippet || a.desc || ''}))
       .filter(a => !!teaser(a.summary));
-    const diag = d.diag ? ' · ' + Object.entries(d.diag).map(([k,v])=>k+' '+v).join(' / ') : '';
-    $('lensCount').textContent = (arts.length
-      ? arts.length + ' ' + T('lens.reports') + ' · ' + d.sources + ' ' + T('lens.sources') + ' · ' + T('lens.last_days').replace('%d', days)
-      : T('lens.none').replace('%d', days)) + diag;
+    // User-facing count only — no source tally and no per-source diag (the diag still
+    // rides along in the /news JSON for debugging, just isn't shown on the site).
+    $('lensCount').textContent = arts.length
+      ? arts.length + ' ' + T('lens.reports') + ' · ' + T('lens.last_days').replace('%d', days)
+      : T('lens.none').replace('%d', days);
     // illustrated reports first, text-only dispatches below — newest first within each
     arts.sort((a, b)=> ((b.image?1:0) - (a.image?1:0)) || ((b.ts||0) - (a.ts||0)));
     const body = $('lensBody');
