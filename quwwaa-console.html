@@ -3002,7 +3002,8 @@ window.QI18N = (function(){
     QP.ready=true;
     try{ const { data:{ session } } = await QP.sb.auth.getSession(); await onSession(session); }
     catch(e){ render(); }
-    QP.sb.auth.onAuthStateChange((_e,s)=>{ onSession(s); });
+    QP.sb.auth.onAuthStateChange((evt,s)=>{ onSession(s);
+      if(evt==='PASSWORD_RECOVERY' && QP.openSetPassword) QP.openSetPassword(); });   // returned via a reset/change-password link
     // Cross-browser bridge: Google One Tap, but ONLY for an anonymous session
     // (a same-browser returning user is already signed in via getSession above).
     if(!QP.user) initOneTap(cfg.googleClientId);
@@ -3324,6 +3325,7 @@ window.QI18N = (function(){
       +'<h2>Your account</h2>'
       +'<div id="qpSetBilling"></div>'           // plan state + manage/upgrade (conditional)
       +'<div id="qpSetEmail"></div>'             // account email + change
+      +'<div id="qpSetPw"></div>'               // password + change (email/pw accounts only)
       +'<label>What should I call you?</label><input id="qpSetName" type="text">'
       +'<label>Address style</label><div class="qpSeg" id="qpSetStyle">'
       +'<button data-as="sir">Sir</button><button data-as="madam">Madam</button><button data-as="name">By name</button></div>'
@@ -3384,6 +3386,13 @@ window.QI18N = (function(){
           : '<button class="qpGhost" id="qpChangeEmail" type="button" style="flex:0 0 auto;">Change</button>')
       +'</div>';
     const ce=$('qpChangeEmail'); if(ce) ce.onclick=changeEmail;
+    // --- Password (email/pw accounts only; OAuth has none to change) ---
+    $('qpSetPw').innerHTML = isOAuth ? '' :
+      '<label>Password</label>'
+      +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
+      +'<span style="font-size:14px;color:#b07a4a;flex:1 1 auto;letter-spacing:2px;">••••••••</span>'
+      +'<button class="qpGhost" id="qpChangePw" type="button" style="flex:0 0 auto;">Change</button></div>';
+    const cp=$('qpChangePw'); if(cp) cp.onclick=changePassword;
     $('qpSetName').value = p.display_name||p.first_name||'';
     $('qpSetCity').value = p.city||''; $('qpSetState').value = p.state||''; $('qpSetCountry').value = p.country||'';
     const seg=$('qpSetStyle'); seg.querySelectorAll('button').forEach(b=>{ b.classList.toggle('sel', b.getAttribute('data-as')===sel.address_style);
@@ -3402,9 +3411,55 @@ window.QI18N = (function(){
       const { error } = await QP.sb.auth.updateUser({ email: e });
       if(error){ msg.textContent=error.message||'Could not start the email change.'; return; }
       msg.className='qpMsg ok';
-      msg.textContent='Confirmation sent to '+e+'. Your email changes once you confirm via that link.';
+      msg.textContent='Confirmation links sent — check your current inbox ('+cur+') and the new one ('+e+'). The change takes effect only after you confirm.';
     }catch(err){ msg.textContent='Could not start the email change. Try again.'; }
   }
+  // Change password = email-confirmed reset: a link goes to the ORIGINAL account
+  // email; clicking it opens the "set new password" step (openSetPassword). Nothing
+  // changes until they confirm via that link.
+  async function changePassword(){
+    const msg=$('qpSetMsg'); msg.className='qpMsg'; msg.textContent='';
+    const cur=(QP.user&&QP.user.email)||'';
+    if(!cur){ msg.textContent='No account email on file.'; return; }
+    if(!(QP.sb&&QP.sb.auth&&QP.sb.auth.resetPasswordForEmail)) return;
+    try{
+      const { error } = await QP.sb.auth.resetPasswordForEmail(cur, { redirectTo: location.origin });
+      if(error){ msg.textContent=error.message||'Could not start the password change.'; return; }
+      msg.className='qpMsg ok';
+      msg.textContent='Confirmation sent to '+cur+'. Click the link in that email to set your new password.';
+    }catch(e){ msg.textContent='Could not start the password change. Try again.'; }
+  }
+  // Recovery landing: shown when the user returns via a reset/change-password link
+  // (Supabase fires a PASSWORD_RECOVERY session). They set the new password here.
+  function openSetPassword(){
+    let ov=$('qpPwReset');
+    if(!ov){
+      ov=document.createElement('div'); ov.id='qpPwReset'; ov.className='qpOv';
+      ov.innerHTML='<div class="qpCard" style="position:relative"><button class="qpX" data-x type="button">✕</button>'
+        +'<h2>Set a new password</h2>'
+        +'<p style="color:#cba98f;font-size:13px;margin:0 0 12px">Confirmed — choose a new password for your QUWWAA account.</p>'
+        +'<label>New password</label><input id="qpPwNew" type="password" autocomplete="new-password">'
+        +'<div class="qpRow2" style="margin-top:12px"><button class="qpPrimary" id="qpPwSave" type="button">Update password</button></div>'
+        +'<div class="qpMsg" id="qpPwMsg"></div></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener('click',e=>{ if(e.target===ov||e.target.hasAttribute('data-x')) ov.classList.remove('open'); });
+      $('qpPwSave').onclick=async ()=>{
+        const pw=$('qpPwNew').value||'', m=$('qpPwMsg'); m.className='qpMsg';
+        if(pw.length<6){ m.textContent='Password must be at least 6 characters.'; return; }
+        const b=$('qpPwSave'); b.disabled=true; b.textContent='Updating…';
+        try{
+          const { error } = await QP.sb.auth.updateUser({ password: pw });
+          if(error){ m.textContent=error.message||'Could not update password.'; b.disabled=false; b.textContent='Update password'; return; }
+          m.className='qpMsg ok'; m.textContent='Password updated.';
+          setTimeout(()=>{ ov.classList.remove('open'); try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){} }, 1300);
+        }catch(e){ m.textContent='Could not update password. Try again.'; b.disabled=false; b.textContent='Update password'; }
+      };
+    }
+    $('qpPwNew').value=''; $('qpPwMsg').textContent=''; $('qpPwMsg').className='qpMsg';
+    ov.classList.add('open');
+    setTimeout(()=>{ try{ $('qpPwNew').focus(); }catch(e){} }, 50);
+  }
+  QP.openSetPassword = openSetPassword;
   async function save(){
     const btn=$('qpSetSave'), msg=$('qpSetMsg'); msg.className='qpMsg'; msg.textContent='';
     if(!QP.sb||!QP.user){ return; }
