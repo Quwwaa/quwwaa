@@ -1887,13 +1887,15 @@ window.QI18N = (function(){
     try{
       const QP = window.QP;
       if(QP && QP.isMember && QP.isMember() && QP.profile && (QP.profile.interests||[]).length){
-        // map the member's topics (parent and/or subtopic) to the brief sections they boost
+        // A paying member who has chosen interests → their picks win (US Politics is NOT forced).
         const boost = QP.boostSections ? QP.boostSections(QP.profile.interests) : {};
         const match = lbl=> !!boost[String(lbl||'').toLowerCase()];
         return sections.slice().sort((a,b)=>(match(b.label)?1:0)-(match(a.label)?1:0));
       }
     }catch(e){}
-    return sections;
+    // Default audience (anon, free, or a member who hasn't customized): lead with US
+    // Politics — the bulk of our readership — pinned to the top regardless of build order.
+    return sections.slice().sort((a,b)=>((b.label==='US Politics')?1:0)-((a.label==='US Politics')?1:0));
   }
   // ---------- Daily Rumble house card (blends into the board as a normal news card) ----------
   let rumbleChosen = null, rumbleSlot = 0;
@@ -1933,7 +1935,7 @@ window.QI18N = (function(){
     const idx = ((pos % items.length) + items.length) % items.length;
     try{ if(haveLS) localStorage.setItem('qr_dr_pos', String((pos+1) % items.length)); }catch(e){}   // advance for next load
     const it = items[idx];
-    rumbleSlot = Math.floor(Math.random()*5);                // varying slot within the top 5 (not always #1)
+    rumbleSlot = 1 + Math.floor(Math.random()*4);            // slots 1-4 — never #1, so the lead story stays on top
     // Shaped like a brief section so it renders through the same storyCard path.
     rumbleChosen = { label:'Daily Rumble', title:it.title, image:it.image||'', summary:it.excerpt||'',
                      url:it.link, source:'', time:relTime(it.ts), _substack:it.link };
