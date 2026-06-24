@@ -3989,5 +3989,159 @@ window.QI18N = (function(){
   });
 })();
 </script>
+<script>
+/* ============================================================================
+   QUWWAA $1,000 Giveaway popup — signup capture after the opening splash.
+   - Shows ONLY to anonymous (not-logged-in) visitors, once the board is up.
+   - Anonymous: gated (no dismiss) — they enter or sign in, per the promo design.
+   - A logged-in free/paid member is never trapped: if a session resolves, the
+     popup auto-closes (and it never opens for an already-known member).
+   - Entry funnels into the EXISTING free-signup path: creates the Supabase
+     account (free website member), stores first/last name, and the existing
+     qp:auth handlers fire /brief-subscribe (Kit daily brief) automatically.
+   English-only by design (public localization is paused).
+   ============================================================================ */
+(function(){
+  if(window.__qgiveInit) return; window.__qgiveInit=1;
+  var SHOWN='quwwaa_give_shown';                       // once per browser session
+
+  var css=document.createElement('style');
+  css.textContent=
+    '#qgiveOv{position:fixed;inset:0;z-index:10000;display:none;align-items:center;justify-content:center;'
+    +'background:rgba(8,6,4,.82);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);padding:18px;}'
+    +'#qgiveOv.open{display:flex;}'
+    +'#qgiveCard{width:100%;max-width:400px;background:linear-gradient(165deg,#211913,#14100b);border:1px solid rgba(217,128,38,.5);'
+    +'border-radius:18px;color:#ffe9d6;box-shadow:0 24px 70px rgba(0,0,0,.62),0 0 30px rgba(217,128,38,.22);'
+    +'font-family:var(--font-sans);overflow:hidden;animation:qgUp .32s ease;}'
+    +'@keyframes qgUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}'
+    +'#qgiveHero{background:radial-gradient(ellipse at 50% 0%,rgba(217,128,38,.22),rgba(217,128,38,0) 70%);padding:24px 24px 16px;text-align:center;border-bottom:1px solid rgba(217,128,38,.22);}'
+    +'#qgiveHero .qgk{font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#e0a35a;}'
+    +'#qgiveHero .qgbig{font-family:var(--font-serif);font-weight:500;font-size:46px;line-height:1.05;margin:4px 0 2px;'
+    +'background:linear-gradient(180deg,#ffe0ad,#e89a4a);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}'
+    +'#qgiveHero .qgsub{font-size:13px;color:#e7c4a6;}'
+    +'#qgiveBody{padding:18px 22px 20px;}'
+    +'#qgiveBody .qgintro{font-size:13.5px;line-height:1.5;color:#e7c4a6;text-align:center;margin:0 0 15px;}'
+    +'#qgiveForm{display:flex;flex-direction:column;gap:10px;}'
+    +'#qgiveForm .qgrow{display:flex;gap:10px;}'
+    +'#qgiveForm .qgrow>label{flex:1;min-width:0;}'
+    +'#qgiveForm label{display:block;font-size:11px;letter-spacing:.04em;color:#c9a684;text-align:left;}'
+    +'#qgiveForm input{width:100%;box-sizing:border-box;margin-top:5px;padding:11px 12px;font-size:14px;border-radius:9px;'
+    +'color:#fff;background:rgba(20,60,80,.18);border:1px solid rgba(217,128,38,.4);outline:none;font-family:inherit;}'
+    +'#qgiveForm input:focus{border-color:rgba(255,190,100,.85);box-shadow:0 0 10px rgba(217,128,38,.3);}'
+    +'#qgiveGo{margin-top:4px;width:100%;padding:13px;border:none;border-radius:10px;background:linear-gradient(135deg,#e89a4a,#c06a18);'
+    +'color:#1c1206;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit;}'
+    +'#qgiveGo:hover{filter:brightness(1.06);}#qgiveGo:disabled{opacity:.6;cursor:default;}'
+    +'#qgiveMsg{min-height:15px;font-size:12px;color:#ffb27a;margin-top:9px;text-align:center;}'
+    +'#qgiveOr{display:flex;align-items:center;gap:9px;margin:13px 0;color:#a8855f;font-size:11px;}'
+    +'#qgiveOr:before,#qgiveOr:after{content:"";flex:1;height:1px;background:rgba(217,128,38,.25);}'
+    +'#qgiveGoog{width:100%;display:flex;align-items:center;justify-content:center;gap:9px;padding:11px;border-radius:10px;cursor:pointer;'
+    +'background:rgba(217,128,38,.1);border:1px solid rgba(217,128,38,.45);color:#ffce9a;font:inherit;font-size:14px;}'
+    +'#qgiveGoog:hover{background:rgba(217,128,38,.2);color:#fff;}'
+    +'#qgiveFine{font-size:11px;line-height:1.5;color:#9a7a55;text-align:center;margin:14px 0 0;}'
+    +'#qgiveSignin{display:block;margin:11px auto 0;background:none;border:none;color:#caa078;font-size:12.5px;cursor:pointer;text-decoration:underline;font-family:inherit;}'
+    +'@media(max-width:430px){#qgiveHero .qgbig{font-size:40px;}#qgiveForm .qgrow{flex-direction:column;gap:10px;}}';
+  document.head.appendChild(css);
+
+  var ov=document.createElement('div'); ov.id='qgiveOv';
+  ov.innerHTML=
+    '<div id="qgiveCard" role="dialog" aria-modal="true" aria-label="Enter to win $1,000">'
+    +'<div id="qgiveHero"><div class="qgk">Enter to win</div><div class="qgbig">$1,000</div>'
+    +'<div class="qgsub">Your news butler is feeling generous.</div></div>'
+    +'<div id="qgiveBody">'
+    +'<p class="qgintro">Join QUWWAA free and you’re entered. No purchase needed.</p>'
+    +'<form id="qgiveForm" novalidate>'
+    +'<div class="qgrow">'
+    +'<label>First name<input id="qgFn" type="text" autocomplete="given-name" required></label>'
+    +'<label>Last name<input id="qgLn" type="text" autocomplete="family-name"></label>'
+    +'</div>'
+    +'<label>Email<input id="qgEm" type="email" autocomplete="email" placeholder="you@email.com" required></label>'
+    +'<label>Create a password<input id="qgPw" type="password" autocomplete="new-password" minlength="6" placeholder="6+ characters" required></label>'
+    +'<button id="qgiveGo" type="submit">Enter &amp; create free account</button>'
+    +'</form>'
+    +'<div id="qgiveMsg" aria-live="polite"></div>'
+    +'<div id="qgiveOr">or</div>'
+    +'<button id="qgiveGoog" type="button"><svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true"><path fill="#ffce9a" d="M17.6 9.2c0-.6-.05-1.2-.16-1.8H9v3.4h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.64-3.9 2.64-6.58z"/><path fill="#ffce9a" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.95v2.33A9 9 0 0 0 9 18z"/><path fill="#ffce9a" d="M3.97 10.72A5.4 5.4 0 0 1 3.97 7.3V4.97H.95a9 9 0 0 0 0 8.07z"/><path fill="#ffce9a" d="M9 3.58c1.32 0 2.5.46 3.44 1.35l2.58-2.58A9 9 0 0 0 .95 4.97l3.02 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>Continue with Google</button>'
+    +'<p id="qgiveFine">No purchase necessary. Winner drawn at the close of the giveaway and notified by email. One entry per person.</p>'
+    +'<button id="qgiveSignin" type="button">Already a member? Sign in</button>'
+    +'</div></div>';
+
+  function mount(){ if(document.body && !document.body.contains(ov)) document.body.appendChild(ov); }
+  if(document.body) mount(); else document.addEventListener('DOMContentLoaded', mount);
+
+  var opened=false, decided=false;
+  function isLogged(){ try{ return !!(window.QP && QP.user); }catch(e){ return false; } }
+  function msg(t){ var m=ov.querySelector('#qgiveMsg'); if(m) m.textContent=t||''; }
+  function open(){
+    if(opened || isLogged()) return;
+    mount(); opened=true; ov.classList.add('open');
+    try{ sessionStorage.setItem(SHOWN,'1'); }catch(e){}
+    try{ window.QUWWAA_track && window.QUWWAA_track('giveaway_shown',{}); }catch(e){}
+    setTimeout(function(){ try{ ov.querySelector('#qgFn').focus(); }catch(e){} }, 90);
+  }
+  function close(){ opened=false; ov.classList.remove('open'); }
+
+  // Open only after the opening splash has finished transitioning into the board.
+  function whenBoardReady(cb){
+    var sp=document.getElementById('splash');
+    if(!sp || sp.classList.contains('hide')){ cb(); return; }
+    var iv=setInterval(function(){ var s=document.getElementById('splash');
+      if(!s || s.classList.contains('hide')){ clearInterval(iv); cb(); } }, 120);
+    setTimeout(function(){ clearInterval(iv); cb(); }, 4500);   // hard cap
+  }
+  function decide(){
+    if(decided) return;
+    if(isLogged()){ decided=true; return; }      // a known member is never interrupted
+    decided=true; whenBoardReady(open);
+  }
+
+  // Auth resolves -> decide. If a member session resolves (even late), close.
+  document.addEventListener('qp:auth', function(){
+    if(isLogged()){ decided=true; close(); return; }
+    decide();
+  });
+  // Fallback if qp:auth is slow — but only gate when the auth layer is present,
+  // so a failed/absent premium module can never trap a visitor behind the popup.
+  setTimeout(function(){ if(!decided && !isLogged() && window.QP) decide(); }, 4500);
+
+  // ---- entry: email + password (mirrors the onboarding signup path) ----
+  function wire(){
+    var form=ov.querySelector('#qgiveForm'); if(!form) return;
+    form.addEventListener('submit', async function(e){
+      e.preventDefault();
+      var fn=(ov.querySelector('#qgFn').value||'').trim();
+      var ln=(ov.querySelector('#qgLn').value||'').trim();
+      var em=(ov.querySelector('#qgEm').value||'').trim();
+      var pw=ov.querySelector('#qgPw').value||'';
+      if(!fn){ msg('Please enter your first name.'); return; }
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){ msg('Please enter a valid email address.'); return; }
+      if(pw.length<6){ msg('Password must be at least 6 characters.'); return; }
+      if(!(window.QP && QP.sb && QP.sb.auth)){ msg('Sign-up is warming up — one moment, then try again.'); return; }
+      var go=ov.querySelector('#qgiveGo'); go.disabled=true; go.textContent='Entering…';
+      try{
+        var r=await QP.sb.auth.signUp({ email:em, password:pw, options:{ data:{ first_name:fn, last_name:ln } } });
+        if(r.error){ msg(r.error.message); go.disabled=false; go.textContent='Enter & create free account'; return; }
+        // These two flags are consumed by the existing qp:auth handlers:
+        //  - qp_pending_register -> POST /brief-subscribe (Kit daily brief + free member)
+        //  - qp_pending_profile  -> upsert first/last name once the session exists
+        try{ localStorage.setItem('qp_pending_register','email'); }catch(e){}
+        try{ localStorage.setItem('qp_pending_profile', JSON.stringify({ first_name:fn, last_name:ln, display_name:(fn||''), address_style:'name' })); }catch(e){}
+        try{ await QP.sb.auth.signInWithPassword({ email:em, password:pw }); }catch(e){}   // read now; verify async
+        try{ window.QUWWAA_track && window.QUWWAA_track('giveaway_entry',{method:'email'}); }catch(e){}
+        msg(''); go.textContent='You’re entered ✓';
+        setTimeout(close, 1400);
+      }catch(err){ msg('Something went wrong — please try again.'); go.disabled=false; go.textContent='Enter & create free account'; }
+    });
+    ov.querySelector('#qgiveGoog').onclick=function(){
+      try{ window.QUWWAA_track && window.QUWWAA_track('giveaway_entry',{method:'google'}); }catch(e){}
+      if(window.QP && QP.signInWithOAuth){ QP.signInWithOAuth('google', true); }   // sets qp_pending_register -> brief-subscribe on return
+      else { msg('Sign-up is warming up — one moment, then try again.'); }
+    };
+    ov.querySelector('#qgiveSignin').onclick=function(){
+      try{ if(window.QP && QP.openAuth){ QP.openAuth(); } }catch(e){}
+    };
+  }
+  if(document.body) wire(); else document.addEventListener('DOMContentLoaded', wire);
+})();
+</script>
 </body>
 </html>
