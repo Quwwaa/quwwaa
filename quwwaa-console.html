@@ -4012,7 +4012,7 @@ window.QI18N = (function(){
     +'#qgiveOv.open{display:flex;}'
     +'#qgiveCard{width:100%;max-width:400px;background:linear-gradient(165deg,#211913,#14100b);border:1px solid rgba(217,128,38,.5);'
     +'border-radius:18px;color:#ffe9d6;box-shadow:0 24px 70px rgba(0,0,0,.62),0 0 30px rgba(217,128,38,.22);'
-    +'font-family:var(--font-sans);overflow:hidden;animation:qgUp .32s ease;}'
+    +'font-family:var(--font-sans);overflow:hidden;position:relative;animation:qgUp .32s ease;}'
     +'@keyframes qgUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}'
     +'#qgiveHero{background:radial-gradient(ellipse at 50% 0%,rgba(217,128,38,.22),rgba(217,128,38,0) 70%);padding:24px 24px 16px;text-align:center;border-bottom:1px solid rgba(217,128,38,.22);}'
     +'#qgiveHero .qgk{font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#e0a35a;}'
@@ -4039,12 +4039,16 @@ window.QI18N = (function(){
     +'#qgiveGoog:hover{background:rgba(217,128,38,.2);color:#fff;}'
     +'#qgiveFine{font-size:11px;line-height:1.5;color:#9a7a55;text-align:center;margin:14px 0 0;}'
     +'#qgiveSignin{display:block;margin:11px auto 0;background:none;border:none;color:#caa078;font-size:12.5px;cursor:pointer;text-decoration:underline;font-family:inherit;}'
-    +'@media(max-width:430px){#qgiveHero .qgbig{font-size:40px;}#qgiveForm .qgrow{flex-direction:column;gap:10px;}}';
+    +'#qgiveX{position:absolute;top:11px;right:11px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border:none;border-radius:50%;background:rgba(0,0,0,.28);color:#e7c4a6;font-size:18px;line-height:1;cursor:pointer;font-family:inherit;z-index:3;padding:0;}'
+    +'#qgiveX:hover{background:rgba(0,0,0,.45);color:#fff;}'
+    +'@media(max-width:430px){#qgiveHero .qgbig{font-size:40px;}#qgiveForm .qgrow{flex-direction:column;gap:10px;}}'
+    +'@media(max-width:480px){#qgiveCard{transform:scale(.8);transform-origin:center center;animation:none;}}';
   document.head.appendChild(css);
 
   var ov=document.createElement('div'); ov.id='qgiveOv';
   ov.innerHTML=
     '<div id="qgiveCard" role="dialog" aria-modal="true" aria-label="Enter to win $1,000">'
+    +'<button id="qgiveX" type="button" aria-label="Close">×</button>'
     +'<div id="qgiveHero"><div class="qgk">Enter to win</div><div class="qgbig">$1,000</div>'
     +'<div class="qgsub">Your news butler is feeling generous.</div></div>'
     +'<div id="qgiveBody">'
@@ -4088,10 +4092,13 @@ window.QI18N = (function(){
       if(!s || s.classList.contains('hide')){ clearInterval(iv); cb(); } }, 120);
     setTimeout(function(){ clearInterval(iv); cb(); }, 4500);   // hard cap
   }
+  function shownThisSession(){ try{ return sessionStorage.getItem(SHOWN)==='1'; }catch(e){ return false; } }
   function decide(){
     if(decided) return;
     if(isLogged()){ decided=true; return; }      // a known member is never interrupted
-    decided=true; whenBoardReady(open);
+    decided=true;
+    if(shownThisSession()) return;               // already seen/dismissed once → let them browse, the paywall handles conversion
+    whenBoardReady(open);
   }
 
   // Auth resolves -> decide. If a member session resolves (even late), close.
@@ -4139,6 +4146,11 @@ window.QI18N = (function(){
     ov.querySelector('#qgiveSignin').onclick=function(){
       try{ if(window.QP && QP.openAuth){ QP.openAuth(); } }catch(e){}
     };
+    // Dismiss: close X + clicking the dark backdrop. Lets a visitor browse without
+    // signing up — the existing per-day paywall/regwall converts them later.
+    function dismiss(){ try{ window.QUWWAA_track && window.QUWWAA_track('giveaway_dismissed',{}); }catch(e){} close(); }
+    ov.querySelector('#qgiveX').onclick=dismiss;
+    ov.addEventListener('click', function(e){ if(e.target===ov) dismiss(); });
   }
   if(document.body) wire(); else document.addEventListener('DOMContentLoaded', wire);
 })();

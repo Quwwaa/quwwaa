@@ -13,15 +13,19 @@ creating a free QUWWAA account. Built to the live dark-gold butler house style.
 ## Files changed
 1. `quwwaa-console.html` — new self-contained `(#qgiveOv)` module appended just before
    `</body>` (one `<script>` block, ~200 lines). Nothing else in the file was touched.
-2. `service-worker.js` — `CACHE` bumped `quwwaa-v73` → `quwwaa-v74` so existing PWA
-   clients retire the old shell and pull the new HTML.
+2. `service-worker.js` — `CACHE` bumped to `quwwaa-v75` so existing PWA clients retire
+   the old shell and pull the new HTML.
 
 ## Behavior / decisions
 - **Audience:** shown only to anonymous visitors. A known free/paid member never sees
   it; if a member session resolves late, the popup auto-closes (never traps a member).
-- **Gating:** anonymous visitors are hard-gated — no X, backdrop click does not dismiss.
-  Paths out: (a) enter via email+password, (b) Continue with Google, (c) "Already a
-  member? Sign in". (Per Mike's spec: "before they see anything else.")
+- **Dismissible:** a close X (top-right) and a backdrop click both dismiss the popup so
+  a visitor can browse without signing up; the existing per-day paywall/regwall converts
+  them later. Once shown/dismissed it does not re-open for the rest of the browser
+  session (`sessionStorage quwwaa_give_shown`). Paths in: (a) email+password,
+  (b) Continue with Google, (c) "Already a member? Sign in".
+- **Mobile:** the card is scaled to 80% (`@media max-width:480px`, `transform:scale(.8)`)
+  so it clears the mobile browser's top URL bar and bottom toolbar; desktop is unchanged.
 - **Timing:** waits for the opening splash to finish (`#splash.hide`) before opening;
   triggers off the existing `qp:auth` event, with a 4.5s fallback that only fires when
   `window.QP` exists (so a missing auth layer can never trap a visitor).
