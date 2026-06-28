@@ -1082,7 +1082,11 @@ def build_article(url, title, source, lang='en', image=''):
     # tier-2 neighbours (with bodies) when the article body is thin/unfetchable
     neighbors = _neighbors_with_bodies(title, source, url, budget=9, lang=lang) if (not body or len(body) < 400) else []
     summary, degraded = make_summary(title, source, '', url, desc, longer=True, body=body, neighbors=neighbors, lang=lang)
-    payload = {'url': url, 'title': title, 'source': source, 'summary': summary,
+    bias = ''
+    if summary and '[[QBIAS]]' in summary:                       # split the bias analysis out of the neutral summary
+        summary, bias = summary.split('[[QBIAS]]', 1)
+        summary, bias = summary.strip(), bias.strip()
+    payload = {'url': url, 'title': title, 'source': source, 'summary': summary, 'bias': bias,
                'grounded': (not degraded), 'related': related_articles(title, source, url, lang=lang)}
     # Give the opened story a permanent home (/story/<id>) + an id for the share button.
     if summary and url and url.startswith('http'):
@@ -1239,15 +1243,16 @@ def _lede(user_content, strict=False, longer=False, lang='en'):
         + ((" If the article is clearly biased against Islam, Muslims, Muslim-majority countries, or other "
             "non-Western governments — e.g. blaming the religion of Islam or Muslims as a whole for the actions "
             "of a particular government, regime, group, or individual; loaded or sensational language; collective "
-            "blame; stripped-out context; or a double standard not applied to comparable non-Muslim actors — add "
-            "ONE final short paragraph that names the bias and the specific tell, gives the fair context in "
-            "Islam's defense, and also points out the Western free-speech double standard with a well-established "
-            "example (e.g. European protest or slogan bans, US anti-BDS laws, arrests at pro-Palestinian or ICE "
-            "protests, university crackdowns, deporting people over a Free Palestine placard). Separate a "
-            "government or regime from the faith and the Muslims who practice it. Use only well-established "
-            "examples — never deny a specific verified fact and never invent cases, names, or numbers. Challenge "
-            "the framing and the missing context, not the events. If the article is neutral or fair, do NOT add "
-            "any such note and summarize normally.") if longer else "") \
+            "blame; stripped-out context; or a double standard not applied to comparable non-Muslim actors — "
+            "FIRST write the neutral factual summary, THEN on its own line output exactly the marker [[QBIAS]] "
+            "and nothing else on that line, THEN a short analysis (1-2 short paragraphs) that names the bias and "
+            "the specific tell, gives the fair context in Islam's defense, and points out the Western free-speech "
+            "double standard with a well-established example (European protest or slogan bans, US anti-BDS laws, "
+            "arrests at pro-Palestinian or ICE protests, university crackdowns, deportation over a Free Palestine "
+            "placard). Separate a government or regime from the faith and the Muslims who practice it; use only "
+            "well-established examples and never invent cases, names, or numbers; never deny a verified fact — "
+            "challenge the framing, not the events. If the article is neutral or fair, write ONLY the summary "
+            "with no marker and no analysis.") if longer else "") \
         + (" A generic restatement is unacceptable — include concrete, verifiable specifics "
            "(names, places, numbers, what happened)." if strict else "")
     if lang != 'en':

@@ -350,6 +350,15 @@
           font:inherit; font-size:14px; padding:8px 2px; margin-bottom:-1px; cursor:pointer; }
   .qtab.active { color:#ffd9c4; border-bottom-color:#d98026; }
   .qartsum p { color:#e7d3c0; font-size:16px; line-height:1.72; margin:0 0 14px; }
+  .qartbiaswarn { display:flex; align-items:flex-start; gap:9px; background:rgba(180,60,30,.16);
+                  border:1px solid rgba(226,75,74,.5); border-radius:11px; padding:11px 13px; margin:0 0 16px;
+                  color:#ffb9a0; font-size:13.5px; line-height:1.5; font-weight:500; }
+  .qartbiaswarn .qbwi { flex:none; font-size:15px; line-height:1.45; }
+  .qartbias { margin:18px 0 4px; padding:13px 15px; border:1px solid rgba(217,128,38,.4);
+              border-left:3px solid #d98026; border-radius:10px; background:rgba(217,128,38,.07); }
+  .qartbiash { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#e0a35a; font-weight:600; margin:0 0 8px; }
+  .qartbias p { color:#f0d9b8; font-size:15px; line-height:1.68; margin:0 0 12px; }
+  .qartbias p:last-child { margin-bottom:0; }
   .qartattr { font-size:12px; color:#9a7a55; font-style:italic; margin-top:8px; border-top:1px solid rgba(217,128,38,.15); padding-top:12px; }
   .qartwait { color:#cba98f; font-size:14px; padding:12px 0; display:flex; align-items:center; gap:9px; }
   .qspin { width:15px; height:15px; border:2px solid rgba(217,128,38,.35); border-top-color:#ffbe78;
@@ -383,6 +392,10 @@
   body.bright #qart { background:linear-gradient(180deg,#f5efe6,#ece2d4); }
   body.bright .qarttitle, body.bright .qrelt { color:#2a1c0e; }
   body.bright .qartsum p, body.bright .qartfade p { color:#3a2c1e; }
+  body.bright .qartbiaswarn { background:rgba(226,75,74,.1); color:#9a2d2d; border-color:rgba(226,75,74,.4); }
+  body.bright .qartbias { background:rgba(217,128,38,.08); }
+  body.bright .qartbias p { color:#4a3420; }
+  body.bright .qartbiash { color:#9a5a12; }
   body.bright .qartpay h3 { color:#5a3a18; } body.bright .qartpay p { color:#6a4a2a; }
   /* ---------- opening splash (logo + date/time → board) ---------- */
   #splash { position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center;
@@ -1775,7 +1788,16 @@ window.QI18N = (function(){
       if(!curData){ body.innerHTML='<div class="qartwait"><span class="qspin"></span> '+T('art.reading')+'</div>'; return; }
       const paras=(curData.summary||'').split(/\n+/).map(s=>s.trim()).filter(Boolean).map(p=>'<p>'+esc(p)+'</p>').join('');
       const attr=(curData.grounded?T('art.attr'):T('art.attr_limited')).replace('%s', esc(curArt.source||'the publisher'));
-      body.innerHTML='<div class="qartsum">'+(paras||'<p>'+esc(curArt.summary||curArt.title||'')+'</p>')+'</div>'
+      const biasTxt=(curData.bias||'').trim();
+      let warnHtml='', biasHtml='';
+      if(biasTxt){
+        warnHtml='<div class="qartbiaswarn"><span class="qbwi">⚠</span><span>Bias notice — QUWWAA flagged a clear slant in this coverage. See the analysis below the summary.</span></div>';
+        const bp=biasTxt.split(/\n+/).map(s=>s.trim()).filter(Boolean).map(p=>'<p>'+esc(p)+'</p>').join('');
+        biasHtml='<div class="qartbias"><div class="qartbiash">Why QUWWAA flagged this</div>'+bp+'</div>';
+      }
+      body.innerHTML=warnHtml
+        +'<div class="qartsum">'+(paras||'<p>'+esc(curArt.summary||curArt.title||'')+'</p>')+'</div>'
+        +biasHtml
         +'<div class="qartattr">'+attr+'</div>';
     } else {
       let h='';
