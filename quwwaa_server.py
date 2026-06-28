@@ -628,6 +628,20 @@ def aggregate(q, days=7, fast=False, lang='en'):
 
 CACHE = {}
 CACHE_TTL = 600  # seconds; in memory only, gone on restart
+CACHE_MAX = 400  # hard cap on entries so this map can't grow without bound (OOM guard)
+
+def _prune_cache():
+    """Bound CACHE memory. Drop TTL-expired entries first (they'd be re-fetched on
+    the next read anyway), then, if still over the cap, evict the oldest by age.
+    Purely a memory guard — user-visible results and freshness are unchanged."""
+    if len(CACHE) <= CACHE_MAX:
+        return
+    now = time.time()
+    for k in [k for k, v in list(CACHE.items()) if now - v[0] >= CACHE_TTL]:
+        CACHE.pop(k, None)
+    if len(CACHE) > CACHE_MAX:
+        for k, _v in sorted(CACHE.items(), key=lambda kv: kv[1][0])[:len(CACHE) - CACHE_MAX]:
+            CACHE.pop(k, None)
 
 def cached_aggregate(q, days=7, fast=False, lang='en'):
     key = (q.lower().strip(), days, fast, lang)
@@ -637,6 +651,7 @@ def cached_aggregate(q, days=7, fast=False, lang='en'):
     payload = aggregate(q, days, fast, lang)
     if payload.get('articles'):
         CACHE[key] = (time.time(), payload)
+        _prune_cache()
     return payload
 
 # Home-board categories (must mirror HOME_CATS in the console).
@@ -1084,10 +1099,21 @@ def build_article(url, title, source, lang='en', image=''):
         ARTICLE_CACHE[ckey] = (time.time() - offset, payload)
     return payload
 
+def _prune_ip_bucket(d, now):
+    """Drop IPs with no hits in the last 60s so these rate-limit maps don't grow
+    one entry per unique visitor forever. Threshold-gated, so it's a no-op on the
+    common path; per-visitor throttling behavior is unchanged. Call under _ask_lock."""
+    if len(d) <= 4096:
+        return
+    cutoff = now - 60
+    for ip in [ip for ip, ts in list(d.items()) if not ts or ts[-1] <= cutoff]:
+        d.pop(ip, None)
+
 _article_hits = {}                  # ip -> recent /article timestamps (own bucket)
 def article_rate_check(ip):
     now = time.time()
     with _ask_lock:
+        _prune_ip_bucket(_article_hits, now)
         hits = [t for t in _article_hits.get(ip, []) if t > now - 60]
         if len(hits) >= ARTICLE_RATE_PER_MIN:
             _article_hits[ip] = hits
@@ -2059,6 +2085,7 @@ def rate_check(ip):
             _daily['day'] = today; _daily['count'] = 0
         if _daily['count'] >= ASK_DAILY_CAP:
             return False, 'daily_cap'
+        _prune_ip_bucket(_ip_hits, now)
         hits = [t for t in _ip_hits.get(ip, []) if t > now - 60]
         if len(hits) >= ASK_RATE_PER_MIN:
             _ip_hits[ip] = hits
@@ -2075,6 +2102,7 @@ def speak_rate_check(ip):
     normal conversation (one /ask + one /speak per turn) is never throttled."""
     now = time.time()
     with _ask_lock:
+        _prune_ip_bucket(_speak_hits, now)
         hits = [t for t in _speak_hits.get(ip, []) if t > now - 60]
         if len(hits) >= SPEAK_RATE_PER_MIN:
             _speak_hits[ip] = hits
