@@ -4323,13 +4323,18 @@ window.QI18N = (function(){
     if(DEMO) return Promise.resolve(DEMO_DATA(path));
     return fetch(path,{cache:'no-store'}).then(function(r){ return r.ok?r.json():Promise.reject(r.status); });
   }
+  // Show the feature only when the endpoints exist AND real pro-Israel money data
+  // is loaded — otherwise every profile would misleadingly read "no pro-Israel
+  // money" (e.g. before the FEC key is set). Probes each load (cheap); no cache so
+  // it lights up promptly once the nightly money job fills in.
   function available(cb){
     if(DEMO){ cb(true); return; }
-    var c=null; try{ c=sessionStorage.getItem('mt_avail'); }catch(e){}
-    if(c==='1'){ cb(true); return; } if(c==='0'){ cb(false); return; }
     fetch('/money/config',{cache:'no-store'}).then(function(r){ return r.ok?r.json():null; })
-      .then(function(j){ var ok=!!j; try{sessionStorage.setItem('mt_avail',ok?'1':'0');}catch(e){} if(ok) cfg=j; cb(ok); })
-      .catch(function(){ try{sessionStorage.setItem('mt_avail','0');}catch(e){} cb(false); });
+      .then(function(j){ if(!j) return cb(false); cfg=j;
+        return fetch('/money/search?pro_israel_only=1&limit=1',{cache:'no-store'})
+          .then(function(r){ return r.ok?r.json():null; })
+          .then(function(s){ cb(!!(s && (s.count>0 || (s.results&&s.results.length)))); }); })
+      .catch(function(){ cb(false); });
   }
 
   function scrollEl(){ return ov.querySelector('#mtScroll'); }
