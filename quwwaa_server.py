@@ -3000,18 +3000,25 @@ def money_sync():
     """Direct PAC contributions + independent expenditures per politician, per cycle."""
     if not FEC_API_KEY: return 0
     sync_money_committees()
-    pols = sb_rest('GET', 'money_politicians?select=id,fec_candidate_ids&fec_candidate_ids=neq.%7B%7D') or []
+    # Resumable: never-synced members first, and skip any synced within the window, so a
+    # re-run (or an interrupted run) CONTINUES rather than restarting the multi-hour pass
+    # over all ~540 members — the only way it converges on the free FEC tier (1,000/hr).
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=int(os.environ.get('MONEY_SYNC_SKIP_HOURS', '20')))
+    pols = sb_rest('GET', 'money_politicians?select=id,fec_candidate_ids,last_money_sync'
+                          '&fec_candidate_ids=neq.%7B%7D&order=last_money_sync.asc.nullsfirst&limit=2000') or []
     n = 0
     for pol in pols:
         cand_ids = pol.get('fec_candidate_ids') or []
         if not cand_ids: continue
+        ts = _parse_ts(pol.get('last_money_sync'))
+        if ts and ts > cutoff: continue                       # already fresh — resume past it
         direct, ies = {}, {}
         for cand_id in cand_ids:
             for cycle in MONEY_TRAIL_CYCLES:
                 for cmte in _candidate_committees(cand_id, cycle):
                     for r in fec_paginate('/schedules/schedule_a/',
                             {'committee_id': cmte, 'two_year_transaction_period': cycle,
-                             'is_individual': 'false', 'sort': '-contribution_receipt_amount'}, max_pages=6):
+                             'is_individual': 'false', 'sort': '-contribution_receipt_amount'}, max_pages=3):
                         amt = _cents(r.get('contribution_receipt_amount'))
                         if amt <= 0: continue
                         did = r.get('contributor_id') or ''
@@ -3020,7 +3027,7 @@ def money_sync():
                                 {'cycle': cycle, 'donor_committee_fec_id': did, 'donor_name': nm, 'amount_cents': 0})
                         e['amount_cents'] += amt
                 for r in fec_paginate('/schedules/schedule_e/',
-                        {'candidate_id': cand_id, 'cycle': cycle, 'sort': '-expenditure_amount'}, max_pages=6):
+                        {'candidate_id': cand_id, 'cycle': cycle, 'sort': '-expenditure_amount'}, max_pages=3):
                     amt = _cents(r.get('expenditure_amount'))
                     if amt <= 0: continue
                     sp = r.get('committee_id') or ''
@@ -3060,7 +3067,7 @@ def _recompute_verdict(pol_id):
     try:
         sb_rest('PATCH', 'money_politicians?id=eq.%s' % pol_id,
                 {'pro_israel_funded': bool(total > 0 and cmtes), 'pro_israel_total_cents': total,
-                 'updated_at': _now_iso()}, prefer='return=minimal')
+                 'updated_at': _now_iso(), 'last_money_sync': _now_iso()}, prefer='return=minimal')
     except Exception: pass
 
 # ---------- Job C: donor-chain sync (nightly, tracked PACs only) ------------
@@ -3143,8 +3150,8 @@ def money_trail_loop():
             if _money_roster_stale(): money_roster_sync()
             money_photo_mirror()
             if FEC_API_KEY:
-                money_sync()
-                money_donor_chain_sync()
+                money_donor_chain_sync()   # fast + independent → donor chains populate first
+                money_sync()               # long + rate-limited → resumable across runs
         except Exception:
             pass
         time.sleep(int(os.environ.get('MONEY_TRAIL_POLL_SEC', '86400')))   # nightly
@@ -3990,6 +3997,27 @@ class Handler(SimpleHTTPRequestHandler):
         elif self.path.startswith('/money/config'):
             try: self._send_json(money_config())
             except Exception as e: self._send_json({'error': str(e)}, 500)
+        elif self.path.startswith('/admin/money-run'):
+            # On-demand ETL trigger (so a run doesn't have to wait for the nightly loop).
+            # Token-gated with the existing admin secret; runs in the background and returns
+            # immediately (a full money pass is long + rate-limited). job=all|money|donor|roster|photo
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            token = (qs.get('token') or [''])[0]
+            if not (BRIEF_EMAIL_TOKEN and token == BRIEF_EMAIL_TOKEN):
+                self._send_json({'error': 'forbidden'}, 403); return
+            job = (qs.get('job') or ['all'])[0]
+            if job not in ('all', 'money', 'donor', 'roster', 'photo'):
+                self._send_json({'error': 'bad_job'}, 400); return
+            def _run(j=job):
+                try:
+                    sync_money_committees()
+                    if j in ('all', 'roster'): money_roster_sync()
+                    if j in ('all', 'photo'):  money_photo_mirror()
+                    if j in ('all', 'donor'):  money_donor_chain_sync()
+                    if j in ('all', 'money'):  money_sync()
+                except Exception: pass
+            import threading as _t; _t.Thread(target=_run, daemon=True).start()
+            self._send_json({'ok': True, 'started': job, 'fec_key': bool(FEC_API_KEY)})
         else:
             base = urllib.parse.urlparse(self.path).path
             if base in ('/', ''):
