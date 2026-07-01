@@ -4232,5 +4232,259 @@ window.QI18N = (function(){
   if(document.body) wire(); else document.addEventListener('DOMContentLoaded', wire);
 })();
 </script>
+<script>
+/* ============================================================================
+   MONEY TRAIL — pro-Israel political money tracker (front-end, Phase 1).
+   Reads the documented backend endpoints (built separately by Code):
+     GET /money/config              -> availability + filter options + last_updated
+     GET /money/search?q&office&party&state&pro_israel_only&limit&offset
+     GET /money/politician/{id}     -> full profile
+   The feature is DORMANT until /money/config responds ok, so shipping this
+   early can't show a broken UI. Add ?mt_demo=1 to preview with sample data
+   before the backend is live. English-only (public localization paused).
+   ============================================================================ */
+(function(){
+  if(window.__mtrailInit) return; window.__mtrailInit=1;
+  var DEMO = /[?&]mt_demo=1/.test(location.search);
+  var cfg=null, view='search', curQuery='', filters={office:'', pro_israel_only:false}, searchSeq=0;
+
+  var css=document.createElement('style');
+  css.textContent=
+    '#mtPill{cursor:pointer;background:rgba(217,128,38,.14);border:1px solid rgba(217,128,38,.5);color:#ffce9a;font:inherit;font-size:11px;padding:5px 10px;border-radius:7px;margin-right:10px;white-space:nowrap;}'
+    +'#mtPill:hover{background:rgba(217,128,38,.26);color:#fff;}body.bright #mtPill{color:#9a5a12;}'
+    +'#mtrail{position:fixed;inset:0;z-index:9600;display:none;flex-direction:column;background:linear-gradient(180deg,#1a120c,#0e0a07);color:#e7d3c0;font-family:var(--font-sans);}'
+    +'#mtrail.open{display:flex;}body.bright #mtrail{background:linear-gradient(180deg,#f5efe6,#ece2d4);color:#3a2c1e;}'
+    +'#mtHead{flex:none;display:flex;align-items:center;justify-content:space-between;padding:calc(12px + env(safe-area-inset-top)) 16px 12px;border-bottom:1px solid rgba(217,128,38,.2);}'
+    +'#mtHead .mtback{background:none;border:none;color:#c9a684;font:inherit;font-size:15px;cursor:pointer;padding:4px 6px;}'
+    +'#mtHead .mttitle{font-family:var(--font-serif);font-size:17px;color:#f0b463;letter-spacing:.3px;}'
+    +'#mtHead .mtupd{font-size:10.5px;color:#8a6a48;min-width:40px;text-align:right;}'
+    +'#mtScroll{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 16px 40px;max-width:640px;width:100%;margin:0 auto;box-sizing:border-box;}'
+    +'.mtLede{font-family:var(--font-serif);font-size:21px;color:#ffe9d6;line-height:1.2;}body.bright .mtLede{color:#2a1c0e;}'
+    +'.mtSub{font-size:12.5px;color:#a06a3a;margin-top:4px;line-height:1.5;}'
+    +'.mtSearchRow{display:flex;align-items:center;gap:8px;margin-top:14px;background:rgba(20,60,80,.16);border:1px solid rgba(217,128,38,.4);border-radius:11px;padding:4px 12px;}'
+    +'.mtSearchRow input{flex:1;background:none;border:none;outline:none;color:inherit;font:inherit;font-size:14px;padding:9px 0;}'
+    +'.mtChips{display:flex;gap:7px;margin-top:12px;flex-wrap:wrap;}'
+    +'.mtChip{cursor:pointer;font-size:11.5px;color:#e0a35a;border:1px solid rgba(217,128,38,.4);padding:5px 11px;border-radius:15px;background:none;font:inherit;}'
+    +'.mtChip.on{color:#1c1206;background:#d98026;border-color:#d98026;}'
+    +'.mtChip.flag{color:#ff9a8a;border-color:rgba(226,75,74,.5);}.mtChip.flag.on{color:#fff;background:#a3352f;border-color:#a3352f;}'
+    +'.mtCount{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#a06a3a;margin:18px 0 9px;}'
+    +'.mtCard{display:flex;align-items:center;gap:12px;background:rgba(217,128,38,.06);border:1px solid rgba(217,128,38,.18);border-radius:13px;padding:12px;margin-bottom:10px;cursor:pointer;}'
+    +'.mtCard.flagged{border-color:rgba(226,75,74,.35);}.mtCard:hover{background:rgba(217,128,38,.11);}'
+    +'.mtAv{flex:none;width:46px;height:46px;border-radius:50%;overflow:hidden;position:relative;border:1px solid rgba(217,128,38,.4);}'
+    +'.mtAv .mtInit{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:500;font-size:14px;background:rgba(217,128,38,.1);color:#c9a684;}'
+    +'.mtAv.flag .mtInit{background:rgba(226,75,74,.16);color:#ff9a8a;}'
+    +'.mtAv img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}'
+    +'.mtCard .mtnm{font-size:15px;color:#ffe9d6;font-weight:500;}body.bright .mtCard .mtnm{color:#2a1c0e;}'
+    +'.mtCard .mtof{font-size:12px;color:#a06a3a;}'
+    +'.mtBadge{display:inline-block;font-size:10.5px;font-weight:500;padding:3px 8px;border-radius:12px;}'
+    +'.mtBadge.yes{color:#ff9a8a;background:rgba(226,75,74,.14);border:1px solid rgba(226,75,74,.45);}'
+    +'.mtBadge.no{color:#8faa7a;background:rgba(120,160,90,.12);border:1px solid rgba(120,160,90,.35);}'
+    +'.mtAmt{font-size:13px;color:#f0b463;font-weight:500;margin-top:5px;}'
+    +'.mtVerdict{margin:14px 0;padding:15px;border-radius:14px;border:1px solid rgba(226,75,74,.5);background:rgba(226,75,74,.13);}'
+    +'.mtVerdict.clean{border-color:rgba(120,160,90,.4);background:rgba(120,160,90,.1);}'
+    +'.mtVerdict h3{font-family:var(--font-serif);font-size:18px;color:#ffb9a0;margin:0;letter-spacing:.3px;}'
+    +'.mtVerdict.clean h3{color:#a9c98f;}'
+    +'.mtVerdict p{font-size:13px;color:#e7c4a6;margin:6px 0 0;line-height:1.5;}'
+    +'.mtMetrics{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}'
+    +'.mtMetric{background:rgba(217,128,38,.08);border-radius:11px;padding:11px 8px;text-align:center;}'
+    +'.mtMetric b{display:block;font-size:16px;font-weight:500;color:#f0b463;}'
+    +'.mtMetric span{font-size:10px;color:#a06a3a;line-height:1.3;}'
+    +'.mtSecH{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#e0a35a;font-weight:500;margin:18px 0 9px;}'
+    +'.mtRow{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid rgba(217,128,38,.13);}'
+    +'.mtRow .r1{font-size:14px;color:#ffe9d6;}body.bright .mtRow .r1{color:#2a1c0e;}.mtRow .r2{font-size:11px;color:#a06a3a;}'
+    +'.mtRow .amt{font-size:14px;color:#f0b463;font-weight:500;text-align:right;}'
+    +'.mtRow a{font-size:10.5px;color:#8a6a48;text-decoration:none;}.mtRow a:hover{color:#c9a684;}'
+    +'.mtIE{border:1px solid rgba(217,128,38,.25);border-radius:12px;padding:12px;margin-bottom:9px;}'
+    +'.mtTag{font-size:10px;padding:2px 8px;border-radius:11px;}'
+    +'.mtTag.sup{color:#8faa7a;background:rgba(120,160,90,.14);border:1px solid rgba(120,160,90,.4);}'
+    +'.mtTag.opp{color:#ff9a8a;background:rgba(226,75,74,.14);border:1px solid rgba(226,75,74,.4);}'
+    +'.mtFoot{margin-top:16px;padding-top:12px;border-top:1px solid rgba(217,128,38,.2);font-size:11px;color:#8a6a48;}'
+    +'.mtWait{color:#cba98f;font-size:14px;padding:24px 0;text-align:center;}'
+    +'.mtProI{color:#ff9a8a;}';
+  document.head.appendChild(css);
+
+  var ov=document.createElement('div'); ov.id='mtrail';
+  ov.innerHTML='<div id="mtHead"><button class="mtback" type="button">‹ Back</button>'
+    +'<span class="mttitle">Money Trail</span><span class="mtupd"></span></div>'
+    +'<div id="mtScroll"></div>';
+  function mount(){ if(document.body && !document.body.contains(ov)) document.body.appendChild(ov); }
+
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function fmtUSD(n){ n=+n||0; if(n>=1e6){ var m=n/1e6; return '$'+(m>=10?Math.round(m):m.toFixed(1).replace(/\.0$/,''))+'M'; } if(n>=1e3) return '$'+Math.round(n/1e3)+'K'; return '$'+n.toLocaleString(); }
+  function initials(name){ var p=String(name||'').replace(/^(Rep\.|Sen\.|Gov\.|President)\s+/,'').trim().split(/\s+/); return ((p[0]||' ')[0]+(p.length>1?(p[p.length-1]||' ')[0]:'')).toUpperCase(); }
+  function avatarHtml(name, photo, flagged){
+    var h='<div class="mtAv'+(flagged?' flag':'')+'"><div class="mtInit">'+esc(initials(name))+'</div>';
+    if(photo){ h+='<img src="'+esc(photo)+'" alt="" onerror="this.remove()">'; }
+    return h+'</div>';
+  }
+
+  // ---- data layer (real fetch, or demo fixtures) ----
+  function api(path){
+    if(DEMO) return Promise.resolve(DEMO_DATA(path));
+    return fetch(path,{cache:'no-store'}).then(function(r){ return r.ok?r.json():Promise.reject(r.status); });
+  }
+  function available(cb){
+    if(DEMO){ cb(true); return; }
+    var c=null; try{ c=sessionStorage.getItem('mt_avail'); }catch(e){}
+    if(c==='1'){ cb(true); return; } if(c==='0'){ cb(false); return; }
+    fetch('/money/config',{cache:'no-store'}).then(function(r){ return r.ok?r.json():null; })
+      .then(function(j){ var ok=!!j; try{sessionStorage.setItem('mt_avail',ok?'1':'0');}catch(e){} if(ok) cfg=j; cb(ok); })
+      .catch(function(){ try{sessionStorage.setItem('mt_avail','0');}catch(e){} cb(false); });
+  }
+
+  function scrollEl(){ return ov.querySelector('#mtScroll'); }
+  function setUpd(){ var u=ov.querySelector('.mtupd'); if(u) u.textContent = (cfg&&cfg.last_updated)? ('Updated '+new Date(cfg.last_updated).toLocaleDateString()) : ''; }
+
+  function open(){
+    mount(); ov.classList.add('open'); setUpd();
+    try{ window.QUWWAA_track && window.QUWWAA_track('money_trail_open',{}); }catch(e){}
+    renderSearch();
+  }
+  function close(){ ov.classList.remove('open'); }
+  ov.querySelector('.mtback').onclick=function(){ if(view==='profile'){ renderSearch(); } else { close(); } };
+
+  // ---- SEARCH VIEW ----
+  function renderSearch(){
+    view='search';
+    scrollEl().innerHTML=
+      '<div class="mtLede">Who funds your politicians?</div>'
+      +'<div class="mtSub">Search any federal official. Pro-Israel PAC money first — every figure sourced to FEC filings.</div>'
+      +'<div class="mtSearchRow"><span style="color:#c9a684">⚲</span><input id="mtQ" type="search" placeholder="Search name, state, or district…" autocomplete="off" value="'+esc(curQuery)+'"></div>'
+      +'<div class="mtChips">'
+      +'<button class="mtChip'+(filters.office===''?' on':'')+'" data-of="">All</button>'
+      +'<button class="mtChip'+(filters.office==='senate'?' on':'')+'" data-of="senate">Senate</button>'
+      +'<button class="mtChip'+(filters.office==='house'?' on':'')+'" data-of="house">House</button>'
+      +'<button class="mtChip'+(filters.office==='president'?' on':'')+'" data-of="president">President</button>'
+      +'<button class="mtChip flag'+(filters.pro_israel_only?' on':'')+'" data-flag="1">⚑ Pro-Israel funded only</button>'
+      +'</div><div id="mtResults"><div class="mtWait">Loading…</div></div>';
+    var q=ov.querySelector('#mtQ');
+    var t=null; q.oninput=function(){ curQuery=q.value; clearTimeout(t); t=setTimeout(doSearch, 250); };
+    q.onkeydown=function(e){ if(e.key==='Enter'){ clearTimeout(t); doSearch(); } };
+    scrollEl().querySelectorAll('.mtChip[data-of]').forEach(function(c){ c.onclick=function(){ filters.office=c.getAttribute('data-of'); renderSearch(); }; });
+    var fl=scrollEl().querySelector('.mtChip[data-flag]'); if(fl) fl.onclick=function(){ filters.pro_israel_only=!filters.pro_israel_only; renderSearch(); };
+    scrollEl().scrollTop=0; doSearch();
+    setTimeout(function(){ try{ if(!curQuery) q.focus(); }catch(e){} }, 60);
+  }
+  function doSearch(){
+    var box=ov.querySelector('#mtResults'); if(!box) return;
+    var seq=++searchSeq;
+    var qs='?q='+encodeURIComponent(curQuery||'')+'&office='+encodeURIComponent(filters.office||'')
+      +(filters.pro_israel_only?'&pro_israel_only=1':'')+'&limit=25';
+    api('/money/search'+qs).then(function(d){
+      if(seq!==searchSeq) return; var list=(d&&d.results)||[];
+      if(!list.length){ box.innerHTML='<div class="mtWait">No officials match that search.</div>'; return; }
+      var h='<div class="mtCount">Results · '+list.length+(d.count&&d.count>list.length?(' of '+d.count):'')+'</div>';
+      list.forEach(function(p){
+        var flagged=!!p.pro_israel_funded;
+        h+='<div class="mtCard'+(flagged?' flagged':'')+'" data-id="'+esc(p.id)+'">'
+          +avatarHtml(p.name,p.photo_url,flagged)
+          +'<div style="flex:1;min-width:0"><div class="mtnm">'+esc(p.name)+' <span style="color:#a06a3a;font-weight:400">('+esc(p.party||'')+')</span></div>'
+          +'<div class="mtof">'+esc(officeLabel(p))+'</div></div>'
+          +'<div style="flex:none;text-align:right">'+(flagged
+              ? '<span class="mtBadge yes">⚑ Pro-Israel funded</span><div class="mtAmt">'+fmtUSD(p.pro_israel_total)+'</div>'
+              : '<span class="mtBadge no">No pro-Israel money</span><div class="mtAmt" style="color:#8a6a48">$0</div>')
+          +'</div></div>';
+      });
+      box.innerHTML=h;
+      box.querySelectorAll('.mtCard').forEach(function(c){ c.onclick=function(){ openProfile(c.getAttribute('data-id')); }; });
+    }).catch(function(){ if(seq===searchSeq) box.innerHTML='<div class="mtWait">Couldn’t load results. Try again in a moment.</div>'; });
+  }
+  function officeLabel(p){
+    var lvl={us_house:'U.S. House',us_senate:'U.S. Senate',president:'President'}[p.level]||p.level||'';
+    var loc=(p.state||'')+(p.district?('-'+p.district):''); return lvl+(loc?(' · '+loc):'');
+  }
+
+  // ---- PROFILE VIEW ----
+  function openProfile(id){
+    view='profile'; scrollEl().innerHTML='<div class="mtWait">Opening the filings…</div>'; scrollEl().scrollTop=0;
+    try{ window.QUWWAA_track && window.QUWWAA_track('money_trail_profile',{id:id}); }catch(e){}
+    api('/money/politician/'+encodeURIComponent(id)).then(renderProfile)
+      .catch(function(){ scrollEl().innerHTML='<div class="mtWait">Couldn’t load this profile.</div>'; });
+  }
+  function renderProfile(d){
+    if(!d){ scrollEl().innerHTML='<div class="mtWait">No data.</div>'; return; }
+    var v=d.verdict||{}; var funded=!!v.pro_israel_funded;
+    var h=''
+      +'<div style="display:flex;align-items:center;gap:13px;">'+avatarHtml(d.name,d.photo_url,funded)
+      +'<div><div style="font-family:var(--font-serif);font-size:19px;color:#ffe9d6">'+esc(d.name)+'</div>'
+      +'<div style="font-size:12.5px;color:#a06a3a">'+esc(partyWord(d.party))+' · '+esc(officeLabel(d))+'</div></div></div>';
+    // verdict
+    if(funded){
+      h+='<div class="mtVerdict"><h3>⚑ Pro-Israel funded</h3><p>Took <b style="color:#ffd9b3">'+fmtUSD(v.direct_pac_total)+'</b> directly from pro-Israel PACs and was backed by <b style="color:#ffd9b3">'+fmtUSD(v.supporting_ie_total)+'</b> in pro-Israel super-PAC spending this cycle.</p></div>'
+        +'<div class="mtMetrics"><div class="mtMetric"><b>'+fmtUSD(v.direct_pac_total)+'</b><span>Direct PAC $</span></div>'
+        +'<div class="mtMetric"><b>'+fmtUSD(v.supporting_ie_total)+'</b><span>Super-PAC support</span></div>'
+        +'<div class="mtMetric"><b>'+(v.pro_israel_pac_count||0)+'</b><span>Pro-Israel PACs</span></div></div>';
+    } else {
+      h+='<div class="mtVerdict clean"><h3>No pro-Israel PAC money</h3><p>No contributions from pro-Israel PACs and no pro-Israel super-PAC support found in FEC filings this cycle.</p></div>';
+    }
+    // direct contributions
+    var dc=(d.direct_contributions||[]);
+    if(dc.length){ h+='<div class="mtSecH">Direct money from pro-Israel PACs</div>';
+      dc.forEach(function(c){ h+='<div class="mtRow"><div><div class="r1">'+esc(c.donor_name)+'</div></div>'
+        +'<div style="text-align:right"><div class="amt">'+fmtUSD(c.amount)+'</div>'+srcLink(c.source_url)+'</div></div>'; });
+    }
+    // independent expenditures
+    var ie=(d.independent_expenditures||[]);
+    if(ie.length){ h+='<div class="mtSecH">Outside spending (super PACs)</div>';
+      ie.forEach(function(e){ var opp=(e.support_oppose==='oppose');
+        h+='<div class="mtIE"><div style="display:flex;align-items:center;justify-content:space-between">'
+          +'<div class="r1" style="font-size:14px;color:#ffe9d6;font-weight:500">'+esc(e.spender_name)+'</div>'
+          +'<span class="mtTag '+(opp?'opp':'sup')+'">'+(opp?'OPPOSING':'SUPPORTING')+'</span></div>'
+          +'<div style="font-size:20px;color:#f0b463;font-weight:500;margin-top:6px">'+fmtUSD(e.amount)+'</div>'
+          +srcLink(e.source_url)+'</div>'; });
+    }
+    // donor chains
+    (d.donor_chains||[]).forEach(function(ch){
+      var td=(ch.top_donors||[]); if(!td.length) return;
+      h+='<div class="mtSecH">↳ Where '+esc(ch.committee)+'’s money comes from</div>';
+      td.forEach(function(dn){ var tags=(dn.tags||[]).map(function(t){ return t==='pro_israel'?'<span class="mtProI">Pro-Israel</span>':esc(t); }).join(' · ');
+        h+='<div class="mtRow"><div><div class="r1">'+esc(dn.donor_name)+'</div><div class="r2">'+(tags?tags+' · ':'')+esc(dn.donor_type||'')+'</div></div>'
+          +'<div style="text-align:right"><div class="amt">'+fmtUSD(dn.amount)+'</div>'+srcLink(dn.source_url)+'</div></div>'; });
+    });
+    h+='<div class="mtFoot">Every figure sourced to FEC filings'+(d.last_updated?(' · updated '+new Date(d.last_updated).toLocaleDateString()):'')+'.</div>';
+    scrollEl().innerHTML=h; scrollEl().scrollTop=0;
+  }
+  function partyWord(p){ return {D:'Democrat',R:'Republican',I:'Independent'}[p]||p||''; }
+  function srcLink(u){ return u ? '<a href="'+esc(u)+'" target="_blank" rel="noopener">FEC filing ↗</a>' : ''; }
+
+  // ---- header pill (only when available) ----
+  function addPill(){
+    if(document.getElementById('mtPill')) return;
+    var hdr=document.querySelector('header'); if(!hdr) return;
+    var spans=hdr.querySelectorAll(':scope > span'); var right=spans[spans.length-1]||hdr;
+    var b=document.createElement('button'); b.id='mtPill'; b.type='button'; b.textContent='◎ Money Trail';
+    b.title='Track pro-Israel political money'; b.onclick=open;
+    right.insertBefore(b, right.firstChild);
+  }
+  function boot(){ available(function(ok){ if(ok) addPill(); }); }
+  if(document.querySelector('header')) boot(); else document.addEventListener('DOMContentLoaded', boot);
+
+  // ---- demo fixtures (only used with ?mt_demo=1) ----
+  function DEMO_DATA(path){
+    if(path.indexOf('/money/search')===0){
+      var all=[
+        {id:'latimer', name:'Rep. George Latimer', party:'D', level:'us_house', state:'NY', district:'16', photo_url:'https://cdn.jsdelivr.net/gh/unitedstates/images@gh-pages/congress/225x275/L000606.jpg', pro_israel_funded:true, pro_israel_total:6100000},
+        {id:'ritchie', name:'Rep. Ritchie Torres', party:'D', level:'us_house', state:'NY', district:'15', photo_url:'', pro_israel_funded:true, pro_israel_total:2400000},
+        {id:'bell', name:'Rep. Wesley Bell', party:'D', level:'us_house', state:'MO', district:'01', photo_url:'', pro_israel_funded:true, pro_israel_total:5300000},
+        {id:'tlaib', name:'Rep. Rashida Tlaib', party:'D', level:'us_house', state:'MI', district:'12', photo_url:'', pro_israel_funded:false, pro_israel_total:0}
+      ];
+      var q=(/q=([^&]*)/.exec(path)||[])[1]||''; q=decodeURIComponent(q).toLowerCase();
+      var onlyFlag=/pro_israel_only=1/.test(path);
+      var res=all.filter(function(p){ return (!q || p.name.toLowerCase().indexOf(q)>=0 || (p.state+'-'+p.district).toLowerCase().indexOf(q)>=0) && (!onlyFlag || p.pro_israel_funded); });
+      return {count:res.length, results:res};
+    }
+    return { id:'latimer', name:'Rep. George Latimer', party:'D', level:'us_house', state:'NY', district:'16',
+      photo_url:'https://cdn.jsdelivr.net/gh/unitedstates/images@gh-pages/congress/450x550/L000606.jpg', cycle:2026,
+      verdict:{pro_israel_funded:true, direct_pac_total:1300000, supporting_ie_total:4800000, pro_israel_pac_count:3},
+      direct_contributions:[{donor_name:'AIPAC PAC', amount:1300000, is_pro_israel:true, source_url:'https://www.fec.gov/data/'},
+        {donor_name:'Pro-Israel America PAC', amount:41000, is_pro_israel:true, source_url:'https://www.fec.gov/data/'}],
+      independent_expenditures:[{spender_name:'United Democracy Project', support_oppose:'support', amount:4800000, is_pro_israel:true, source_url:'https://www.fec.gov/data/'}],
+      donor_chains:[{committee:'United Democracy Project', committee_fec_id:'C00799031', top_donors:[
+        {donor_name:'Individual megadonor A', donor_type:'individual', amount:5000000, tags:['pro_israel'], source_url:'https://www.fec.gov/data/'},
+        {donor_name:'Hedge-fund executive B', donor_type:'individual', amount:2500000, tags:['finance'], source_url:'https://www.fec.gov/data/'}]}],
+      last_updated:'2026-07-01T09:00:00Z' };
+  }
+})();
+</script>
 </body>
 </html>
