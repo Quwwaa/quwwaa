@@ -4323,17 +4323,14 @@ window.QI18N = (function(){
     if(DEMO) return Promise.resolve(DEMO_DATA(path));
     return fetch(path,{cache:'no-store'}).then(function(r){ return r.ok?r.json():Promise.reject(r.status); });
   }
-  // Show the feature only when the endpoints exist AND real pro-Israel money data
-  // is loaded — otherwise every profile would misleadingly read "no pro-Israel
-  // money" (e.g. before the FEC key is set). Probes each load (cheap); no cache so
-  // it lights up promptly once the nightly money job fills in.
+  // Show the feature ONLY once the money ETL has fully processed the roster —
+  // gated on cfg.ingest_complete from /money/config. A partial ingest would make
+  // not-yet-processed members read a false "$0 / no pro-Israel money," so we stay
+  // dormant (fail-safe hidden) until the backend explicitly marks the run complete.
   function available(cb){
     if(DEMO){ cb(true); return; }
     fetch('/money/config',{cache:'no-store'}).then(function(r){ return r.ok?r.json():null; })
-      .then(function(j){ if(!j) return cb(false); cfg=j;
-        return fetch('/money/search?pro_israel_only=1&limit=1',{cache:'no-store'})
-          .then(function(r){ return r.ok?r.json():null; })
-          .then(function(s){ cb(!!(s && (s.count>0 || (s.results&&s.results.length)))); }); })
+      .then(function(j){ cfg=j||null; cb(!!(j && j.ingest_complete===true)); })
       .catch(function(){ cb(false); });
   }
 
