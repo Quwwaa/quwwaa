@@ -93,6 +93,34 @@ GA_SERVICE_ACCOUNT_JSON = os.environ.get('GA_SERVICE_ACCOUNT_JSON', '')         
 GA_SERVICE_ACCOUNT_FILE = os.environ.get('GA_SERVICE_ACCOUNT_FILE', '/etc/secrets/ga-service-account.json')
 GA_PROPERTY_ID = os.environ.get('GA_PROPERTY_ID', '542314942')
 
+# --- Money Trail (federal campaign-finance tracker) -------------------------
+# All data is public domain: FEC openFEC API (money) + unitedstates/congress-legislators
+# (roster) + unitedstates/images (CC0 portraits). The FEC key lives ONLY in the env
+# (free key from api.data.gov). Without it the money/donor ETL jobs no-op cleanly and
+# the roster/photo jobs + read endpoints still work (they need no FEC key).
+FEC_API_KEY = os.environ.get('FEC_API_KEY', '')                     # secret — free from api.data.gov
+FEC_API_BASE = 'https://api.open.fec.gov/v1'
+MONEY_TRAIL_CYCLES = [int(c) for c in os.environ.get('MONEY_TRAIL_CYCLES', '2022,2024,2026').split(',') if c.strip().isdigit()]
+MONEY_CURRENT_CYCLE = max(MONEY_TRAIL_CYCLES) if MONEY_TRAIL_CYCLES else 2026
+MONEY_TOP_N_PAC = int(os.environ.get('MONEY_TOP_N_PAC', '15'))      # top-N general PAC givers kept per politician/cycle (context)
+MONEY_DONOR_TOP_N = int(os.environ.get('MONEY_DONOR_TOP_N', '25'))  # top donors kept per tracked PAC/cycle (donor chain)
+MONEY_RATE_PER_MIN = int(os.environ.get('MONEY_RATE_PER_MIN', '60'))  # generous per-IP read bucket for /money/*
+
+# Curated pro-Israel committee list. EVERY fec_id was verified via the FEC
+# /committees API (citation_url = its FEC committee page). To extend the tracker,
+# add a row here — sync_money_committees() upserts it into money_committees on each
+# job run (idempotent), so the DB self-heals to match this list.
+PRO_ISRAEL_COMMITTEES = [
+    {'fec_id': 'C00799031', 'name': 'United Democracy Project',                                 'committee_type': 'super_pac', 'connected_org': 'AIPAC',                        'tags': ['pro_israel']},
+    {'fec_id': 'C00797670', 'name': 'American Israel Public Affairs Committee PAC (AIPAC PAC)',  'committee_type': 'pac',       'connected_org': 'AIPAC',                        'tags': ['pro_israel']},
+    {'fec_id': 'C00699470', 'name': 'Pro-Israel America PAC',                                   'committee_type': 'pac',       'connected_org': None,                           'tags': ['pro_israel']},
+    {'fec_id': 'C00247403', 'name': 'NORPAC',                                                   'committee_type': 'pac',       'connected_org': None,                           'tags': ['pro_israel']},
+    {'fec_id': 'C00710848', 'name': 'DMFI PAC (Democratic Majority for Israel)',                'committee_type': 'hybrid',    'connected_org': 'Democratic Majority for Israel', 'tags': ['pro_israel']},
+    {'fec_id': 'C00345132', 'name': 'Republican Jewish Coalition PAC',                          'committee_type': 'pac',       'connected_org': 'Republican Jewish Coalition',  'tags': ['pro_israel']},
+    {'fec_id': 'C00441949', 'name': 'JStreetPAC',                                               'committee_type': 'pac',       'connected_org': 'J Street',                     'tags': ['pro_israel', 'pro_israel_pro_peace']},
+]
+PRO_ISRAEL_FEC_IDS = set(c['fec_id'] for c in PRO_ISRAEL_COMMITTEES)
+
 def _ga_sa_raw():
     """Raw service-account JSON string + its source ('file'|'env'|'')."""
     try:
@@ -2792,6 +2820,443 @@ def build_sitemap():
     return ('<?xml version="1.0" encoding="UTF-8"?>'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + rows + '</urlset>')
 
+# ============================================================================
+# Money Trail — federal campaign-finance tracker (Phase 1). Public-domain data
+# only: FEC openFEC API (money) + unitedstates/congress-legislators (roster) +
+# unitedstates/images (CC0 portraits). ETL jobs write to Supabase via the
+# service-role REST; the /money read endpoints only ever read from Supabase
+# (never the FEC API on the request path). Amounts are stored in CENTS and
+# returned as WHOLE DOLLARS (integers) in the API. Storage is bounded per §6:
+# ~540 members + recent presidential candidates, pro-Israel + top-N PAC givers,
+# IEs aggregated per spender, donors only for the ~7 tracked pro-Israel PACs.
+# ============================================================================
+LEGIS_CURRENT_URL = 'https://unitedstates.github.io/congress-legislators/legislators-current.json'
+LEGIS_EXEC_URL    = 'https://unitedstates.github.io/congress-legislators/executive.json'
+PHOTO_CDN         = 'https://cdn.jsdelivr.net/gh/unitedstates/images@gh-pages/congress/450x550/%s.jpg'
+PHOTO_BUCKET      = 'politician-photos'
+_HONORIFIC        = {'us_house': 'Rep. ', 'us_senate': 'Sen. ', 'president': ''}
+
+def _now_iso():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+def _http_json(url, timeout=30):
+    with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=timeout) as r:
+        return json.loads(r.read())
+
+def _cents(dollars):
+    try: return int(round(float(dollars) * 100))
+    except Exception: return 0
+
+def _party_letter(p):
+    p = (p or '').strip().lower()
+    if p.startswith('democr'): return 'D'
+    if p.startswith('republic'): return 'R'
+    if p.startswith('independ') or p.startswith('libertarian'): return 'I'
+    return (p[:1].upper() or None)
+
+def sb_upsert(table, rows, on_conflict):
+    """Bulk idempotent upsert via PostgREST (service role). No-op on empty/error."""
+    if not rows: return None
+    try:
+        return sb_rest('POST', '%s?on_conflict=%s' % (table, on_conflict), rows,
+                       prefer='resolution=merge-duplicates,return=minimal')
+    except Exception:
+        return None
+
+# ---------- FEC openFEC client (read-only; never on the request path) --------
+def fec_get(path, params=None, timeout=30, retries=3):
+    """One GET against the FEC API with the server's key. Polite exponential backoff
+    on 429/5xx. Returns parsed dict, or None (missing key / persistent error)."""
+    if not FEC_API_KEY: return None
+    p = dict(params or {}); p['api_key'] = FEC_API_KEY
+    url = FEC_API_BASE + path + '?' + urllib.parse.urlencode(p, doseq=True)
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=timeout) as r:
+                return json.loads(r.read() or b'null')
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504) and attempt < retries - 1:
+                time.sleep((2 ** attempt) * 3); continue
+            return None
+        except Exception:
+            if attempt < retries - 1:
+                time.sleep((2 ** attempt) * 2); continue
+            return None
+    return None
+
+def fec_paginate(path, params=None, max_pages=6, per_page=100, timeout=30):
+    """Collect results across a BOUNDED number of pages (§6 storage discipline)."""
+    out = []; page = 1
+    while page <= max_pages:
+        p = dict(params or {}); p['per_page'] = per_page; p['page'] = page
+        d = fec_get(path, p, timeout=timeout)
+        if not isinstance(d, dict): break
+        rows = d.get('results') or []
+        out.extend(rows)
+        pages = (d.get('pagination') or {}).get('pages') or page
+        if page >= pages or not rows: break
+        page += 1; time.sleep(0.4)      # pace under the hourly cap
+    return out
+
+# ---------- committee list bookkeeping --------------------------------------
+def sync_money_committees():
+    """Upsert the curated pro-Israel committee list into money_committees (idempotent).
+    The config in PRO_ISRAEL_COMMITTEES is the source of truth; the DB self-heals to it."""
+    rows = [{'fec_id': c['fec_id'], 'name': c['name'], 'committee_type': c.get('committee_type'),
+             'connected_org': c.get('connected_org'), 'is_pro_israel': True,
+             'tags': c.get('tags') or ['pro_israel'],
+             'citation_url': 'https://www.fec.gov/data/committee/%s/' % c['fec_id']}
+            for c in PRO_ISRAEL_COMMITTEES]
+    sb_upsert('money_committees', rows, 'fec_id')
+
+def _money_meta_touch(roster=False, fec=False):
+    body = {'id': 1}
+    if roster: body['last_roster_sync'] = _now_iso()
+    if fec:    body['last_fec_sync'] = _now_iso()
+    try: sb_rest('POST', 'money_meta?on_conflict=id', [body], prefer='resolution=merge-duplicates,return=minimal')
+    except Exception: pass
+
+def _money_roster_stale():
+    try:
+        if not (sb_rest('GET', 'money_politicians?select=id&limit=1') or []):
+            return True
+        rows = sb_rest('GET', 'money_meta?select=last_roster_sync&id=eq.1') or []
+        ts = _parse_ts((rows or [{}])[0].get('last_roster_sync'))
+        return (not ts) or (datetime.now(timezone.utc) - ts).days >= 6
+    except Exception:
+        return True
+
+# ---------- Job A: roster sync (weekly) -------------------------------------
+def money_roster_sync():
+    """Upsert money_politicians from congress-legislators (House/Senate) + executive
+    (President/VP). Carries id.bioguide + id.fec (the join key to FEC money)."""
+    rows = []
+    try: current = _http_json(LEGIS_CURRENT_URL)
+    except Exception: current = []
+    for p in current:
+        terms = p.get('terms') or []
+        if not terms: continue
+        term = terms[-1]
+        level = {'sen': 'us_senate', 'rep': 'us_house'}.get(term.get('type'))
+        if not level: continue
+        nm = p.get('name') or {}; ids = p.get('id') or {}
+        full = (nm.get('official_full') or (nm.get('first', '') + ' ' + nm.get('last', ''))).strip()
+        district = None if level == 'us_senate' else str(term.get('district') if term.get('district') not in (None, '') else '')
+        rows.append({'bioguide_id': ids.get('bioguide'), 'full_name': full,
+                     'first_name': nm.get('first'), 'last_name': nm.get('last'),
+                     'party': _party_letter(term.get('party')), 'level': level,
+                     'state': term.get('state'), 'district': district, 'in_office': True,
+                     'fec_candidate_ids': ids.get('fec') or []})
+    try: execs = _http_json(LEGIS_EXEC_URL)
+    except Exception: execs = []
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    for p in execs:
+        cur = [t for t in (p.get('terms') or [])
+               if t.get('type') in ('prez', 'viceprez') and t.get('start', '') <= today <= t.get('end', '9999')]
+        if not cur: continue
+        nm = p.get('name') or {}; ids = p.get('id') or {}
+        full = (nm.get('official_full') or (nm.get('first', '') + ' ' + nm.get('last', ''))).strip()
+        rows.append({'bioguide_id': ids.get('bioguide') or ('exec-' + full.lower().replace(' ', '-')),
+                     'full_name': full, 'first_name': nm.get('first'), 'last_name': nm.get('last'),
+                     'party': _party_letter(cur[-1].get('party')), 'level': 'president',
+                     'state': None, 'district': None, 'in_office': True,
+                     'fec_candidate_ids': ids.get('fec') or []})
+    sb_upsert('money_politicians', rows, 'bioguide_id')
+    _money_meta_touch(roster=True)
+    return len(rows)
+
+# ---------- Job B: money sync (nightly) -------------------------------------
+def _candidate_committees(cand_id, cycle):
+    rows = fec_paginate('/candidate/%s/committees/' % cand_id, {'cycle': cycle}, max_pages=2)
+    ids = []
+    for r in rows:
+        if (r.get('designation') or '') in ('P', 'A', ''):   # principal / authorized
+            cid = r.get('committee_id')
+            if cid: ids.append(cid)
+    return list(dict.fromkeys(ids))
+
+def _select_direct_rows(pol_id, direct):
+    """Keep every pro-Israel PAC giver + the top-N general PAC givers, per cycle."""
+    by_cycle = {}
+    for e in direct.values():
+        if e.get('donor_committee_fec_id'):
+            by_cycle.setdefault(e['cycle'], []).append(e)
+    out = []
+    for cycle, items in by_cycle.items():
+        items.sort(key=lambda x: x['amount_cents'], reverse=True)
+        keep = [x for x in items if x['donor_committee_fec_id'] in PRO_ISRAEL_FEC_IDS]
+        for x in items[:MONEY_TOP_N_PAC]:
+            if x not in keep: keep.append(x)
+        for x in keep:
+            did = x['donor_committee_fec_id']
+            out.append({'politician_id': pol_id, 'cycle': cycle, 'donor_committee_fec_id': did,
+                        'donor_name': x['donor_name'], 'amount_cents': x['amount_cents'],
+                        'is_pro_israel': did in PRO_ISRAEL_FEC_IDS,
+                        'source_url': 'https://www.fec.gov/data/receipts/?data_type=processed'
+                                      '&contributor_id=%s&two_year_transaction_period=%s' % (did, cycle)})
+    return out
+
+def money_sync():
+    """Direct PAC contributions + independent expenditures per politician, per cycle."""
+    if not FEC_API_KEY: return 0
+    sync_money_committees()
+    pols = sb_rest('GET', 'money_politicians?select=id,fec_candidate_ids&fec_candidate_ids=neq.%7B%7D') or []
+    n = 0
+    for pol in pols:
+        cand_ids = pol.get('fec_candidate_ids') or []
+        if not cand_ids: continue
+        direct, ies = {}, {}
+        for cand_id in cand_ids:
+            for cycle in MONEY_TRAIL_CYCLES:
+                for cmte in _candidate_committees(cand_id, cycle):
+                    for r in fec_paginate('/schedules/schedule_a/',
+                            {'committee_id': cmte, 'two_year_transaction_period': cycle,
+                             'is_individual': 'false', 'sort': '-contribution_receipt_amount'}, max_pages=6):
+                        amt = _cents(r.get('contribution_receipt_amount'))
+                        if amt <= 0: continue
+                        did = r.get('contributor_id') or ''
+                        nm = r.get('contributor_name') or ''
+                        e = direct.setdefault((cycle, did or nm.lower()),
+                                {'cycle': cycle, 'donor_committee_fec_id': did, 'donor_name': nm, 'amount_cents': 0})
+                        e['amount_cents'] += amt
+                for r in fec_paginate('/schedules/schedule_e/',
+                        {'candidate_id': cand_id, 'cycle': cycle, 'sort': '-expenditure_amount'}, max_pages=6):
+                    amt = _cents(r.get('expenditure_amount'))
+                    if amt <= 0: continue
+                    sp = r.get('committee_id') or ''
+                    spn = r.get('committee_name') or r.get('spender_name') or ''
+                    so = 'support' if (r.get('support_oppose_indicator') == 'S') else 'oppose'
+                    e = ies.setdefault((cycle, sp or spn.lower(), so),
+                            {'cycle': cycle, 'spender_fec_id': sp, 'spender_name': spn,
+                             'support_oppose': so, 'amount_cents': 0})
+                    e['amount_cents'] += amt
+        direct_rows = _select_direct_rows(pol['id'], direct)
+        ie_rows = [{'politician_id': pol['id'], 'cycle': e['cycle'], 'spender_fec_id': e['spender_fec_id'],
+                    'spender_name': e['spender_name'], 'support_oppose': e['support_oppose'],
+                    'amount_cents': e['amount_cents'], 'is_pro_israel': e['spender_fec_id'] in PRO_ISRAEL_FEC_IDS,
+                    'source_url': 'https://www.fec.gov/data/independent-expenditures/?data_type=processed'
+                                  '&committee_id=%s&cycle=%s' % (e['spender_fec_id'], e['cycle'])}
+                   for e in ies.values() if e.get('spender_fec_id')]
+        if direct_rows: sb_upsert('money_direct_contributions', direct_rows, 'politician_id,cycle,donor_committee_fec_id')
+        if ie_rows:     sb_upsert('money_independent_expenditures', ie_rows, 'politician_id,cycle,spender_fec_id,support_oppose')
+        _recompute_verdict(pol['id'])
+        n += 1; time.sleep(0.3)
+    _money_meta_touch(fec=True)
+    return n
+
+def _recompute_verdict(pol_id):
+    """pro_israel_funded / pro_israel_total_cents for the CURRENT cycle (§4)."""
+    cyc = MONEY_CURRENT_CYCLE
+    d = sb_rest('GET', 'money_direct_contributions?select=amount_cents,donor_committee_fec_id'
+                       '&politician_id=eq.%s&cycle=eq.%s&is_pro_israel=is.true' % (pol_id, cyc)) or []
+    ie = sb_rest('GET', 'money_independent_expenditures?select=amount_cents,spender_fec_id,support_oppose'
+                        '&politician_id=eq.%s&cycle=eq.%s&is_pro_israel=is.true' % (pol_id, cyc)) or []
+    direct_total = sum(int(x.get('amount_cents') or 0) for x in d)
+    supp_total = sum(int(x.get('amount_cents') or 0) for x in ie if x.get('support_oppose') == 'support')
+    cmtes = set(x.get('donor_committee_fec_id') for x in d)
+    cmtes |= set(x.get('spender_fec_id') for x in ie if x.get('support_oppose') == 'support')
+    cmtes.discard(None); cmtes.discard('')
+    total = direct_total + supp_total
+    try:
+        sb_rest('PATCH', 'money_politicians?id=eq.%s' % pol_id,
+                {'pro_israel_funded': bool(total > 0 and cmtes), 'pro_israel_total_cents': total,
+                 'updated_at': _now_iso()}, prefer='return=minimal')
+    except Exception: pass
+
+# ---------- Job C: donor-chain sync (nightly, tracked PACs only) ------------
+def money_donor_chain_sync():
+    """Top donors INTO each tracked pro-Israel committee ('where the $ came from')."""
+    if not FEC_API_KEY: return 0
+    sync_money_committees()
+    n = 0
+    for c in PRO_ISRAEL_COMMITTEES:
+        fid = c['fec_id']
+        for cycle in MONEY_TRAIL_CYCLES:
+            agg = {}
+            for r in fec_paginate('/schedules/schedule_a/',
+                    {'committee_id': fid, 'two_year_transaction_period': cycle,
+                     'sort': '-contribution_receipt_amount'}, max_pages=3):
+                nm = (r.get('contributor_name') or '').strip()
+                amt = _cents(r.get('contribution_receipt_amount'))
+                if not nm or amt <= 0: continue
+                dtype = 'individual' if r.get('is_individual') else \
+                        ('pac' if (r.get('contributor_id') or '').startswith('C') else 'organization')
+                e = agg.setdefault(nm.lower(), {'donor_name': nm, 'donor_type': dtype,
+                        'employer': r.get('contributor_employer') or None, 'amount_cents': 0})
+                e['amount_cents'] += amt
+            top = sorted(agg.values(), key=lambda x: x['amount_cents'], reverse=True)[:MONEY_DONOR_TOP_N]
+            rows = [{'committee_fec_id': fid, 'cycle': cycle, 'donor_name': t['donor_name'],
+                     'donor_type': t['donor_type'], 'employer': t['employer'],
+                     'amount_cents': t['amount_cents'], 'tags': [],   # tags are SOURCED-only (§4)
+                     'source_url': 'https://www.fec.gov/data/receipts/?data_type=processed'
+                                   '&committee_id=%s&two_year_transaction_period=%s' % (fid, cycle)}
+                    for t in top]
+            if rows: sb_upsert('money_pac_donors', rows, 'committee_fec_id,cycle,donor_name')
+            n += len(rows); time.sleep(0.3)
+    _money_meta_touch(fec=True)
+    return n
+
+# ---------- Job D: photo mirror (CC0 portraits -> Supabase Storage) ---------
+def _storage_put(bucket, path, data, content_type='image/jpeg'):
+    if not (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY): return None
+    req = urllib.request.Request(SUPABASE_URL + '/storage/v1/object/' + bucket + '/' + path,
+            data=data, method='POST',
+            headers={'Authorization': 'Bearer ' + SUPABASE_SERVICE_ROLE_KEY,
+                     'Content-Type': content_type, 'x-upsert': 'true'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r: r.read()
+        return SUPABASE_URL + '/storage/v1/object/public/' + bucket + '/' + path
+    except Exception:
+        return None
+
+def money_photo_mirror():
+    """For each politician missing a photo: mirror the CC0 portrait into Storage and set
+    photo_url. If Storage upload fails, fall back to the CC0 CDN URL; a true 404 -> leave
+    null (UI shows initials)."""
+    pols = sb_rest('GET', 'money_politicians?select=id,bioguide_id'
+                          '&photo_url=is.null&bioguide_id=not.is.null&limit=1000') or []
+    n = 0
+    for p in pols:
+        bio = p.get('bioguide_id') or ''
+        if not bio or bio.startswith('exec-'): continue
+        try:
+            with urllib.request.urlopen(urllib.request.Request(PHOTO_CDN % bio, headers=HEADERS), timeout=20) as r:
+                img = r.read()
+        except Exception:
+            continue                                  # no CC0 portrait -> leave null
+        if not img: continue
+        pub = _storage_put(PHOTO_BUCKET, bio + '.jpg', img) or (PHOTO_CDN % bio)
+        try:
+            sb_rest('PATCH', 'money_politicians?id=eq.%s' % p['id'],
+                    {'photo_url': pub, 'updated_at': _now_iso()}, prefer='return=minimal')
+            n += 1
+        except Exception: pass
+        time.sleep(0.05)
+    return n
+
+# ---------- background loop (weekly roster + nightly money/donor/photo) ------
+def money_trail_loop():
+    time.sleep(int(os.environ.get('MONEY_TRAIL_BOOT_DELAY', '90')))   # let the news prewarm finish first
+    while True:
+        try:
+            sync_money_committees()
+            if _money_roster_stale(): money_roster_sync()
+            money_photo_mirror()
+            if FEC_API_KEY:
+                money_sync()
+                money_donor_chain_sync()
+        except Exception:
+            pass
+        time.sleep(int(os.environ.get('MONEY_TRAIL_POLL_SEC', '86400')))   # nightly
+
+# ---------- read models for the /money endpoints (§7) -----------------------
+_MONEY_CACHE = {'t': 0, 'pols': []}
+MONEY_LIST_TTL = 120
+_money_hits = {}     # ip -> [recent /money read timestamps]
+
+def money_rate_check(ip):
+    now = time.time()
+    with _ask_lock:
+        _prune_ip_bucket(_money_hits, now)
+        hits = [t for t in _money_hits.get(ip, []) if t > now - 60]
+        if len(hits) >= MONEY_RATE_PER_MIN:
+            _money_hits[ip] = hits; return False
+        hits.append(now); _money_hits[ip] = hits; return True
+
+def _money_all_politicians():
+    """The whole federal set (~540 rows) cached briefly — search filters it in memory."""
+    if _MONEY_CACHE['t'] and time.time() - _MONEY_CACHE['t'] < MONEY_LIST_TTL:
+        return _MONEY_CACHE['pols']
+    rows = sb_rest('GET', 'money_politicians?select=id,full_name,party,level,state,district,'
+                          'photo_url,pro_israel_funded,pro_israel_total_cents&limit=2000') or []
+    _MONEY_CACHE['pols'] = rows; _MONEY_CACHE['t'] = time.time()
+    return rows
+
+def _disp_name(row):
+    return (_HONORIFIC.get(row.get('level'), '') + (row.get('full_name') or '')).strip()
+
+def money_search(qs):
+    q = (qs.get('q') or [''])[0].strip()
+    state = (qs.get('state') or [''])[0].strip().upper()
+    office = (qs.get('office') or [''])[0].strip().lower()
+    party = (qs.get('party') or [''])[0].strip().upper()
+    pio = (qs.get('pro_israel_only') or [''])[0].strip().lower() in ('1', 'true', 'yes', 'on')
+    try: limit = max(1, min(100, int((qs.get('limit') or ['25'])[0])))
+    except ValueError: limit = 25
+    try: offset = max(0, int((qs.get('offset') or ['0'])[0]))
+    except ValueError: offset = 0
+    level = {'house': 'us_house', 'senate': 'us_senate', 'president': 'president'}.get(office)
+
+    def keep(r):
+        if level and r.get('level') != level: return False
+        if state and (r.get('state') or '').upper() != state: return False
+        if party and (r.get('party') or '').upper() != party: return False
+        if pio and not r.get('pro_israel_funded'): return False
+        if q:
+            ql = q.lower(); qn = ql.replace(' ', '').replace('-', '')
+            name = (r.get('full_name') or '').lower()
+            st = (r.get('state') or '').lower(); di = (r.get('district') or '').lower()
+            tokens = {st + di, st + '-' + di, st}
+            if ql not in name and qn not in {t.replace('-', '') for t in tokens}:
+                return False
+        return True
+
+    matched = [r for r in _money_all_politicians() if keep(r)]
+    matched.sort(key=lambda r: (-(int(r.get('pro_israel_total_cents') or 0)), (r.get('full_name') or '')))
+    page = matched[offset:offset + limit]
+    return {'count': len(matched), 'results': [
+        {'id': r.get('id'), 'name': _disp_name(r), 'party': r.get('party'), 'level': r.get('level'),
+         'state': r.get('state'), 'district': r.get('district'), 'photo_url': r.get('photo_url'),
+         'pro_israel_funded': bool(r.get('pro_israel_funded')),
+         'pro_israel_total': int(r.get('pro_israel_total_cents') or 0) // 100} for r in page]}
+
+def money_profile(pid):
+    rows = sb_rest('GET', 'money_politicians?select=*&id=eq.%s&limit=1' % urllib.parse.quote(pid)) or []
+    if not rows: return None
+    p = rows[0]; cyc = MONEY_CURRENT_CYCLE
+    dc = sb_rest('GET', 'money_direct_contributions?select=donor_name,donor_committee_fec_id,amount_cents,'
+                        'is_pro_israel,source_url&politician_id=eq.%s&cycle=eq.%s&order=amount_cents.desc' % (p['id'], cyc)) or []
+    ie = sb_rest('GET', 'money_independent_expenditures?select=spender_name,spender_fec_id,support_oppose,'
+                        'amount_cents,is_pro_israel,source_url&politician_id=eq.%s&cycle=eq.%s&order=amount_cents.desc' % (p['id'], cyc)) or []
+    direct_total = sum(int(x.get('amount_cents') or 0) for x in dc if x.get('is_pro_israel'))
+    supp_total = sum(int(x.get('amount_cents') or 0) for x in ie if x.get('is_pro_israel') and x.get('support_oppose') == 'support')
+    pi = set(x.get('donor_committee_fec_id') for x in dc if x.get('is_pro_israel'))
+    pi |= set(x.get('spender_fec_id') for x in ie if x.get('is_pro_israel') and x.get('support_oppose') == 'support')
+    pi.discard(None); pi.discard('')
+    chains = []
+    for fid in sorted(pi):
+        crow = sb_rest('GET', 'money_committees?select=name&fec_id=eq.%s&limit=1' % fid) or []
+        donors = sb_rest('GET', 'money_pac_donors?select=donor_name,donor_type,amount_cents,tags,source_url'
+                                '&committee_fec_id=eq.%s&order=amount_cents.desc&limit=%d' % (fid, MONEY_DONOR_TOP_N)) or []
+        chains.append({'committee': (crow or [{}])[0].get('name') or fid, 'committee_fec_id': fid,
+            'top_donors': [{'donor_name': d.get('donor_name'), 'donor_type': d.get('donor_type'),
+                            'amount': int(d.get('amount_cents') or 0) // 100, 'tags': d.get('tags') or [],
+                            'source_url': d.get('source_url')} for d in donors]})
+    return {'id': p['id'], 'name': _disp_name(p), 'party': p.get('party'), 'level': p.get('level'),
+            'state': p.get('state'), 'district': p.get('district'), 'in_office': bool(p.get('in_office')),
+            'photo_url': p.get('photo_url'), 'cycle': cyc,
+            'verdict': {'pro_israel_funded': bool(p.get('pro_israel_funded')),
+                        'direct_pac_total': direct_total // 100, 'supporting_ie_total': supp_total // 100,
+                        'pro_israel_pac_count': len(pi)},
+            'direct_contributions': [{'donor_name': x.get('donor_name'), 'amount': int(x.get('amount_cents') or 0) // 100,
+                                      'is_pro_israel': bool(x.get('is_pro_israel')), 'source_url': x.get('source_url')} for x in dc],
+            'independent_expenditures': [{'spender_name': x.get('spender_name'), 'support_oppose': x.get('support_oppose'),
+                                          'amount': int(x.get('amount_cents') or 0) // 100, 'is_pro_israel': bool(x.get('is_pro_israel')),
+                                          'source_url': x.get('source_url')} for x in ie],
+            'donor_chains': chains, 'last_updated': p.get('updated_at')}
+
+def money_config():
+    rows = _money_all_politicians()
+    meta = sb_rest('GET', 'money_meta?select=last_fec_sync,last_roster_sync&id=eq.1') or []
+    m = (meta or [{}])[0]
+    return {'states': sorted(set(r.get('state') for r in rows if r.get('state'))),
+            'offices': [{'value': 'house', 'label': 'U.S. House'},
+                        {'value': 'senate', 'label': 'U.S. Senate'},
+                        {'value': 'president', 'label': 'President / VP'}],
+            'parties': sorted(set(r.get('party') for r in rows if r.get('party'))),
+            'cycles': MONEY_TRAIL_CYCLES, 'current_cycle': MONEY_CURRENT_CYCLE,
+            'last_updated': m.get('last_fec_sync') or m.get('last_roster_sync')}
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=os.path.dirname(os.path.abspath(__file__)), **kw)
@@ -3507,6 +3972,24 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers(); self.wfile.write(body); return
             self._send_json(run_brief_email(slot, force=True))   # force a real compose+create (test)
+        elif self.path.startswith('/money/search'):
+            if not money_rate_check(self._client_ip()):
+                self._send_json({'error': 'rate'}, 429); return
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try: self._send_json(money_search(qs))
+            except Exception as e: self._send_json({'count': 0, 'results': [], 'error': str(e)}, 500)
+        elif self.path.startswith('/money/politician/'):
+            if not money_rate_check(self._client_ip()):
+                self._send_json({'error': 'rate'}, 429); return
+            pid = urllib.parse.urlparse(self.path).path.split('/money/politician/', 1)[1].strip('/')
+            try:
+                prof = money_profile(pid)
+                if prof is None: self._send_json({'error': 'not_found'}, 404); return
+                self._send_json(prof)
+            except Exception as e: self._send_json({'error': str(e)}, 500)
+        elif self.path.startswith('/money/config'):
+            try: self._send_json(money_config())
+            except Exception as e: self._send_json({'error': str(e)}, 500)
         else:
             base = urllib.parse.urlparse(self.path).path
             if base in ('/', ''):
@@ -3533,5 +4016,6 @@ if __name__ == '__main__':
     threading.Thread(target=priorities_loop, daemon=True).start()
     threading.Thread(target=brief_email_loop, daemon=True).start()
     threading.Thread(target=story_index_loop, daemon=True).start()
+    threading.Thread(target=money_trail_loop, daemon=True).start()
     print('QUWWAA server on http://%s:%d (news lens active, prewarming home)' % (HOST, PORT))
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
