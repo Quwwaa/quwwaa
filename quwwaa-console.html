@@ -4422,18 +4422,18 @@ window.QI18N = (function(){
     } else {
       h+='<div class="mtVerdict clean"><h3>No pro-Israel PAC money</h3><p>No contributions from pro-Israel PACs and no pro-Israel super-PAC support found in FEC filings this cycle.</p></div>';
     }
-    // direct contributions
-    var dc=(d.direct_contributions||[]);
+    // direct contributions — only pro-Israel PACs (backend also sends top general PACs for context)
+    var dc=(d.direct_contributions||[]).filter(function(c){return c.is_pro_israel;});
     if(dc.length){ h+='<div class="mtSecH">Direct money from pro-Israel PACs</div>';
       dc.forEach(function(c){ h+='<div class="mtRow"><div><div class="r1">'+esc(c.donor_name)+'</div></div>'
         +'<div style="text-align:right"><div class="amt">'+fmtUSD(c.amount)+'</div>'+srcLink(c.source_url)+'</div></div>'; });
     }
-    // independent expenditures
-    var ie=(d.independent_expenditures||[]);
-    if(ie.length){ h+='<div class="mtSecH">Outside spending (super PACs)</div>';
+    // independent expenditures — only pro-Israel super PACs (the feature's focus)
+    var ie=(d.independent_expenditures||[]).filter(function(e){return e.is_pro_israel;});
+    if(ie.length){ h+='<div class="mtSecH">Outside spending (pro-Israel super PACs)</div>';
       ie.forEach(function(e){ var opp=(e.support_oppose==='oppose');
         h+='<div class="mtIE"><div style="display:flex;align-items:center;justify-content:space-between">'
-          +'<div class="r1" style="font-size:14px;color:#ffe9d6;font-weight:500">'+esc(e.spender_name)+'</div>'
+          +'<div class="r1" style="font-size:14px;color:#ffe9d6;font-weight:500">'+esc(e.spender_name||'Pro-Israel super PAC')+'</div>'
           +'<span class="mtTag '+(opp?'opp':'sup')+'">'+(opp?'OPPOSING':'SUPPORTING')+'</span></div>'
           +'<div style="font-size:20px;color:#f0b463;font-weight:500;margin-top:6px">'+fmtUSD(e.amount)+'</div>'
           +srcLink(e.source_url)+'</div>'; });
