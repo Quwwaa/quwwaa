@@ -3029,9 +3029,9 @@ def money_sync():
                 for r in fec_paginate('/schedules/schedule_e/',
                         {'candidate_id': cand_id, 'cycle': cycle, 'sort': '-expenditure_amount'}, max_pages=3):
                     amt = _cents(r.get('expenditure_amount'))
-                    if amt <= 0: continue
+                    if amt <= 0 or amt > 20000000000: continue        # skip bogus filings (>$200M single IE)
                     sp = r.get('committee_id') or ''
-                    spn = r.get('committee_name') or r.get('spender_name') or ''
+                    spn = (r.get('committee') or {}).get('name') or r.get('committee_name') or ''   # spender name is nested in schedule_e
                     so = 'support' if (r.get('support_oppose_indicator') == 'S') else 'oppose'
                     e = ies.setdefault((cycle, sp or spn.lower(), so),
                             {'cycle': cycle, 'spender_fec_id': sp, 'spender_name': spn,
