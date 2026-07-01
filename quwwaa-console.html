@@ -622,7 +622,7 @@ window.QI18N = (function(){
       'onb.disc': '7 days free, then $9.95/month. Auto-renews. Cancel anytime.',
       'onb.legal': 'By continuing you agree to our <a href="/terms" target="_blank">Terms</a> and <a href="/privacy" target="_blank">Privacy Policy</a>.',
       'onb.err_fn': 'Please enter your first name.', 'onb.err_email': 'Please enter a valid email.',
-      'onb.err_pass': 'Password must be at least 6 characters.', 'onb.err_unavail': 'Membership is not available right now.',
+      'onb.err_pass': 'Password must be at least 8 characters.', 'onb.err_unavail': 'Membership is not available right now.',
       'onb.email_exists': 'You already have an account — sign in to continue.',
       'onb.checkout_soon': 'Account created. Checkout is being set up — you can subscribe shortly.', 'onb.done': 'Done',
       'greet.morning': 'Good morning', 'greet.afternoon': 'Good afternoon', 'greet.evening': 'Good evening',
@@ -2878,7 +2878,7 @@ window.QI18N = (function(){
         +'<button class="qpPrimary" id="qpFreeGoog" type="button" style="width:100%">'+T('auth.google')+'</button>'
         +'<div style="text-align:center;color:#a06a3a;font-size:11px;margin:12px 0">'+T('auth.or_email')+'</div>'
         +'<form id="qpFreeForm"><label>'+T('auth.email')+'</label><input id="qpFreeEmail" type="email" autocomplete="email" required>'
-        +'<label>'+T('auth.password')+'</label><input id="qpFreePass" type="password" autocomplete="new-password" minlength="6" required>'
+        +'<label>'+T('auth.password')+'</label><input id="qpFreePass" type="password" autocomplete="new-password" minlength="8" required>'
         +'<div class="qpBtnRow"><button class="qpPrimary" id="qpFreeGo" type="submit">'+T('free.create')+'</button></div>'
         +'<div class="qpMsg" id="qpFreeMsg"></div></form>'
         +'<button class="qpLink" id="qpFreeSignin" type="button" style="display:block;margin-top:8px">'+T('free.have')+'</button></div>';
@@ -3206,7 +3206,7 @@ window.QI18N = (function(){
     // Step 5 — validate, create account, save profile, then checkout.
     if(!S.first_name){ msg(T('onb.err_fn')); return; }
     if(!/.+@.+\..+/.test(S.email)){ msg(T('onb.err_email')); return; }
-    if((S.password||'').length<6){ msg(T('onb.err_pass')); return; }
+    if((S.password||'').length<8){ msg(T('onb.err_pass')); return; }
     if(!QP.sb){ msg(T('onb.err_unavail')); return; }
     const btn=$('qpNext'); btn.disabled=true; btn.textContent=T('onb.creating'); msg('');
     const display = S.address_style==='name' ? (S.display_name||S.first_name) : S.first_name;
@@ -3467,7 +3467,7 @@ window.QI18N = (function(){
       ov.addEventListener('click',e=>{ if(e.target===ov||e.target.hasAttribute('data-x')) ov.classList.remove('open'); });
       $('qpPwSave').onclick=async ()=>{
         const pw=$('qpPwNew').value||'', m=$('qpPwMsg'); m.className='qpMsg';
-        if(pw.length<6){ m.textContent='Password must be at least 6 characters.'; return; }
+        if(pw.length<8){ m.textContent='Password must be at least 8 characters.'; return; }
         const b=$('qpPwSave'); b.disabled=true; b.textContent='Updating…';
         try{
           const { error } = await QP.sb.auth.updateUser({ password: pw });
@@ -4136,7 +4136,7 @@ window.QI18N = (function(){
     +'<label>Last name<input id="qgLn" type="text" autocomplete="family-name"></label>'
     +'</div>'
     +'<label>Email<input id="qgEm" type="email" autocomplete="email" placeholder="you@email.com" required></label>'
-    +'<label>Create a password<input id="qgPw" type="password" autocomplete="new-password" minlength="6" placeholder="6+ characters" required></label>'
+    +'<label>Create a password<input id="qgPw" type="password" autocomplete="new-password" minlength="8" placeholder="8+ characters" required></label>'
     +'<button id="qgiveGo" type="submit">Enter &amp; create free account</button>'
     +'</form>'
     +'<div id="qgiveMsg" aria-live="polite"></div>'
@@ -4198,7 +4198,7 @@ window.QI18N = (function(){
       var pw=ov.querySelector('#qgPw').value||'';
       if(!fn){ msg('Please enter your first name.'); return; }
       if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){ msg('Please enter a valid email address.'); return; }
-      if(pw.length<6){ msg('Password must be at least 6 characters.'); return; }
+      if(pw.length<8){ msg('Password must be at least 8 characters.'); return; }
       if(!(window.QP && QP.sb && QP.sb.auth)){ msg('Sign-up is warming up — one moment, then try again.'); return; }
       var go=ov.querySelector('#qgiveGo'); go.disabled=true; go.textContent='Entering…';
       try{
