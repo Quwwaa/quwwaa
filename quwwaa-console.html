@@ -4247,6 +4247,7 @@ window.QI18N = (function(){
   if(window.__mtrailInit) return; window.__mtrailInit=1;
   var DEMO = /[?&]mt_demo=1/.test(location.search);
   var cfg=null, view='search', curQuery='', filters={office:'', pro_israel_only:false}, searchSeq=0;
+  var mtOffset=0, mtTotal=0, mtLoading=false;   // infinite-scroll paging state
 
   var css=document.createElement('style');
   css.textContent=
@@ -4305,7 +4306,7 @@ window.QI18N = (function(){
 
   var ov=document.createElement('div'); ov.id='mtrail';
   ov.innerHTML='<div id="mtHead"><button class="mtback" type="button">‹ Back</button>'
-    +'<span class="mttitle">Money Trail</span><span class="mtupd"></span></div>'
+    +'<span class="mttitle">PoliTrack</span><span class="mtupd"></span></div>'
     +'<div id="mtScroll"></div>';
   function mount(){ if(document.body && !document.body.contains(ov)) document.body.appendChild(ov); }
 
@@ -4314,7 +4315,7 @@ window.QI18N = (function(){
   function initials(name){ var p=String(name||'').replace(/^(Rep\.|Sen\.|Gov\.|President)\s+/,'').trim().split(/\s+/); return ((p[0]||' ')[0]+(p.length>1?(p[p.length-1]||' ')[0]:'')).toUpperCase(); }
   function avatarHtml(name, photo, flagged){
     var h='<div class="mtAv'+(flagged?' flag':'')+'"><div class="mtInit">'+esc(initials(name))+'</div>';
-    if(photo){ h+='<img src="'+esc(photo)+'" alt="" onerror="this.remove()">'; }
+    if(photo){ h+='<img src="'+esc(photo)+'" alt="" loading="lazy" onerror="this.remove()">'; }
     return h+'</div>';
   }
 
@@ -4358,38 +4359,49 @@ window.QI18N = (function(){
       +'<button class="mtChip'+(filters.office==='house'?' on':'')+'" data-of="house">House</button>'
       +'<button class="mtChip'+(filters.office==='president'?' on':'')+'" data-of="president">President</button>'
       +'<button class="mtChip flag'+(filters.pro_israel_only?' on':'')+'" data-flag="1">⚑ Pro-Israel funded only</button>'
-      +'</div><div id="mtResults"><div class="mtWait">Loading…</div></div>';
+      +'</div><div id="mtResults"><div class="mtCount" id="mtCountEl"></div><div id="mtList"></div>'
+      +'<div class="mtWait" id="mtMore" style="display:none">Loading more…</div></div>';
     var q=ov.querySelector('#mtQ');
-    var t=null; q.oninput=function(){ curQuery=q.value; clearTimeout(t); t=setTimeout(doSearch, 250); };
-    q.onkeydown=function(e){ if(e.key==='Enter'){ clearTimeout(t); doSearch(); } };
+    var t=null; q.oninput=function(){ curQuery=q.value; clearTimeout(t); t=setTimeout(function(){ doSearch(true); }, 250); };
+    q.onkeydown=function(e){ if(e.key==='Enter'){ clearTimeout(t); doSearch(true); } };
     scrollEl().querySelectorAll('.mtChip[data-of]').forEach(function(c){ c.onclick=function(){ filters.office=c.getAttribute('data-of'); renderSearch(); }; });
     var fl=scrollEl().querySelector('.mtChip[data-flag]'); if(fl) fl.onclick=function(){ filters.pro_israel_only=!filters.pro_israel_only; renderSearch(); };
-    scrollEl().scrollTop=0; doSearch();
+    // infinite scroll — load the next page as the user nears the bottom (full 100 Senate / 435 House)
+    scrollEl().onscroll=function(){ if(view!=='search') return; var el=scrollEl();
+      if(el.scrollTop+el.clientHeight >= el.scrollHeight-240 && mtOffset<mtTotal && !mtLoading) doSearch(false); };
+    scrollEl().scrollTop=0; doSearch(true);
     setTimeout(function(){ try{ if(!curQuery) q.focus(); }catch(e){} }, 60);
   }
-  function doSearch(){
+  function cardHtml(p){ var flagged=!!p.pro_israel_funded;
+    return '<div class="mtCard'+(flagged?' flagged':'')+'" data-id="'+esc(p.id)+'">'
+      +avatarHtml(p.name,p.photo_url,flagged)
+      +'<div style="flex:1;min-width:0"><div class="mtnm">'+esc(p.name)+' <span style="color:#a06a3a;font-weight:400">('+esc(p.party||'')+')</span></div>'
+      +'<div class="mtof">'+esc(officeLabel(p))+'</div></div>'
+      +'<div style="flex:none;text-align:right">'+(flagged
+          ? '<span class="mtBadge yes">⚑ Pro-Israel funded</span><div class="mtAmt">'+fmtUSD(p.pro_israel_total)+'</div>'
+          : '<span class="mtBadge no">No pro-Israel money</span><div class="mtAmt" style="color:#8a6a48">$0</div>')
+      +'</div></div>';
+  }
+  var MT_PAGE=60;
+  function doSearch(reset){
     var box=ov.querySelector('#mtResults'); if(!box) return;
-    var seq=++searchSeq;
+    if(reset){ mtOffset=0; mtTotal=0; searchSeq++;
+      box.innerHTML='<div class="mtCount" id="mtCountEl"></div><div id="mtList"></div><div class="mtWait" id="mtMore">Loading…</div>'; }
+    if(mtLoading) return; var seq=searchSeq; mtLoading=true;
+    var moreEl=ov.querySelector('#mtMore'); if(moreEl){ moreEl.style.display='block'; moreEl.textContent=mtOffset? 'Loading more…' : 'Loading…'; }
     var qs='?q='+encodeURIComponent(curQuery||'')+'&office='+encodeURIComponent(filters.office||'')
-      +(filters.pro_israel_only?'&pro_israel_only=1':'')+'&limit=25';
+      +(filters.pro_israel_only?'&pro_israel_only=1':'')+'&limit='+MT_PAGE+'&offset='+mtOffset;
     api('/money/search'+qs).then(function(d){
-      if(seq!==searchSeq) return; var list=(d&&d.results)||[];
-      if(!list.length){ box.innerHTML='<div class="mtWait">No officials match that search.</div>'; return; }
-      var h='<div class="mtCount">Results · '+list.length+(d.count&&d.count>list.length?(' of '+d.count):'')+'</div>';
-      list.forEach(function(p){
-        var flagged=!!p.pro_israel_funded;
-        h+='<div class="mtCard'+(flagged?' flagged':'')+'" data-id="'+esc(p.id)+'">'
-          +avatarHtml(p.name,p.photo_url,flagged)
-          +'<div style="flex:1;min-width:0"><div class="mtnm">'+esc(p.name)+' <span style="color:#a06a3a;font-weight:400">('+esc(p.party||'')+')</span></div>'
-          +'<div class="mtof">'+esc(officeLabel(p))+'</div></div>'
-          +'<div style="flex:none;text-align:right">'+(flagged
-              ? '<span class="mtBadge yes">⚑ Pro-Israel funded</span><div class="mtAmt">'+fmtUSD(p.pro_israel_total)+'</div>'
-              : '<span class="mtBadge no">No pro-Israel money</span><div class="mtAmt" style="color:#8a6a48">$0</div>')
-          +'</div></div>';
-      });
-      box.innerHTML=h;
-      box.querySelectorAll('.mtCard').forEach(function(c){ c.onclick=function(){ openProfile(c.getAttribute('data-id')); }; });
-    }).catch(function(){ if(seq===searchSeq) box.innerHTML='<div class="mtWait">Couldn’t load results. Try again in a moment.</div>'; });
+      mtLoading=false; if(seq!==searchSeq) return;
+      var list=(d&&d.results)||[]; mtTotal=(d&&typeof d.count==='number')?d.count:(mtOffset+list.length);
+      var listEl=ov.querySelector('#mtList'), countEl=ov.querySelector('#mtCountEl'), m=ov.querySelector('#mtMore');
+      if(mtOffset===0 && !list.length){ box.innerHTML='<div class="mtWait">No officials match that search.</div>'; return; }
+      if(countEl) countEl.textContent='Results · '+mtTotal;
+      var h=''; list.forEach(function(p){ h+=cardHtml(p); }); if(listEl) listEl.insertAdjacentHTML('beforeend', h);
+      if(listEl) listEl.querySelectorAll('.mtCard:not([data-b])').forEach(function(c){ c.setAttribute('data-b','1'); c.onclick=function(){ openProfile(c.getAttribute('data-id')); }; });
+      mtOffset += list.length;
+      if(m) m.style.display = (mtOffset<mtTotal) ? 'block' : 'none';
+    }).catch(function(){ mtLoading=false; if(seq!==searchSeq) return; var m=ov.querySelector('#mtMore'); if(m){ m.style.display='block'; m.textContent='Couldn’t load results. Try again in a moment.'; } });
   }
   function officeLabel(p){
     var lvl={us_house:'U.S. House',us_senate:'U.S. Senate',president:'President'}[p.level]||p.level||'';
@@ -4454,7 +4466,7 @@ window.QI18N = (function(){
     if(document.getElementById('mtPill')) return;
     var hdr=document.querySelector('header'); if(!hdr) return;
     var spans=hdr.querySelectorAll(':scope > span'); var right=spans[spans.length-1]||hdr;
-    var b=document.createElement('button'); b.id='mtPill'; b.type='button'; b.textContent='◎ Money Trail';
+    var b=document.createElement('button'); b.id='mtPill'; b.type='button'; b.textContent='◎ PoliTrack';
     b.title='Track pro-Israel political money'; b.onclick=open;
     right.insertBefore(b, right.firstChild);
   }
