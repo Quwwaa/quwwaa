@@ -4344,7 +4344,7 @@ window.QI18N = (function(){
     renderSearch();
   }
   function close(){ ov.classList.remove('open'); }
-  ov.querySelector('.mtback').onclick=function(){ if(view==='profile'){ renderSearch(); } else { close(); } };
+  ov.querySelector('.mtback').onclick=function(){ if(view==='profile'||view==='methodology'){ renderSearch(); } else { close(); } };
 
   // ---- SEARCH VIEW ----
   function renderSearch(){
@@ -4360,17 +4360,37 @@ window.QI18N = (function(){
       +'<button class="mtChip'+(filters.office==='president'?' on':'')+'" data-of="president">President</button>'
       +'<button class="mtChip flag'+(filters.pro_israel_only?' on':'')+'" data-flag="1">⚑ Pro-Israel funded only</button>'
       +'</div><div id="mtResults"><div class="mtCount" id="mtCountEl"></div><div id="mtList"></div>'
-      +'<div class="mtWait" id="mtMore" style="display:none">Loading more…</div></div>';
+      +'<div class="mtWait" id="mtMore" style="display:none">Loading more…</div></div>'
+      +'<div class="mtFoot" id="mtMethLink" style="cursor:pointer">How PoliTrack works & where the data comes from ↗</div>';
     var q=ov.querySelector('#mtQ');
     var t=null; q.oninput=function(){ curQuery=q.value; clearTimeout(t); t=setTimeout(function(){ doSearch(true); }, 250); };
     q.onkeydown=function(e){ if(e.key==='Enter'){ clearTimeout(t); doSearch(true); } };
     scrollEl().querySelectorAll('.mtChip[data-of]').forEach(function(c){ c.onclick=function(){ filters.office=c.getAttribute('data-of'); renderSearch(); }; });
     var fl=scrollEl().querySelector('.mtChip[data-flag]'); if(fl) fl.onclick=function(){ filters.pro_israel_only=!filters.pro_israel_only; renderSearch(); };
+    var ml=scrollEl().querySelector('#mtMethLink'); if(ml) ml.onclick=renderMethodology;
     // infinite scroll — load the next page as the user nears the bottom (full 100 Senate / 435 House)
     scrollEl().onscroll=function(){ if(view!=='search') return; var el=scrollEl();
       if(el.scrollTop+el.clientHeight >= el.scrollHeight-240 && mtOffset<mtTotal && !mtLoading) doSearch(false); };
     scrollEl().scrollTop=0; doSearch(true);
     setTimeout(function(){ try{ if(!curQuery) q.focus(); }catch(e){} }, 60);
+  }
+  function renderMethodology(){
+    view='methodology'; scrollEl().onscroll=null;
+    scrollEl().innerHTML=
+      '<div class="mtLede">How PoliTrack works</div>'
+      +'<div class="mtSub">PoliTrack shows only money that is publicly disclosed in federal (FEC) filings. Every figure links to its source filing.</div>'
+      +'<div class="mtSecH">What counts toward a member’s pro-Israel total</div>'
+      +'<div class="mtRow"><div class="r1">Direct PAC contributions<div class="r2">Checks from pro-Israel PACs to the campaign</div></div></div>'
+      +'<div class="mtRow"><div class="r1">Bundled / earmarked money<div class="r2">Individual donations AIPAC and others conduit to the campaign</div></div></div>'
+      +'<div class="mtRow"><div class="r1">Pro-Israel super-PAC spending<div class="r2">Independent expenditures for or against the member</div></div></div>'
+      +'<div class="mtRow"><div class="r1">Individual pro-Israel donors<div class="r2">Identifiable megadonors giving directly to the campaign</div></div></div>'
+      +'<div class="mtRow"><div class="r1">AIPAC endorsement<div class="r2">Publicly endorsed by AIPAC</div></div></div>'
+      +'<div class="mtSecH">Tracked pro-Israel committees</div>'
+      +'<div class="mtSub" style="margin-top:0">AIPAC PAC, United Democracy Project (AIPAC’s super PAC), NORPAC, Democratic Majority for Israel, Republican Jewish Coalition, JStreetPAC, and Pro-Israel America.</div>'
+      +'<div class="mtSecH">What we can’t show</div>'
+      +'<div class="mtSub" style="margin-top:0">PoliTrack can only show money that is legally disclosed. “Dark money” — spending by non-disclosing 501(c)(4) groups — is not itemized in any public filing and can’t be attributed to a candidate by us or anyone else. We show everything the FEC discloses, and nothing we can’t source.</div>'
+      +'<div class="mtFoot">Data from the Federal Election Commission (FEC), public domain · updated nightly.</div>';
+    scrollEl().scrollTop=0;
   }
   function cardHtml(p){ var flagged=!!p.pro_israel_funded;
     return '<div class="mtCard'+(flagged?' flagged':'')+'" data-id="'+esc(p.id)+'">'
@@ -4424,12 +4444,19 @@ window.QI18N = (function(){
       +'<div style="font-size:12.5px;color:#a06a3a">'+esc(partyWord(d.party))+' · '+esc(officeLabel(d))+'</div></div></div>';
     // verdict
     if(funded){
-      h+='<div class="mtVerdict"><h3>⚑ Pro-Israel funded</h3><p>Took <b style="color:#ffd9b3">'+fmtUSD(v.direct_pac_total)+'</b> directly from pro-Israel PACs and was backed by <b style="color:#ffd9b3">'+fmtUSD(v.supporting_ie_total)+'</b> in pro-Israel super-PAC spending this cycle.</p></div>'
-        +'<div class="mtMetrics"><div class="mtMetric"><b>'+fmtUSD(v.direct_pac_total)+'</b><span>Direct PAC $</span></div>'
-        +'<div class="mtMetric"><b>'+fmtUSD(v.supporting_ie_total)+'</b><span>Super-PAC support</span></div>'
-        +'<div class="mtMetric"><b>'+(v.pro_israel_pac_count||0)+'</b><span>Pro-Israel PACs</span></div></div>';
+      var total=(typeof v.pro_israel_total==='number')?v.pro_israel_total:((v.direct_pac_total||0)+(v.bundled_total||0)+(v.supporting_ie_total||0)+(v.individual_total||0));
+      var endorsed=!!v.aipac_endorsed;
+      var vtext = total>0 ? ('Took <b style="color:#ffd9b3">'+fmtUSD(total)+'</b> in pro-Israel money this cycle'+(endorsed?', and is <b style="color:#ffd9b3">AIPAC-endorsed</b>':'')+'.')
+                          : 'Endorsed by AIPAC (no itemized pro-Israel contributions found this cycle).';
+      h+='<div class="mtVerdict"><h3>⚑ Pro-Israel funded</h3><p>'+vtext+'</p></div>';
+      var parts=[['Bundled / earmarked through pro-Israel PACs', v.bundled_total],
+                 ['Direct PAC contributions', v.direct_pac_total],
+                 ['Pro-Israel super-PAC support', v.supporting_ie_total],
+                 ['Individual pro-Israel donors', v.individual_total]].filter(function(p){ return (p[1]||0)>0; });
+      if(parts.length){ h+='<div class="mtSecH">Breakdown</div>';
+        parts.forEach(function(p){ h+='<div class="mtRow"><div class="r1">'+p[0]+'</div><div class="amt">'+fmtUSD(p[1])+'</div></div>'; }); }
     } else {
-      h+='<div class="mtVerdict clean"><h3>No pro-Israel PAC money</h3><p>No contributions from pro-Israel PACs and no pro-Israel super-PAC support found in FEC filings this cycle.</p></div>';
+      h+='<div class="mtVerdict clean"><h3>No pro-Israel money found</h3><p>No contributions from pro-Israel PACs, bundled money, super-PAC support, or AIPAC endorsement found in FEC filings this cycle.</p></div>';
     }
     // direct contributions — only pro-Israel PACs (backend also sends top general PACs for context)
     var dc=(d.direct_contributions||[]).filter(function(c){return c.is_pro_israel;});
@@ -4489,7 +4516,7 @@ window.QI18N = (function(){
     }
     return { id:'latimer', name:'Rep. George Latimer', party:'D', level:'us_house', state:'NY', district:'16',
       photo_url:'https://cdn.jsdelivr.net/gh/unitedstates/images@gh-pages/congress/450x550/L000606.jpg', cycle:2026,
-      verdict:{pro_israel_funded:true, direct_pac_total:1300000, supporting_ie_total:4800000, pro_israel_pac_count:3},
+      verdict:{pro_israel_funded:true, pro_israel_total:6141000, direct_pac_total:1341000, bundled_total:0, supporting_ie_total:4800000, individual_total:0, aipac_endorsed:true},
       direct_contributions:[{donor_name:'AIPAC PAC', amount:1300000, is_pro_israel:true, source_url:'https://www.fec.gov/data/'},
         {donor_name:'Pro-Israel America PAC', amount:41000, is_pro_israel:true, source_url:'https://www.fec.gov/data/'}],
       independent_expenditures:[{spender_name:'United Democracy Project', support_oppose:'support', amount:4800000, is_pro_israel:true, source_url:'https://www.fec.gov/data/'}],
