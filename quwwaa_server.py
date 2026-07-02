@@ -3020,41 +3020,48 @@ def money_sync():
         for cand_id in cand_ids:
             for cycle in MONEY_TRAIL_CYCLES:
                 for cmte in _candidate_committees(cand_id, cycle):
-                    # (1) broad committee (PAC) receipts -> general top-N context + tracked
+                    # (1) broad committee (PAC) receipts -> GENERAL (non-tracked) top-N context.
+                    #     Skip tracked committees (captured precisely below) and skip memo/earmark
+                    #     lines (they double-count with the itemized entries).
                     for r in fec_paginate('/schedules/schedule_a/',
                             {'committee_id': cmte, 'two_year_transaction_period': cycle,
                              'is_individual': 'false', 'sort': '-contribution_receipt_amount'}, max_pages=3):
+                        did = r.get('contributor_id') or ''
+                        if did in PRO_ISRAEL_FEC_IDS or r.get('memo_code'): continue
                         amt = _cents(r.get('contribution_receipt_amount'))
                         if amt <= 0: continue
-                        did = r.get('contributor_id') or ''
                         nm = r.get('contributor_name') or ''
                         e = direct.setdefault((cycle, did or nm.lower()),
                                 {'cycle': cycle, 'donor_committee_fec_id': did, 'donor_name': nm,
                                  'amount_cents': 0, 'bundled_cents': 0})
                         e['amount_cents'] += amt
                     # (2) precise + COMPLETE capture of each tracked pro-Israel committee
-                    #     (current cycle), split direct (treasury) vs bundled (earmarked memo)
-                    #     via memo_code. contributor_id is a supported filter, so this captures
-                    #     the FULL amount (AIPAC's real reach) even past the broad list's top pages.
+                    #     (current cycle). AIPAC's reach is almost entirely EARMARKED money,
+                    #     which the FEC records TWICE — as per-donor itemized memos AND as a
+                    #     memoed subtotal. Count only ONE representation (subtotal preferred) to
+                    #     avoid the double-count, and separate genuine treasury (non-memo) $.
                     if cycle == MONEY_CURRENT_CYCLE:
                         for T in PRO_ISRAEL_FEC_IDS:
-                            tot = bun = 0; tnm = ''
+                            treasury = itemized = subtotal = 0; tnm = ''
                             for r in fec_paginate('/schedules/schedule_a/',
                                     {'committee_id': cmte, 'contributor_id': T,
                                      'two_year_transaction_period': cycle,
-                                     'sort': '-contribution_receipt_amount'}, max_pages=3):
+                                     'sort': '-contribution_receipt_amount'}, max_pages=10):
                                 amt = _cents(r.get('contribution_receipt_amount'))
                                 if amt <= 0: continue
                                 tnm = tnm or (r.get('contributor_name') or '')
-                                tot += amt
-                                if r.get('memo_code'): bun += amt         # earmarked/conduit memo -> bundled
+                                if r.get('memoed_subtotal'):   subtotal += amt   # aggregate earmark memo
+                                elif r.get('memo_code'):       itemized += amt   # per-donor earmark memo
+                                else:                          treasury += amt   # direct treasury contribution
+                            bundled = subtotal if subtotal > 0 else itemized     # de-dup: one representation
+                            tot = treasury + bundled
                             if tot > 0:
                                 e = direct.setdefault((cycle, T),
                                         {'cycle': cycle, 'donor_committee_fec_id': T, 'donor_name': tnm,
                                          'amount_cents': 0, 'bundled_cents': 0})
                                 e['donor_name'] = tnm or e['donor_name']
-                                e['amount_cents'] = max(e['amount_cents'], tot)   # complete total wins
-                                e['bundled_cents'] = bun
+                                e['amount_cents'] = tot          # authoritative (treasury + de-duped bundled)
+                                e['bundled_cents'] = bundled
                 for r in fec_paginate('/schedules/schedule_e/',
                         {'candidate_id': cand_id, 'cycle': cycle, 'sort': '-expenditure_amount'}, max_pages=3):
                     amt = _cents(r.get('expenditure_amount'))
