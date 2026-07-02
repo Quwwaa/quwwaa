@@ -3077,6 +3077,7 @@ def money_sync():
         if ie_rows:     sb_upsert('money_independent_expenditures', ie_rows, 'politician_id,cycle,spender_fec_id,support_oppose')
         _recompute_verdict(pol['id'])
         n += 1; time.sleep(0.3)
+        if n % 25 == 0: _money_recompute_ingest()      # live progress signal for the FE during a long pass
     _money_recompute_ingest()
     _money_meta_touch(fec=True)
     return n
