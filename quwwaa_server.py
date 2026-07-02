@@ -2991,15 +2991,19 @@ def _select_direct_rows(pol_id, direct):
             did = x['donor_committee_fec_id']
             out.append({'politician_id': pol_id, 'cycle': cycle, 'donor_committee_fec_id': did,
                         'donor_name': x['donor_name'], 'amount_cents': x['amount_cents'],
+                        'bundled_cents': int(x.get('bundled_cents') or 0),
                         'is_pro_israel': did in PRO_ISRAEL_FEC_IDS,
                         'source_url': 'https://www.fec.gov/data/receipts/?data_type=processed'
                                       '&contributor_id=%s&two_year_transaction_period=%s' % (did, cycle)})
     return out
 
 def money_sync():
-    """Direct PAC contributions + independent expenditures per politician, per cycle."""
+    """Comprehensive per-politician money: direct PAC $ + earmarked/bundled (conduit) $
+    (split via memo_code) + independent expenditures, plus top-N general PAC context.
+    Resumable + rate-limit friendly. Verdict/rollup happens in _recompute_verdict."""
     if not FEC_API_KEY: return 0
     sync_money_committees()
+    money_endorsement_sync()
     # Resumable: never-synced members first, and skip any synced within the window, so a
     # re-run (or an interrupted run) CONTINUES rather than restarting the multi-hour pass
     # over all ~540 members — the only way it converges on the free FEC tier (1,000/hr).
@@ -3016,6 +3020,7 @@ def money_sync():
         for cand_id in cand_ids:
             for cycle in MONEY_TRAIL_CYCLES:
                 for cmte in _candidate_committees(cand_id, cycle):
+                    # (1) broad committee (PAC) receipts -> general top-N context + tracked
                     for r in fec_paginate('/schedules/schedule_a/',
                             {'committee_id': cmte, 'two_year_transaction_period': cycle,
                              'is_individual': 'false', 'sort': '-contribution_receipt_amount'}, max_pages=3):
@@ -3024,8 +3029,32 @@ def money_sync():
                         did = r.get('contributor_id') or ''
                         nm = r.get('contributor_name') or ''
                         e = direct.setdefault((cycle, did or nm.lower()),
-                                {'cycle': cycle, 'donor_committee_fec_id': did, 'donor_name': nm, 'amount_cents': 0})
+                                {'cycle': cycle, 'donor_committee_fec_id': did, 'donor_name': nm,
+                                 'amount_cents': 0, 'bundled_cents': 0})
                         e['amount_cents'] += amt
+                    # (2) precise + COMPLETE capture of each tracked pro-Israel committee
+                    #     (current cycle), split direct (treasury) vs bundled (earmarked memo)
+                    #     via memo_code. contributor_id is a supported filter, so this captures
+                    #     the FULL amount (AIPAC's real reach) even past the broad list's top pages.
+                    if cycle == MONEY_CURRENT_CYCLE:
+                        for T in PRO_ISRAEL_FEC_IDS:
+                            tot = bun = 0; tnm = ''
+                            for r in fec_paginate('/schedules/schedule_a/',
+                                    {'committee_id': cmte, 'contributor_id': T,
+                                     'two_year_transaction_period': cycle,
+                                     'sort': '-contribution_receipt_amount'}, max_pages=3):
+                                amt = _cents(r.get('contribution_receipt_amount'))
+                                if amt <= 0: continue
+                                tnm = tnm or (r.get('contributor_name') or '')
+                                tot += amt
+                                if r.get('memo_code'): bun += amt         # earmarked/conduit memo -> bundled
+                            if tot > 0:
+                                e = direct.setdefault((cycle, T),
+                                        {'cycle': cycle, 'donor_committee_fec_id': T, 'donor_name': tnm,
+                                         'amount_cents': 0, 'bundled_cents': 0})
+                                e['donor_name'] = tnm or e['donor_name']
+                                e['amount_cents'] = max(e['amount_cents'], tot)   # complete total wins
+                                e['bundled_cents'] = bun
                 for r in fec_paginate('/schedules/schedule_e/',
                         {'candidate_id': cand_id, 'cycle': cycle, 'sort': '-expenditure_amount'}, max_pages=3):
                     amt = _cents(r.get('expenditure_amount'))
@@ -3048,26 +3077,65 @@ def money_sync():
         if ie_rows:     sb_upsert('money_independent_expenditures', ie_rows, 'politician_id,cycle,spender_fec_id,support_oppose')
         _recompute_verdict(pol['id'])
         n += 1; time.sleep(0.3)
+    _money_recompute_ingest()
     _money_meta_touch(fec=True)
     return n
 
 def _recompute_verdict(pol_id):
-    """pro_israel_funded / pro_israel_total_cents for the CURRENT cycle (§4)."""
+    """Comprehensive pro-Israel rollup for the CURRENT cycle: direct PAC (treasury) +
+    bundled/earmarked (conduit memo) + supporting IEs + matched individual $, plus the
+    AIPAC endorsement flag. funded = total > 0 OR aipac_endorsed. Stores the breakdown."""
     cyc = MONEY_CURRENT_CYCLE
-    d = sb_rest('GET', 'money_direct_contributions?select=amount_cents,donor_committee_fec_id'
+    d = sb_rest('GET', 'money_direct_contributions?select=amount_cents,bundled_cents,donor_committee_fec_id'
                        '&politician_id=eq.%s&cycle=eq.%s&is_pro_israel=is.true' % (pol_id, cyc)) or []
     ie = sb_rest('GET', 'money_independent_expenditures?select=amount_cents,spender_fec_id,support_oppose'
                         '&politician_id=eq.%s&cycle=eq.%s&is_pro_israel=is.true' % (pol_id, cyc)) or []
-    direct_total = sum(int(x.get('amount_cents') or 0) for x in d)
-    supp_total = sum(int(x.get('amount_cents') or 0) for x in ie if x.get('support_oppose') == 'support')
-    cmtes = set(x.get('donor_committee_fec_id') for x in d)
-    cmtes |= set(x.get('spender_fec_id') for x in ie if x.get('support_oppose') == 'support')
-    cmtes.discard(None); cmtes.discard('')
-    total = direct_total + supp_total
+    prow = sb_rest('GET', 'money_politicians?select=aipac_endorsed&id=eq.%s&limit=1' % pol_id) or [{}]
+    endorsed = bool((prow or [{}])[0].get('aipac_endorsed'))
+    bundled = sum(int(x.get('bundled_cents') or 0) for x in d)
+    direct_pac = sum(int(x.get('amount_cents') or 0) for x in d) - bundled     # non-memo treasury portion
+    if direct_pac < 0: direct_pac = 0
+    supp = sum(int(x.get('amount_cents') or 0) for x in ie if x.get('support_oppose') == 'support')
+    individual = 0                                          # A4 individual-megadonor matching: reserved (stretch)
+    total = direct_pac + bundled + supp + individual
     try:
-        sb_rest('PATCH', 'money_politicians?id=eq.%s' % pol_id,
-                {'pro_israel_funded': bool(total > 0 and cmtes), 'pro_israel_total_cents': total,
-                 'updated_at': _now_iso(), 'last_money_sync': _now_iso()}, prefer='return=minimal')
+        sb_rest('PATCH', 'money_politicians?id=eq.%s' % pol_id, {
+            'pro_israel_funded': bool(total > 0 or endorsed), 'pro_israel_total_cents': total,
+            'direct_pac_cents': direct_pac, 'bundled_cents': bundled,
+            'individual_cents': individual, 'supporting_ie_cents': supp,
+            'updated_at': _now_iso(), 'last_money_sync': _now_iso()}, prefer='return=minimal')
+    except Exception: pass
+
+# AIPAC publishes the candidates it endorses; import that list (free) as an aipac_endorsed
+# flag independent of dollar amount. Config-driven (AIPAC_ENDORSED_BIOGUIDES) so it's
+# curated from AIPAC's public list without a code change; best-effort and non-fabricating —
+# no source => nothing is flagged (never a false positive).
+AIPAC_ENDORSED_BIOGUIDES = [b.strip() for b in os.environ.get('AIPAC_ENDORSED_BIOGUIDES', '').split(',') if b.strip()]
+
+def money_endorsement_sync():
+    bios = list(AIPAC_ENDORSED_BIOGUIDES)
+    if not bios: return 0
+    sb_upsert('money_aipac_endorsements',
+              [{'bioguide_id': b, 'cycle': MONEY_CURRENT_CYCLE, 'source_url': 'https://www.aipac.org/'} for b in bios],
+              'bioguide_id')
+    try:
+        sb_rest('PATCH', 'money_politicians?bioguide_id=in.(%s)' % ','.join(urllib.parse.quote(b) for b in bios),
+                {'aipac_endorsed': True}, prefer='return=minimal')
+    except Exception: pass
+    return len(bios)
+
+def _money_recompute_ingest():
+    """ingest_complete = every roster member has money computed (or has no FEC id to
+    compute). The front-end keeps PoliTrack hidden from the public until this is true."""
+    roster = sb_rest('GET', 'money_politicians?select=id&limit=2000') or []
+    synced = sb_rest('GET', 'money_politicians?select=id&last_money_sync=not.is.null&limit=2000') or []
+    nofec  = sb_rest('GET', 'money_politicians?select=id&fec_candidate_ids=eq.%7B%7D&limit=2000') or []
+    roster_n = len(roster)
+    processed_n = len(synced) + len(nofec)                  # disjoint: no-FEC members never get last_money_sync
+    complete = roster_n > 0 and processed_n >= roster_n
+    body = {'id': 1, 'processed_count': processed_n, 'roster_count': roster_n, 'ingest_complete': complete}
+    if complete: body['last_full_sync'] = _now_iso()
+    try: sb_rest('POST', 'money_meta?on_conflict=id', [body], prefer='resolution=merge-duplicates,return=minimal')
     except Exception: pass
 
 # ---------- Job C: donor-chain sync (nightly, tracked PACs only) ------------
@@ -3243,7 +3311,12 @@ def money_profile(pid):
             'state': p.get('state'), 'district': p.get('district'), 'in_office': bool(p.get('in_office')),
             'photo_url': p.get('photo_url'), 'cycle': cyc,
             'verdict': {'pro_israel_funded': bool(p.get('pro_israel_funded')),
-                        'direct_pac_total': direct_total // 100, 'supporting_ie_total': supp_total // 100,
+                        'direct_pac_total': int(p.get('direct_pac_cents') or 0) // 100,
+                        'bundled_total': int(p.get('bundled_cents') or 0) // 100,
+                        'supporting_ie_total': int(p.get('supporting_ie_cents') or 0) // 100,
+                        'individual_total': int(p.get('individual_cents') or 0) // 100,
+                        'aipac_endorsed': bool(p.get('aipac_endorsed')),
+                        'pro_israel_total': int(p.get('pro_israel_total_cents') or 0) // 100,
                         'pro_israel_pac_count': len(pi)},
             'direct_contributions': [{'donor_name': x.get('donor_name'), 'amount': int(x.get('amount_cents') or 0) // 100,
                                       'is_pro_israel': bool(x.get('is_pro_israel')), 'source_url': x.get('source_url')} for x in dc],
@@ -3254,7 +3327,8 @@ def money_profile(pid):
 
 def money_config():
     rows = _money_all_politicians()
-    meta = sb_rest('GET', 'money_meta?select=last_fec_sync,last_roster_sync&id=eq.1') or []
+    meta = sb_rest('GET', 'money_meta?select=last_fec_sync,last_roster_sync,last_full_sync,'
+                          'ingest_complete,processed_count,roster_count&id=eq.1') or []
     m = (meta or [{}])[0]
     return {'states': sorted(set(r.get('state') for r in rows if r.get('state'))),
             'offices': [{'value': 'house', 'label': 'U.S. House'},
@@ -3262,6 +3336,10 @@ def money_config():
                         {'value': 'president', 'label': 'President / VP'}],
             'parties': sorted(set(r.get('party') for r in rows if r.get('party'))),
             'cycles': MONEY_TRAIL_CYCLES, 'current_cycle': MONEY_CURRENT_CYCLE,
+            'ingest_complete': bool(m.get('ingest_complete')),
+            'processed_count': int(m.get('processed_count') or 0),
+            'roster_count': int(m.get('roster_count') or 0),
+            'last_full_sync': m.get('last_full_sync'),
             'last_updated': m.get('last_fec_sync') or m.get('last_roster_sync')}
 
 class Handler(SimpleHTTPRequestHandler):
